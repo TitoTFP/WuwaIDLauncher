@@ -286,7 +286,6 @@ public partial class MainWindow : Window
 
             Directory.CreateDirectory(modDir);
 
-            // TODO: Ganti URL Repo Anda
             var releaseUrl = "https://api.github.com/repos/TitoTFP/WuwaID/releases/latest";
 
             using var http = new HttpClient();
@@ -479,10 +478,8 @@ public partial class MainWindow : Window
     }
 
 
-    // TODO: Ganti URL Repo Anda
-    const string LauncherReleasesApiUrl = "https://api.github.com/repos/CallMeDangDev/WuwaVHLauncher/releases/latest";
-    // TODO: Ganti URL Repo Anda
-    const string LauncherReleasesPageUrl = "https://github.com/CallMeDangDev/WuwaVHLauncher/releases";
+    const string LauncherReleasesApiUrl = "https://api.github.com/repos/TitoTFP/WuwaIDLauncher/releases/latest";
+    const string LauncherReleasesPageUrl = "https://github.com/TitoTFP/WuwaIDLauncher/releases";
 
     internal async Task CheckLauncherVersion()
     {
@@ -503,8 +500,7 @@ public partial class MainWindow : Window
             if (latest > current)
             {
                 while (!_pageReady) await Task.Delay(100);
-                // TODO: Ganti URL Repo Anda
-                var downloadUrl = $"https://github.com/CallMeDangDev/WuwaVHLauncher/releases/download/v{tag}/WuwaIDLauncher-v{tag}.zip";
+                var downloadUrl = $"https://github.com/TitoTFP/WuwaIDLauncher/releases/download/v{tag}/WuwaIDLauncher-v{tag}.zip";
                 RunScript($"window.onLauncherUpdateAvailable({JsStr('v' + tag)}, {JsStr(downloadUrl)})");
             }
         }
@@ -512,8 +508,7 @@ public partial class MainWindow : Window
     }
 
 
-    // TODO: Ganti URL Repo Anda
-    const string VHReleasesApiUrl = "https://api.github.com/repos/CallMeDangDev/WuwaVH/releases/latest";
+    const string VHReleasesApiUrl = "https://api.github.com/repos/TitoTFP/WuwaID/releases/latest";
 
     internal async Task FetchVHReleaseNotes()
     {
