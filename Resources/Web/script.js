@@ -282,9 +282,9 @@ function initBottomBar() {
         document.getElementById('btnMenu')?.classList.remove('active');
         if (bridge()) {
             bridge().ForceQuitGame();
-            toast('Đã buộc thoát game.', 'ok');
+            toast('Game berhasil dihentikan paksa.', 'ok');
         } else {
-            toast('Demo: Buộc thoát game...', 'info');
+            toast('Demo: Paksa tutup game...', 'info');
         }
     });
 
@@ -294,7 +294,7 @@ function initBottomBar() {
         if (bridge()) {
             bridge().RestartAsAdmin();
         } else {
-            toast('Demo: Khởi động lại với Admin...', 'info');
+            toast('Demo: Mulai ulang sebagai Admin...', 'info');
         }
     });
 
@@ -317,7 +317,7 @@ function initBottomBar() {
                 toast('Error: ' + result, 'err');
             }
         } else {
-            toast('Demo: Gỡ cài đặt...', 'info');
+            toast('Demo: menghapus patch...', 'info');
         }
     });
 }
@@ -338,7 +338,7 @@ function startInstall() {
     const prog = document.getElementById('progressSection');
     btn.classList.remove('installed');
     btn.classList.add('installing','disabled');
-    txt.textContent = 'Đang cài đặt...';
+    txt.textContent = 'Sedang memasang...';
     prog.style.display = '';
     const dx11Row = document.getElementById('dx11Row');
     if (dx11Row) dx11Row.style.display = 'none';
@@ -362,7 +362,7 @@ function simulateInstall() {
         if (p>=100) {
             clearInterval(iv);
             setTimeout(() => {
-                setProgress(100, 'Đang cài đặt...', '', '');
+                setProgress(100, 'Sedang memasang...', '', '');
                 setTimeout(installDone, 1200);
             }, 400);
         }
@@ -391,7 +391,7 @@ function installDone() {
     const prog = document.getElementById('progressSection');
     btn.classList.remove('installing','disabled');
     btn.classList.add('installed');
-    txt.textContent = 'Chơi Game';
+    txt.textContent = 'Mainkan Game';
     prog.style.display = 'none';
     const dx11Row = document.getElementById('dx11Row');
     if (dx11Row) dx11Row.style.display = '';
@@ -403,7 +403,7 @@ function launchGame() {
     if (bridge()) {
         bridge().LaunchGame(S.gamePath, dx11);
     } else {
-        toast('Demo: Đang khởi chạy game...','info');
+        toast('Demo: menjalankan game...','info');
     }
 }
 
@@ -415,7 +415,7 @@ window.onInstallError = msg => {
     const txt  = document.getElementById('startBtnText');
     const prog = document.getElementById('progressSection');
     btn.classList.remove('installing','disabled');
-    txt.textContent = 'Thử lại';
+    txt.textContent = 'Coba lagi';
     prog.style.display = 'none';
     const dx11Row = document.getElementById('dx11Row');
     if (dx11Row) dx11Row.style.display = 'none';
@@ -427,7 +427,7 @@ window.onAdminRequired = () => {
     const txt  = document.getElementById('startBtnText');
     const prog = document.getElementById('progressSection');
     btn.classList.remove('installing','disabled');
-    txt.textContent = 'Khởi động lại (Admin)';
+    txt.textContent = 'Mulai ulang (Admin)';
     prog.style.display = 'none';
     const dx11Row = document.getElementById('dx11Row');
     if (dx11Row) dx11Row.style.display = 'none';
@@ -439,7 +439,7 @@ window.onAdminRequired = () => {
     };
     btn.addEventListener('click', adminHandler);
     
-    toast('Thư mục game đang bị khóa. Cần quyền Admin!', 'err');
+    toast('Folder game terkunci. Perlu izin Admin!', 'err');
 };
 window.onGamePathDetected = path => {
     S.gamePath = path;
@@ -542,11 +542,11 @@ window.onMediaStatus = (status, msg) => {
         if (bar)  bar.style.display  = 'none';
         if (pct)  pct.textContent    = '';
         if (size) size.textContent   = '';
-        if (txt)  txt.textContent    = 'Đang kiểm tra cập nhật...';
+        if (txt)  txt.textContent    = 'Memeriksa pembaruan...';
     } else if (status === 'error') {
         el.style.display = '';
         if (bar) bar.style.display = 'none';
-        if (txt) txt.textContent  = msg || 'Lỗi tải tài nguyên';
+        if (txt) txt.textContent  = msg || 'Gagal memuat aset';
     }
 };
 
@@ -611,80 +611,80 @@ let _launcherUpdateUrl = '';
 
 const GFX_CATS = [
     { id:'texture', title:'TEXTURE & LOD', items:[
-        {k:'r.MipMapLODBias', l:'Anisotropic Filtering (LOD Bias)', d:'Khử răng cưa dị hướng. Giá trị càng thấp texture càng nét nhưng nặng hơn.', t:'slider', v:-2, min:-3, max:0, step:1, pw:3, pi:true},
-        {k:'r.Streaming.MinBoost', l:'Ưu tiên Texture HD', d:'Ưu tiên tải texture độ phân giải cao. Số càng cao game càng ưu tiên texture nét.', w:'Set quá cao sẽ chạm trần VRAM gây giật lag (đặc biệt ở Lahai Roi).', t:'slider', v:2.0, min:1.0, max:3.0, step:0.5, pw:3},
-        {k:'r.Streaming.PoolSize', l:'Giới hạn VRAM cho Texture', d:'Dung lượng VRAM tối đa cho texture streaming (MB). 0 = không giới hạn.', w:'Set 0 (Unlimited) sẽ dùng rất nhiều VRAM, máy yếu VRAM có thể crash.', t:'select', v:1536, opts:[{v:0,l:'Unlimited'},{v:1536,l:'1.5 GB'},{v:2048,l:'2 GB'},{v:4096,l:'4 GB'}], pw:4},
-        {k:'r.Streaming.UsingKuroStreamingPriority', l:'Streaming ưu tiên (Kuro)', d:'Mức độ ưu tiên streaming riêng của Kuro.', w:'0 sửa lỗi áo giáp Aemeath nhưng Smartprint Cube Reboot load chậm hơn.', t:'select', v:0, opts:[{v:0,l:'Tắt'},{v:1,l:'Chỉ giữ lại'},{v:2,l:'Chỉ tải'},{v:3,l:'Đầy đủ'}], pw:2},
-        {k:'r.streaming.MeshMaxKeepMips', l:'Mesh Mipmap giữ lại', d:'Số lượng Mipmaps mesh giữ trong bộ nhớ. Mặc định engine = 8.', t:'slider', v:15, min:8, max:15, step:1, pw:2},
-        {k:'r.streaming.TextureMaxKeepMips', l:'Texture Mipmap giữ lại', d:'Số lượng Mipmaps texture giữ trong bộ nhớ. Mặc định engine = 15.', t:'slider', v:15, min:8, max:15, step:1, pw:2},
-        {k:'r.StaticMeshLODDistanceScale', l:'Khoảng cách LOD vật thể', d:'Tỉ lệ khoảng cách chuyển LOD. Càng thấp vật thể ở xa càng chi tiết.', w:'Không nên để dưới 0.5 — gây nhấp nháy texture mặt đất.', t:'slider', v:0.7, min:0.5, max:1.0, step:0.1, pw:3, pi:true},
-        {k:'wp.Runtime.PlannedLoadingRangeScale', l:'Khoảng cách load vật thể', d:'Số càng cao vật thể và texture ở xa load càng tốt. Giới hạn khoảng 1.0.', t:'slider', v:1.0, min:0.5, max:1.0, step:0.1, pw:2},
+        {k:'r.MipMapLODBias', l:'Anisotropic Filtering (LOD Bias)', d:'Anti-aliasing anisotropik. Nilai lebih rendah membuat tekstur lebih tajam tetapi lebih berat.', t:'slider', v:-2, min:-3, max:0, step:1, pw:3, pi:true},
+        {k:'r.Streaming.MinBoost', l:'Prioritas Texture HD', d:'Memprioritaskan texture resolusi tinggi. Angka lebih tinggi memberi prioritas lebih besar ke texture tajam.', w:'Setelan terlalu tinggi bisa menyentuh batas VRAM dan menyebabkan stutter, terutama di Lahai Roi.', t:'slider', v:2.0, min:1.0, max:3.0, step:0.5, pw:3},
+        {k:'r.Streaming.PoolSize', l:'Batas VRAM untuk Texture', d:'Batas VRAM maksimum untuk texture streaming (MB). 0 = tanpa batas.', w:'Set 0 (Unlimited) memakai banyak VRAM; GPU lemah bisa crash.', t:'select', v:1536, opts:[{v:0,l:'Unlimited'},{v:1536,l:'1.5 GB'},{v:2048,l:'2 GB'},{v:4096,l:'4 GB'}], pw:4},
+        {k:'r.Streaming.UsingKuroStreamingPriority', l:'Prioritas streaming (Kuro)', d:'Tingkat prioritas streaming khusus Kuro.', w:'0 memperbaiki armor Aemeath tetapi Smartprint Cube Reboot memuat lebih lambat.', t:'select', v:0, opts:[{v:0,l:'Mati'},{v:1,l:'Hanya simpan'},{v:2,l:'Hanya muat'},{v:3,l:'Penuh'}], pw:2},
+        {k:'r.streaming.MeshMaxKeepMips', l:'Pertahankan Mesh Mipmap', d:'Jumlah Mipmap mesh yang disimpan di memori. Default engine = 8.', t:'slider', v:15, min:8, max:15, step:1, pw:2},
+        {k:'r.streaming.TextureMaxKeepMips', l:'Pertahankan Texture Mipmap', d:'Jumlah Mipmap texture yang disimpan di memori. Default engine = 15.', t:'slider', v:15, min:8, max:15, step:1, pw:2},
+        {k:'r.StaticMeshLODDistanceScale', l:'Jarak LOD objek', d:'Rasio jarak perpindahan LOD. Makin rendah, objek jauh makin detail.', w:'Jangan di bawah 0.5; bisa membuat texture tanah berkedip.', t:'slider', v:0.7, min:0.5, max:1.0, step:0.1, pw:3, pi:true},
+        {k:'wp.Runtime.PlannedLoadingRangeScale', l:'Jarak load objek', d:'Angka lebih tinggi membuat objek dan texture jauh dimuat lebih baik. Batas sekitar 1.0.', t:'slider', v:1.0, min:0.5, max:1.0, step:0.1, pw:2},
     ]},
-    { id:'viewdist', title:'TẦM NHÌN', items:[
-        {k:'foliage.LODDistanceScale', l:'Tầm nhìn cây cỏ', d:'Tỉ lệ hiển thị thảm thực vật/cây cỏ ở xa.', w:'1 = 97 FPS | 3 = 93 FPS | 5 = 85 FPS (test ở Septimont).', t:'slider', v:2, min:1, max:5, step:1, pw:5},
-        {k:'r.Kuro.Foliage.GrassCullDistanceMax', l:'Khoảng cách xóa cỏ', d:'Khoảng cách tối đa trước khi cỏ bị xóa khỏi tầm nhìn.', t:'input', v:20000, min:5000, max:50000, pw:4},
-        {k:'r.Kuro.Foliage.Grass3_0CullDistanceMax', l:'Khoảng cách xóa cỏ 3.0', d:'Khoảng cách tối đa cỏ kiểu mới (3.0) bị xóa.', t:'input', v:20000, min:5000, max:50000, pw:4},
+    { id:'viewdist', title:'JARAK PANDANG', items:[
+        {k:'foliage.LODDistanceScale', l:'Jarak pandang vegetasi', d:'Rasio tampilan vegetasi di kejauhan.', w:'1 = 97 FPS | 3 = 93 FPS | 5 = 85 FPS (test di Septimont).', t:'slider', v:2, min:1, max:5, step:1, pw:5},
+        {k:'r.Kuro.Foliage.GrassCullDistanceMax', l:'Jarak cull rumput', d:'Jarak maksimum sebelum rumput dikeluarkan dari tampilan.', t:'input', v:20000, min:5000, max:50000, pw:4},
+        {k:'r.Kuro.Foliage.Grass3_0CullDistanceMax', l:'Jarak cull rumput 3.0', d:'Jarak maksimum rumput tipe baru (3.0) sebelum di-cull.', t:'input', v:20000, min:5000, max:50000, pw:4},
     ]},
-    { id:'ssr', title:'PHẢN CHIẾU SSR', items:[
-        {k:'r.SSR.Quality', l:'Chất lượng SSR', d:'Chất lượng phản chiếu không gian màn hình (Screen Space Reflections).', t:'select', v:3, opts:[{v:0,l:'Tắt'},{v:1,l:'Thấp'},{v:2,l:'Trung bình'},{v:3,l:'Cao'},{v:4,l:'Rất cao'}], pw:5},
-        {k:'r.SSR.MaxRoughness', l:'Độ nhám tối đa SSR', d:'Mức roughness tối đa để SSR bắt đầu mờ đi. 1.0 = phản chiếu mọi bề mặt.', t:'slider', v:1.0, min:0.0, max:1.0, step:0.1, pw:3},
-        {k:'r.SSR.HalfResSceneColor', l:'SSR nửa độ phân giải', d:'1 = dùng nửa độ phân giải (nhẹ hơn). 0 = full (đẹp hơn).', t:'toggle', v:0, pw:3, pi:true},
+    { id:'ssr', title:'REFLEKSI SSR', items:[
+        {k:'r.SSR.Quality', l:'Kualitas SSR', d:'Kualitas refleksi ruang layar (Screen Space Reflections).', t:'select', v:3, opts:[{v:0,l:'Mati'},{v:1,l:'Rendah'},{v:2,l:'Sedang'},{v:3,l:'Tinggi'},{v:4,l:'Sangat tinggi'}], pw:5},
+        {k:'r.SSR.MaxRoughness', l:'Roughness maksimum SSR', d:'Roughness maksimum sebelum SSR mulai memudar. 1.0 = refleksi semua permukaan.', t:'slider', v:1.0, min:0.0, max:1.0, step:0.1, pw:3},
+        {k:'r.SSR.HalfResSceneColor', l:'SSR setengah resolusi', d:'1 = setengah resolusi (lebih ringan). 0 = full (lebih bagus).', t:'toggle', v:0, pw:3, pi:true},
     ]},
-    { id:'shadow', title:'BÓNG ĐỔ', items:[
-        {k:'r.Shadow.RadiusThreshold', l:'Ngưỡng bóng đổ', d:'Càng thấp thì bóng càng nhiều/rõ.', t:'slider', v:0.01, min:0.01, max:0.10, step:0.01, pw:3, pi:true},
-        {k:'r.Shadow.MaxCSMResolution', l:'Độ phân giải Shadow Map (CSM)', d:'Độ phân giải cascade shadow map. Số càng cao bóng càng nét.', t:'select', v:2048, opts:[{v:512,l:'512'},{v:1024,l:'1024'},{v:2048,l:'2048'},{v:4096,l:'4096'}], pw:5},
-        {k:'r.Shadow.PerObjectResolutionMax', l:'Shadow PerObject (Max)', d:'Độ phân giải tối đa bóng nhân vật/vật thể. Mặc định game khá thấp nên nhìn răng cưa.', t:'select', v:1024, opts:[{v:256,l:'256'},{v:512,l:'512'},{v:1024,l:'1024'},{v:2048,l:'2048'},{v:4096,l:'4096'}], pw:4},
-        {k:'r.Shadow.PerObjectResolutionMin', l:'Shadow PerObject (Min)', d:'Độ phân giải tối thiểu bóng nhân vật/vật thể.', t:'select', v:1024, opts:[{v:256,l:'256'},{v:512,l:'512'},{v:1024,l:'1024'},{v:2048,l:'2048'},{v:4096,l:'4096'}], pw:3},
+    { id:'shadow', title:'BAYANGAN', items:[
+        {k:'r.Shadow.RadiusThreshold', l:'Ambang bayangan', d:'Makin rendah, bayangan makin banyak/jelas.', t:'slider', v:0.01, min:0.01, max:0.10, step:0.01, pw:3, pi:true},
+        {k:'r.Shadow.MaxCSMResolution', l:'Resolusi Shadow Map (CSM)', d:'Resolusi cascade shadow map. Angka lebih tinggi membuat bayangan lebih tajam.', t:'select', v:2048, opts:[{v:512,l:'512'},{v:1024,l:'1024'},{v:2048,l:'2048'},{v:4096,l:'4096'}], pw:5},
+        {k:'r.Shadow.PerObjectResolutionMax', l:'Shadow PerObject (Max)', d:'Resolusi maksimum bayangan karakter/objek. Default game cukup rendah sehingga terlihat bergerigi.', t:'select', v:1024, opts:[{v:256,l:'256'},{v:512,l:'512'},{v:1024,l:'1024'},{v:2048,l:'2048'},{v:4096,l:'4096'}], pw:4},
+        {k:'r.Shadow.PerObjectResolutionMin', l:'Shadow PerObject (Min)', d:'Resolusi minimum bayangan karakter/objek.', t:'select', v:1024, opts:[{v:256,l:'256'},{v:512,l:'512'},{v:1024,l:'1024'},{v:2048,l:'2048'},{v:4096,l:'4096'}], pw:3},
     ]},
     { id:'ao', title:'AMBIENT OCCLUSION', items:[
-        {k:'r.AODownsampleFactor', l:'Độ phân giải DFAO', d:'1 = full (đẹp/nặng), 2 = nửa (mặc định engine).', t:'select', v:2, opts:[{v:1,l:'Full (Nặng)'},{v:2,l:'Nửa (Nhẹ)'}], pw:3, pi:true},
-        {k:'r.AmbientOcclusion.Intensity', l:'Cường độ AO', d:'Cường độ đổ bóng ở góc kẹt/vật thể tiếp xúc. Giá trị lớn hơn = bóng đậm hơn.', t:'slider', v:0.9, min:0.0, max:2.0, step:0.1, pw:1},
+        {k:'r.AODownsampleFactor', l:'Resolusi DFAO', d:'1 = full (bagus/berat), 2 = setengah (default engine).', t:'select', v:2, opts:[{v:1,l:'Full (Berat)'},{v:2,l:'Setengah (Ringan)'}], pw:3, pi:true},
+        {k:'r.AmbientOcclusion.Intensity', l:'Intensitas AO', d:'Intensitas bayangan di sudut sempit/kontak objek. Nilai lebih besar = bayangan lebih pekat.', t:'slider', v:0.9, min:0.0, max:2.0, step:0.1, pw:1},
     ]},
-    { id:'fog', title:'SƯƠNG MÙ & MÂY', items:[
-        {k:'r.KuroVolumeCloudEnable', l:'Mây thể tích', d:'Bật/tắt đám mây/sương mù sát mặt đất tại khu vực map mới.', w:'Tắt đi giúp tăng FPS và nhìn rõ hơn.', t:'toggle', v:0, pw:4},
-        {k:'r.SSFS', l:'Sương mù không gian', d:'Screen Space Fog Scattering — hiệu ứng tán xạ sương mù.', t:'toggle', v:1, pw:2},
+    { id:'fog', title:'KABUT & AWAN', items:[
+        {k:'r.KuroVolumeCloudEnable', l:'Awan volumetrik', d:'Aktif/nonaktif awan/kabut dekat tanah di area map baru.', w:'Mati untuk menaikkan FPS dan visibilitas.', t:'toggle', v:0, pw:4},
+        {k:'r.SSFS', l:'Kabut ruang layar', d:'Screen Space Fog Scattering — efek hamburan kabut.', t:'toggle', v:1, pw:2},
     ]},
-    { id:'cull', title:'CULLING & TỐI ƯU', items:[
-        {k:'r.HZBOcclusion', l:'HZB Occlusion Culling', d:'Đổi thuật toán culling sang HZB. Sửa lỗi đốm trắng khi xoay camera.', w:'⚠ SẼ LÀM TỤT FPS MẠNH (~10 FPS ở Ragunna). Máy yếu không nên dùng.', t:'toggle', v:1, pw:6},
-        {k:'r.ParallelFrustumCull', l:'Parallel Frustum Cull', d:'Tối ưu hóa CPU khi dựng hình. Bật để tăng hiệu năng.', t:'toggle', v:1, pw:0},
-        {k:'r.ParallelOcclusionCull', l:'Parallel Occlusion Cull', d:'Tối ưu hóa CPU cho occlusion culling.', t:'toggle', v:1, pw:0},
-        {k:'r.ScreenSizeCullRatioFactor', l:'Tỉ lệ cull theo kích thước', d:'Số càng lớn vật thể nhỏ ở xa bị loại bỏ nhiều hơn → tăng FPS.', t:'slider', v:3, min:1, max:5, step:1, pw:2, pi:true},
+    { id:'cull', title:'CULLING & OPTIMASI', items:[
+        {k:'r.HZBOcclusion', l:'HZB Occlusion Culling', d:'Mengubah algoritma culling ke HZB. Memperbaiki bintik putih saat kamera diputar.', w:'⚠ AKAN MENURUNKAN FPS BESAR (~10 FPS di Ragunna). PC lemah sebaiknya tidak memakai ini.', t:'toggle', v:1, pw:6},
+        {k:'r.ParallelFrustumCull', l:'Parallel Frustum Cull', d:'Mengoptimalkan CPU saat rendering. Aktifkan untuk menaikkan performa.', t:'toggle', v:1, pw:0},
+        {k:'r.ParallelOcclusionCull', l:'Parallel Occlusion Cull', d:'Mengoptimalkan CPU untuk occlusion culling.', t:'toggle', v:1, pw:0},
+        {k:'r.ScreenSizeCullRatioFactor', l:'Rasio cull berdasarkan ukuran', d:'Angka lebih besar membuat objek kecil jauh lebih banyak di-cull -> FPS naik.', t:'slider', v:3, min:1, max:5, step:1, pw:2, pi:true},
     ]},
-    { id:'post', title:'HẬU KỲ & LỌC MÀU', items:[
-        {k:'r.KuroTonemapping', l:'Bộ lọc màu (Tonemapping)', d:'Kiểu lọc màu tổng thể của game.', t:'select', v:3, opts:[{v:0,l:'Tắt'},{v:1,l:'Kiểu Genshin'},{v:2,l:'Kiểu Death Stranding'},{v:3,l:'Kuro (Mặc định)'}], pw:0},
-        {k:'r.Kuro.KuroEnableFFTBloom', l:'FFT Bloom (Lahai-Roi)', d:'Hiệu ứng chói sáng kiểu mới ở Lahai-Roi.', t:'toggle', v:0, pw:3},
-        {k:'r.Kuro.KuroEnableToonFFTBloom', l:'Toon FFT Bloom', d:'Hiệu ứng chói sáng cho nhân vật toon.', t:'toggle', v:0, pw:3},
-        {k:'r.Kuro.KuroBloomStreak', l:'Bloom Streak', d:'Vệt chói sáng. Tắt giúp giảm nhẹ độ chói.', t:'toggle', v:0, pw:1},
-        {k:'r.EnableLensflareSceneSample', l:'Lens Flare', d:'Hiệu ứng lóa ống kính.', t:'toggle', v:0, pw:1},
-        {k:'r.DepthOfFieldQuality', l:'Depth of Field', d:'Chất lượng làm mờ hậu cảnh.', t:'select', v:0, opts:[{v:0,l:'Tắt'},{v:1,l:'Thấp'},{v:2,l:'Cao'},{v:3,l:'Rất cao'},{v:4,l:'Cực cao'}], pw:3},
-        {k:'r.SceneColorFringeQuality', l:'Chromatic Aberration', d:'Viền màu quanh mép màn hình. Tắt giúp hình ảnh trong trẻo hơn.', t:'toggle', v:0, pw:0},
-        {k:'r.Tonemapper.Quality', l:'Chất lượng Tonemapper', d:'0 = Tắt hết. 1 = FilmContrast (sáng hơn, tắt nhiễu hạt + tối góc).', t:'select', v:1, opts:[{v:0,l:'Tắt'},{v:1,l:'FilmContrast'},{v:2,l:'Vignette'},{v:4,l:'Vignette + Noise'}], pw:1},
+    { id:'post', title:'POST-PROCESS & FILTER WARNA', items:[
+        {k:'r.KuroTonemapping', l:'Filter warna (Tonemapping)', d:'Mode filter warna keseluruhan game.', t:'select', v:3, opts:[{v:0,l:'Mati'},{v:1,l:'Mode Genshin'},{v:2,l:'Mode Death Stranding'},{v:3,l:'Kuro (Default)'}], pw:0},
+        {k:'r.Kuro.KuroEnableFFTBloom', l:'FFT Bloom (Lahai-Roi)', d:'Efek bloom tipe baru di Lahai-Roi.', t:'toggle', v:0, pw:3},
+        {k:'r.Kuro.KuroEnableToonFFTBloom', l:'Toon FFT Bloom', d:'Efek bloom untuk karakter toon.', t:'toggle', v:0, pw:3},
+        {k:'r.Kuro.KuroBloomStreak', l:'Bloom Streak', d:'Streak bloom. Matikan untuk mengurangi silau.', t:'toggle', v:0, pw:1},
+        {k:'r.EnableLensflareSceneSample', l:'Lens Flare', d:'Efek lens flare.', t:'toggle', v:0, pw:1},
+        {k:'r.DepthOfFieldQuality', l:'Depth of Field', d:'Kualitas depth of field.', t:'select', v:0, opts:[{v:0,l:'Mati'},{v:1,l:'Rendah'},{v:2,l:'Tinggi'},{v:3,l:'Sangat tinggi'},{v:4,l:'Ekstra tinggi'}], pw:3},
+        {k:'r.SceneColorFringeQuality', l:'Chromatic Aberration', d:'Fringe warna di tepi layar. Matikan agar gambar lebih bersih.', t:'toggle', v:0, pw:0},
+        {k:'r.Tonemapper.Quality', l:'Kualitas Tonemapper', d:'0 = semua mati. 1 = FilmContrast (lebih terang, matikan grain + vignette).', t:'select', v:1, opts:[{v:0,l:'Mati'},{v:1,l:'FilmContrast'},{v:2,l:'Vignette'},{v:4,l:'Vignette + Noise'}], pw:1},
     ]},
-    { id:'fx', title:'HIỆU ỨNG & KHÁC', items:[
-        {k:'a.URO.ForceAnimRate', l:'Cập nhật Animation NPC', d:'1 = update mỗi khung hình, sửa giật NPC ở xa. 0 = mặc định engine.', w:'Bật sẽ tốn CPU hơn.', t:'toggle', v:1, pw:2},
-        {k:'r.Upscale.Quality', l:'Chất lượng Upscale UI', d:'Chất lượng upscale giao diện. 3 = nét nhất.', w:'Không dùng số lớn hơn 3 — gây glitch UI.', t:'select', v:3, opts:[{v:0,l:'0'},{v:1,l:'1'},{v:2,l:'2'},{v:3,l:'3 (Nét nhất)'}], pw:1},
-        {k:'r.VRS.EnableMaterial', l:'VRS Material', d:'Variable Rate Shading cho chất liệu. Tắt = ổn định hơn trên một số GPU.', t:'toggleStr', v:'false', pw:2, pi:true},
-        {k:'r.VRS.EnableMesh', l:'VRS Mesh', d:'Variable Rate Shading cho mesh. Tắt = ổn định hơn.', t:'toggleStr', v:'false', pw:2, pi:true},
-        {k:'r.LightShaftDownSampleFactor', l:'Độ phân giải tia sáng', d:'1 = nét nhất. Số càng lớn chất lượng càng thấp (nhẹ hơn).', t:'slider', v:1, min:1, max:8, step:1, pw:2, pi:true},
-        {k:'r.KuroVolumetricLight.ColorMaskDownSampleFactor', l:'Volumetric Light (Color)', d:'1 = nét nhất. Số càng lớn chất lượng càng thấp.', t:'slider', v:1, min:1, max:4, step:1, pw:2, pi:true},
-        {k:'r.KuroVolumetricLight.DownSampleFactor', l:'Volumetric Light (Main)', d:'1 = nét nhất. Số càng lớn chất lượng càng thấp.', t:'slider', v:1, min:1, max:4, step:1, pw:2, pi:true},
-        {k:'r.Kuro.InteractionEffect.UseCppWaterEffect', l:'Hiệu ứng gợn nước', d:'Hiệu ứng gợn nước khi bay thấp / xài skill.', t:'toggle', v:1, pw:1},
-        {k:'foliage.DensityScaleLOD.DrawCallOptimize', l:'Tối ưu Draw Call lá cây', d:'Bật để tối ưu CPU khi render mật độ lá cây.', t:'toggle', v:1, pw:0},
-        {k:'wp.Runtime.SoraGridBlackListHeight', l:'Chiều cao ánh sáng (bay)', d:'Chiều cao trước khi ánh sáng/vật thể biến mất khi bay.', t:'input', v:20000, min:5000, max:50000, pw:1},
-        {k:'r.Kuro.NpcDisappearDistance', l:'Khoảng cách NPC biến mất', d:'Set cao để NPC không biến mất quá sớm.', t:'input', v:20000, min:1000, max:50000, pw:2},
-        {k:'Kuro.Blueprint.EnableGameBudget', l:'Blueprint Game Budget', d:'Quản lý giới hạn thời gian chạy Blueprint.', w:'⚠ Tắt sửa lỗi animation lag Lahai-Roi, NHƯNG hỏng vật tương tác ở Honami (ô/dù) và Lahai-Roi (quả bóng).', t:'toggleStr', v:'false', pw:2, pi:true},
+    { id:'fx', title:'EFEK & LAINNYA', items:[
+        {k:'a.URO.ForceAnimRate', l:'Update Animasi NPC', d:'1 = update tiap frame, memperbaiki NPC jauh yang patah-patah. 0 = default engine.', w:'Aktif akan memakai CPU lebih banyak.', t:'toggle', v:1, pw:2},
+        {k:'r.Upscale.Quality', l:'Kualitas Upscale UI', d:'Kualitas upscale antarmuka. 3 = paling tajam.', w:'Jangan gunakan angka di atas 3; bisa menyebabkan glitch UI.', t:'select', v:3, opts:[{v:0,l:'0'},{v:1,l:'1'},{v:2,l:'2'},{v:3,l:'3 (Paling tajam)'}], pw:1},
+        {k:'r.VRS.EnableMaterial', l:'VRS Material', d:'Variable Rate Shading untuk material. Mati = lebih stabil di beberapa GPU.', t:'toggleStr', v:'false', pw:2, pi:true},
+        {k:'r.VRS.EnableMesh', l:'VRS Mesh', d:'Variable Rate Shading untuk mesh. Mati = lebih stabil.', t:'toggleStr', v:'false', pw:2, pi:true},
+        {k:'r.LightShaftDownSampleFactor', l:'Resolusi light shaft', d:'1 = paling tajam. Angka lebih besar = kualitas lebih rendah (lebih ringan).', t:'slider', v:1, min:1, max:8, step:1, pw:2, pi:true},
+        {k:'r.KuroVolumetricLight.ColorMaskDownSampleFactor', l:'Volumetric Light (Color)', d:'1 = paling tajam. Angka lebih besar = kualitas lebih rendah.', t:'slider', v:1, min:1, max:4, step:1, pw:2, pi:true},
+        {k:'r.KuroVolumetricLight.DownSampleFactor', l:'Volumetric Light (Main)', d:'1 = paling tajam. Angka lebih besar = kualitas lebih rendah.', t:'slider', v:1, min:1, max:4, step:1, pw:2, pi:true},
+        {k:'r.Kuro.InteractionEffect.UseCppWaterEffect', l:'Efek riak air', d:'Efek riak air saat terbang rendah / memakai skill.', t:'toggle', v:1, pw:1},
+        {k:'foliage.DensityScaleLOD.DrawCallOptimize', l:'Optimasi Draw Call dedaunan', d:'Aktifkan untuk mengoptimalkan CPU saat render kepadatan dedaunan.', t:'toggle', v:1, pw:0},
+        {k:'wp.Runtime.SoraGridBlackListHeight', l:'Tinggi cahaya (terbang)', d:'Ketinggian sebelum cahaya/objek hilang saat terbang.', t:'input', v:20000, min:5000, max:50000, pw:1},
+        {k:'r.Kuro.NpcDisappearDistance', l:'Jarak NPC menghilang', d:'Set tinggi agar NPC tidak menghilang terlalu cepat.', t:'input', v:20000, min:1000, max:50000, pw:2},
+        {k:'Kuro.Blueprint.EnableGameBudget', l:'Blueprint Game Budget', d:'Mengelola batas waktu eksekusi Blueprint.', w:'⚠ Mati memperbaiki lag animasi Lahai-Roi, TAPI merusak objek interaktif di Honami (payung) dan Lahai-Roi (bola).', t:'toggleStr', v:'false', pw:2, pi:true},
     ]},
     { id:'nvidia', title:'NVIDIA (RTX)', items:[
-        {k:'t.Streamline.Reflex.HandleMaxTickRate', l:'Reflex Handle Tick Rate', d:'Bật để Reflex quản lý tick rate.', t:'toggleStr', v:'true', pw:0},
-        {k:'t.Streamline.Reflex.Enable', l:'NVIDIA Reflex', d:'Giảm độ trễ đầu vào.', w:'Không hoạt động trên RTX 40/50 series khi bật Frame Gen.', t:'toggle', v:1, pw:0},
-        {k:'t.Streamline.Reflex.Mode', l:'Reflex Mode', d:'1 = Độ trễ thấp, 2 = Thấp + Boost.', t:'select', v:1, opts:[{v:1,l:'Thấp'},{v:2,l:'Thấp + Boost'}], pw:1},
-        {k:'r.NGX.DLAA.Enable', l:'DLAA (Anti-aliasing NVIDIA)', d:'Ép bật DLAA — khử răng cưa chất lượng cao. Rất ngốn GPU.', w:'Bật sẽ vô hiệu hoá DLSS Quality/Balanced/Performance trong game.', t:'toggle', v:1, pw:6},
+        {k:'t.Streamline.Reflex.HandleMaxTickRate', l:'Reflex Handle Tick Rate', d:'Aktifkan agar Reflex mengelola tick rate.', t:'toggleStr', v:'true', pw:0},
+        {k:'t.Streamline.Reflex.Enable', l:'NVIDIA Reflex', d:'Mengurangi latensi input.', w:'Tidak berfungsi pada seri RTX 40/50 saat Frame Gen aktif.', t:'toggle', v:1, pw:0},
+        {k:'t.Streamline.Reflex.Mode', l:'Reflex Mode', d:'1 = Latensi rendah, 2 = Rendah + Boost.', t:'select', v:1, opts:[{v:1,l:'Rendah'},{v:2,l:'Rendah + Boost'}], pw:1},
+        {k:'r.NGX.DLAA.Enable', l:'DLAA (Anti-aliasing NVIDIA)', d:'Memaksa DLAA aktif; anti-aliasing kualitas tinggi. Sangat berat di GPU.', w:'Aktif akan menonaktifkan DLSS Quality/Balanced/Performance di game.', t:'toggle', v:1, pw:6},
     ]},
     { id:'lumen', title:'RAY TRACING & LUMEN', s:'RendererSettings', items:[
-        {k:'r.Lumen.ScreenProbeGather.Temporal.DistanceThreshold', l:'Lumen Temporal Threshold', d:'Giá trị thấp = ít ghosting, nhưng nhiều flickering hơn.', t:'slider', v:0.03, min:0.01, max:0.10, step:0.01, pw:2, pi:true},
-        {k:'r.Lumen.Reflections.AsyncCompute', l:'Async Compute (Reflections)', d:'Bật có thể cải thiện FPS trên GPU hiện đại.', t:'toggle', v:1, pw:0},
-        {k:'r.Lumen.Reflections.ScreenTraces', l:'Screen Traces', d:'Dò tia màn hình cho phản chiếu Lumen.', w:'Tắt sửa lỗi bóng vỡ ô vuông, nhưng mất phản chiếu nước/gương.', t:'toggle', v:0, pw:3},
-        {k:'r.Lumen.Reflections.SmoothBias', l:'Độ bóng phản chiếu', d:'0.0 → 1.0. Set 1.0 = bề mặt bóng loáng như gương.', t:'slider', v:1.0, min:0.0, max:1.0, step:0.1, pw:2},
+        {k:'r.Lumen.ScreenProbeGather.Temporal.DistanceThreshold', l:'Lumen Temporal Threshold', d:'Nilai rendah = ghosting lebih sedikit, tetapi flickering lebih banyak.', t:'slider', v:0.03, min:0.01, max:0.10, step:0.01, pw:2, pi:true},
+        {k:'r.Lumen.Reflections.AsyncCompute', l:'Async Compute (Reflections)', d:'Aktif dapat meningkatkan FPS pada GPU modern.', t:'toggle', v:1, pw:0},
+        {k:'r.Lumen.Reflections.ScreenTraces', l:'Screen Traces', d:'Screen trace untuk refleksi Lumen.', w:'Mati memperbaiki bayangan kotak rusak, tetapi menghilangkan refleksi air/cermin.', t:'toggle', v:0, pw:3},
+        {k:'r.Lumen.Reflections.SmoothBias', l:'Kilap refleksi', d:'0.0 → 1.0. Set 1.0 = permukaan berkilap seperti cermin.', t:'slider', v:1.0, min:0.0, max:1.0, step:0.1, pw:2},
     ]},
 ];
 
@@ -699,7 +699,7 @@ async function gfxInit() {
     if (hint) {
         hint.textContent = S.gamePath
             ? S.gamePath + '\\Client\\Saved\\Config\\WindowsNoEditor'
-            : 'chưa chọn thư mục game';
+            : 'belum memilih folder game';
     }
     if (!_gfxBuilt) gfxBuild();
     await gfxLoadCache();
@@ -954,8 +954,8 @@ function gfxReset() {
 }
 
 async function gfxApply() {
-    if (!S.gamePath) { toast('Chưa chọn thư mục game!', 'err'); return; }
-    if (!bridge()) { toast('Demo: không thể ghi file.', 'info'); return; }
+    if (!S.gamePath) { toast('Belum memilih folder game!', 'err'); return; }
+    if (!bridge()) { toast('Demo: tidak dapat menulis file.', 'info'); return; }
     const settings = {};
     GFX_CATS.forEach(cat => cat.items.forEach(it => {
         settings[it.k] = String(_gfxValues[it.k]);
@@ -966,17 +966,17 @@ async function gfxApply() {
     if (result === 'ok') {
         _gfxFileValues = { ..._gfxValues };
         gfxSaveCache();
-        toast('Đã lưu Engine.ini thành công!', 'ok');
+        toast('Engine.ini berhasil disimpan!', 'ok');
     } else if (result === 'not_found') {
-        toast('Không tìm thấy Engine.ini. Vui lòng vào game ít nhất 1 lần để file được tạo tự động.', 'err');
+        toast('Engine.ini tidak ditemukan. Masuk ke game minimal 1 kali agar file dibuat otomatis.', 'err');
     } else if (result === 'admin_required') {
-        const ok = await showConfirm('Không có quyền ghi file Engine.ini.\nKhởi động lại Launcher với quyền Admin?');
+        const ok = await showConfirm('Tidak memiliki izin menulis Engine.ini.\nMulai ulang Launcher sebagai Admin?');
         if (ok && bridge()) {
             await gfxSaveCache(); // ensure latest settings are persisted before restart
             bridge().RestartAsAdmin();
         }
     } else {
-        toast('Lỗi ghi file: ' + result, 'err');
+        toast('Gagal menulis file: ' + result, 'err');
     }
 }
 
@@ -987,11 +987,11 @@ async function gfxLoadFromDisk() {
         const resp = JSON.parse(json);
 
         if (resp.status === 'not_found') {
-            toast('Không tìm thấy Engine.ini. Hãy vào game 1 lần để file được tạo.', 'info');
+            toast('Engine.ini tidak ditemukan. Masuk ke game 1 kali agar file dibuat.', 'info');
             return;
         }
         if (resp.status === 'error') {
-            toast('Lỗi đọc Engine.ini: ' + (resp.message || ''), 'err');
+            toast('Gagal membaca Engine.ini: ' + (resp.message || ''), 'err');
             return;
         }
         const hint = document.getElementById('gfxConfigPath');
@@ -1052,7 +1052,7 @@ function gfxFindItem(k) {
 let _launcherUpdateVer = '';
 
 function checkLauncherUpdate(silent = true) {
-    if (!silent) toast('Đang kiểm tra cập nhật Launcher...', 'info');
+    if (!silent) toast('Memeriksa pembaruan Launcher...', 'info');
     if (bridge()) bridge().CheckLauncherUpdate();
 }
 
@@ -1102,7 +1102,7 @@ window.onLauncherUpdateProgress = (pct, text) => {
 window.onLauncherUpdateError = (msg) => {
     const overlay = document.getElementById('luOverlay');
     if (overlay) overlay.style.display = 'none';
-    toast('Cập nhật thất bại: ' + msg, 'err');
+    toast('Pembaruan gagal: ' + msg, 'err');
 };
 
 function loadSettings() {
@@ -1125,14 +1125,14 @@ async function browseFolder() {
     if (bridge()) {
         const p = await bridge().BrowseGameFolder();
         if (p === "?INVALID") {
-            toast('Không tìm thấy thư mục chứa Wuthering Waves!', 'err');
+            toast('Folder Wuthering Waves tidak ditemukan!', 'err');
             return false;
         }
         if (p) {
             S.cfg.gamePath = p;
             S.gamePath = p;
             saveSettings();
-            toast('Đã chọn thư mục: ' + p.split('\\').pop(), 'ok');
+            toast('Folder dipilih: ' + p.split('\\').pop(), 'ok');
             return true;
         }
         return false;
@@ -1140,7 +1140,7 @@ async function browseFolder() {
         S.gamePath = 'C:\\Wuthering Waves\\Wuthering Waves Game';
         S.cfg.gamePath = S.gamePath;
         saveSettings();
-        toast('Demo: Đã chọn thư mục game', 'info');
+        toast('Demo: folder game dipilih', 'info');
         return true;
     }
 }
@@ -1359,7 +1359,7 @@ function fcSetCurrentFont(name) {
         nameEl.classList.add('fc-current__name--custom');
         if (revertBtn) revertBtn.style.display = '';
     } else {
-        nameEl.textContent = 'Font gốc (UTMAlexander)';
+        nameEl.textContent = 'Font asli (UTMAlexander)';
         nameEl.classList.remove('fc-current__name--custom');
         if (revertBtn) revertBtn.style.display = 'none';
     }
@@ -1386,30 +1386,30 @@ async function fcBrowseFont() {
 
 async function fcBuild() {
     if (FC.building) return;
-    if (!FC.fontPath) { toast('Vui lòng chọn file font trước!', 'err'); return; }
-    if (!S.gamePath) { toast('Chưa chọn thư mục game!', 'err'); return; }
+    if (!FC.fontPath) { toast('Pilih file font terlebih dahulu!', 'err'); return; }
+    if (!S.gamePath) { toast('Belum memilih folder game!', 'err'); return; }
 
     const baseName = (document.getElementById('fcOutputName')?.value.trim() || 'CustomFont');
 
     FC.building = true;
     const btn = document.getElementById('fcBuildBtn');
     if (btn) { btn.disabled = true; btn.classList.add('fc-btn--loading'); }
-    fcSetStatus('Đang xử lý...', false);
+    fcSetStatus('Memproses...', false);
 
     if (bridge()) {
         bridge().CreateFontPak(FC.fontPath, S.gamePath, baseName);
     } else {
         setTimeout(() => {
-            window.onFontPakDone(`C:\\WW\\wuwaVietHoa\\${baseName}_100_P.pak`, '2.4 MB');
+            window.onFontPakDone(`C:\\WW\\wuwaIndonesia\\${baseName}_100_P.pak`, '2.4 MB');
         }, 1200);
     }
 }
 
 async function fcRevert() {
-    if (!S.gamePath) { toast('Chưa chọn thư mục game!', 'err'); return; }
-    const confirmed = await showConfirm('Xoá font tuỳ chỉnh và dùng lại font gốc UTMAlexander?');
+    if (!S.gamePath) { toast('Belum memilih folder game!', 'err'); return; }
+    const confirmed = await showConfirm('Hapus font kustom dan gunakan lagi font asli UTMAlexander?');
     if (!confirmed) return;
-    fcSetStatus('Đang xoá font tuỳ chỉnh...', false);
+    fcSetStatus('Menghapus font kustom...', false);
     if (bridge()) {
         bridge().RemoveCustomFont(S.gamePath);
     } else {
@@ -1427,8 +1427,8 @@ window.onFontPakDone = (outputPath, sizeStr) => {
     if (btn) { btn.disabled = false; btn.classList.remove('fc-btn--loading'); }
 
     const fileName = outputPath.split('\\').pop().split('/').pop();
-    fcSetStatus(`✓ Đã cài: ${fileName} (${sizeStr})`, false, true);
-    toast('Cài font thành công!', 'ok');
+    fcSetStatus(`✓ Terpasang: ${fileName} (${sizeStr})`, false, true);
+    toast('Font berhasil dipasang!', 'ok');
     fcRefreshStatus();
 };
 
@@ -1436,19 +1436,19 @@ window.onFontPakError = (msg) => {
     FC.building = false;
     const btn = document.getElementById('fcBuildBtn');
     if (btn) { btn.disabled = false; btn.classList.remove('fc-btn--loading'); }
-    fcSetStatus('Lỗi: ' + msg, true);
-    toast('Lỗi: ' + msg, 'err');
+    fcSetStatus('Error: ' + msg, true);
+    toast('Error: ' + msg, 'err');
 };
 
 window.onFontRevertDone = () => {
-    fcSetStatus('✓ Đã xoá font tuỳ chỉnh. Font gốc sẽ được tải lại khi cập nhật.', false, true);
-    toast('Đã dùng lại font gốc!', 'ok');
+    fcSetStatus('✓ Font kustom dihapus. Font asli akan diunduh lagi saat pembaruan.', false, true);
+    toast('Font asli digunakan kembali!', 'ok');
     fcRefreshStatus();
 };
 
 window.onFontRevertError = (msg) => {
-    fcSetStatus('Lỗi: ' + msg, true);
-    toast('Lỗi: ' + msg, 'err');
+    fcSetStatus('Error: ' + msg, true);
+    toast('Error: ' + msg, 'err');
 };
 
 function fcSetStatus(msg, isError, isSuccess = false) {

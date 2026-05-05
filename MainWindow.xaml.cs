@@ -20,6 +20,8 @@ public partial class MainWindow : Window
     internal static readonly string CacheFolder = Path.Combine(AppDataFolder, "Cache");
     internal static readonly string SettingsPath = Path.Combine(AppDataFolder, "settings.json");
     const string AssetsUrl = "https://raw.githubusercontent.com/TitoTFP/WuwaID/refs/heads/main/Web/assets.json";
+    internal const string ModFolderName = "wuwaIndonesia";
+    internal const string LegacyModFolderName = "wuwaVietHoa";
 
     volatile bool _pageReady;
     string? _pendingBgm, _pendingVideo, _pendingUpdateDate;
@@ -99,7 +101,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show("Lỗi khởi tạo WebView2: " + ex.Message);
+            MessageBox.Show("Gagal menginisialisasi WebView2: " + ex.Message);
             _splash?.FadeOutAndClose();
             _splash = null;
             Application.Current.Shutdown(1);
@@ -262,7 +264,8 @@ public partial class MainWindow : Window
         try
         {
             var baseDir = Path.Combine(gamePath, @"Client\Binaries\Win64");
-            var modDir = Path.Combine(baseDir, "wuwaVietHoa");
+            var modDir = Path.Combine(baseDir, ModFolderName);
+            var legacyModDir = Path.Combine(baseDir, LegacyModFolderName);
             
             if (!Directory.Exists(baseDir))
                 throw new Exception("Direktori game tidak ditemukan. Silakan periksa kembali pathnya.");
@@ -276,13 +279,16 @@ public partial class MainWindow : Window
             catch (UnauthorizedAccessException)
             {
                 
-                RunScript("if(window.onAdminRequired) window.onAdminRequired(); else window.onInstallError('Thư mục game đang bị khóa bởi Windows. Vui lòng chạy Launcher bằng Quyền Admin.');");
+                RunScript("if(window.onAdminRequired) window.onAdminRequired(); else window.onInstallError('Folder game dikunci oleh Windows. Jalankan Launcher sebagai Admin.');");
                 return;
             }
             catch (Exception ex)
             {
                 throw new Exception("Tidak dapat menulis file ke direktori game: " + ex.Message);
             }
+
+            if (!Directory.Exists(modDir) && Directory.Exists(legacyModDir))
+                Directory.Move(legacyModDir, modDir);
 
             Directory.CreateDirectory(modDir);
 
@@ -348,11 +354,19 @@ public partial class MainWindow : Window
                 
                 if (!string.IsNullOrEmpty(hash))
                 {
-                    if (!localCache.TryGetValue(name, out var localHash) || localHash != hash)
+                    if (!VerifySha256(destPath, hash))
                     {
                         allFilesUpToDate = false;
                         break;
                     }
+
+                    localCache[name] = hash;
+                }
+                else if (!string.IsNullOrEmpty(tagName) &&
+                         (!localCache.TryGetValue("_vhVersion", out var cachedTag) || cachedTag != tagName))
+                {
+                    allFilesUpToDate = false;
+                    break;
                 }
             }
 
@@ -363,7 +377,7 @@ public partial class MainWindow : Window
                     localCache["_vhVersion"] = tagName;
                     File.WriteAllText(versionCachePath, JsonSerializer.Serialize(localCache));
                 }
-                RunScript($"window.onProgressUpdate(100, {JsStr("Bạn đang sử dụng phiên bản mới nhất!")}, '', '')");
+                RunScript($"window.onProgressUpdate(100, {JsStr("Anda sudah menggunakan versi terbaru!")}, '', '')");
                 await Task.Delay(1500);
                 RunScript("window.onInstallComplete()");
                 return;
@@ -376,9 +390,9 @@ public partial class MainWindow : Window
             {
                 var destPath = name == "version.dll" ? Path.Combine(baseDir, name) : Path.Combine(modDir, name);
                 bool needsUpdate = !File.Exists(destPath) ||
-                                   string.IsNullOrEmpty(hash) ||
-                                   !localCache.TryGetValue(name, out var cachedHash) ||
-                                   cachedHash != hash;
+                                   (!string.IsNullOrEmpty(hash)
+                                       ? !VerifySha256(destPath, hash)
+                                       : !localCache.TryGetValue("_vhVersion", out var cachedTag) || cachedTag != tagName);
                 if (needsUpdate)
                 {
                     needsUpdateSet.Add(name);
@@ -420,7 +434,7 @@ public partial class MainWindow : Window
                         var progressText = $"{totalDownloaded / 1_048_576.0:F1} / {totalBytes / 1_048_576.0:F1} MB";
                         
                         RunScript($"window.onProgressUpdate({pct}, " +
-                                  $"{JsStr($"Đang tải: {name}")}, " +
+                                  $"{JsStr($"Mengunduh: {name}")}, " +
                                   $"{JsStr($"{speed:F1} MB/s")}, {JsStr(progressText)})");
 
                         lastDownloaded = totalDownloaded;
@@ -429,6 +443,12 @@ public partial class MainWindow : Window
                 }
                 
                 fileStream.Close(); File.Move(tmpPath, destPath, true);
+                if (!string.IsNullOrEmpty(hash) && !VerifySha256(destPath, hash))
+                {
+                    try { File.Delete(destPath); } catch { }
+                    throw new Exception($"Hash file {name} tidak cocok. Unduhan dibatalkan.");
+                }
+
                 if (!string.IsNullOrEmpty(hash))
                     localCache[name] = hash;
             }
@@ -437,7 +457,7 @@ public partial class MainWindow : Window
                 localCache["_vhVersion"] = tagName;
             File.WriteAllText(versionCachePath, JsonSerializer.Serialize(localCache));
 
-            RunScript($"window.onProgressUpdate(100, {JsStr("Hoàn tất cài đặt!")}, '', '')");
+            RunScript($"window.onProgressUpdate(100, {JsStr("Instalasi selesai!")}, '', '')");
             await Task.Delay(1000);
             RunScript("window.onInstallComplete()");
         }
@@ -473,7 +493,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            RunScript($"window.onInstallError({JsStr("Lỗi khởi chạy: " + ex.Message)})");
+            RunScript($"window.onInstallError({JsStr("Gagal menjalankan game: " + ex.Message)})");
         }
     }
 
@@ -540,7 +560,7 @@ public partial class MainWindow : Window
             Directory.CreateDirectory(updateDir);
             var zipPath = Path.Combine(updateDir, "update.zip");
 
-            RunScript("window.onLauncherUpdateProgress(0, '\u0110ang tải xuống...')");
+            RunScript("window.onLauncherUpdateProgress(0, 'Mengunduh...')");
             using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
             http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaIDLauncher/1.0");
 
@@ -571,7 +591,7 @@ public partial class MainWindow : Window
                 }
             }
 
-            RunScript("window.onLauncherUpdateProgress(95, 'Đang giải nén...')");
+            RunScript("window.onLauncherUpdateProgress(95, 'Mengekstrak...')");
             var extractDir = Path.Combine(updateDir, "extracted");
             ZipFile.ExtractToDirectory(zipPath, extractDir);
 
@@ -607,7 +627,7 @@ public partial class MainWindow : Window
                 $"Remove-Item -Recurse -Force '{updateDir.Replace("'", "''")}' -ErrorAction SilentlyContinue\n";
             File.WriteAllText(scriptPath, scriptContent, System.Text.Encoding.UTF8);
 
-            RunScript("window.onLauncherUpdateProgress(100, 'Khởi động lại...')");
+            RunScript("window.onLauncherUpdateProgress(100, 'Memulai ulang...')");
             await Task.Delay(800);
 
             Process.Start(new ProcessStartInfo
@@ -680,7 +700,7 @@ public partial class MainWindow : Window
                 catch (Exception ex)
                 {
                     RunScript($"window.onMediaStatus('error', " +
-                              $"{JsStr("Lỗi tải " + name + ": " + ex.Message)})");
+                              $"{JsStr("Gagal mengunduh " + name + ": " + ex.Message)})");
                 }
             }
             SignalMediaReady();
@@ -716,7 +736,7 @@ public partial class MainWindow : Window
                         ? $"{got / 1_048_576.0:F1} / {total / 1_048_576.0:F1} MB"
                         : $"{got / 1_048_576.0:F1} MB";
                     RunScript($"window.onMediaProgress({pct}, " +
-                              $"{JsStr("Đang tải " + name + "...")}, " +
+                              $"{JsStr("Mengunduh " + name + "...")}, " +
                               $"{JsStr($"{spd:F1} MB/s")}, {JsStr(size)})");
                     lastGot = got;
                     sw.Restart();
@@ -784,7 +804,7 @@ public class LauncherBridge
         {
             var dlg = new OpenFolderDialog
             {
-                Title = "Chọn thư mục cài đặt Wuthering Waves"
+                Title = "Pilih folder instalasi Wuthering Waves"
             };
             
             if (dlg.ShowDialog(_w) == true)
@@ -889,11 +909,14 @@ public class LauncherBridge
         try
         {
             var baseDir = Path.Combine(gamePath, @"Client\Binaries\Win64");
-            var modDir  = Path.Combine(baseDir, "wuwaVietHoa");
+            var modDir  = Path.Combine(baseDir, MainWindow.ModFolderName);
+            var legacyModDir = Path.Combine(baseDir, MainWindow.LegacyModFolderName);
             var versionDll = Path.Combine(baseDir, "version.dll");
 
             if (Directory.Exists(modDir))
                 Directory.Delete(modDir, true);
+            if (Directory.Exists(legacyModDir))
+                Directory.Delete(legacyModDir, true);
             if (File.Exists(versionDll))
                 File.Delete(versionDll);
 
@@ -943,7 +966,7 @@ public class LauncherBridge
         {
             var dlg = new OpenFileDialog
             {
-                Title  = "Chọn file font",
+                Title  = "Pilih file font",
                 Filter = "Font files (*.ttf;*.otf)|*.ttf;*.otf|All files (*.*)|*.*"
             };
             return dlg.ShowDialog(_w) == true ? dlg.FileName : "";
@@ -953,7 +976,7 @@ public class LauncherBridge
     {
         try
         {
-            var modDir = Path.Combine(gamePath, @"Client\Binaries\Win64\wuwaVietHoa");
+            var modDir = Path.Combine(gamePath, @"Client\Binaries\Win64", MainWindow.ModFolderName);
             if (!Directory.Exists(modDir)) return "";
             var custom = Directory.GetFiles(modDir, "*_100_P.pak")
                 .Select(Path.GetFileName)
@@ -968,18 +991,18 @@ public class LauncherBridge
         {
             try
             {
-                _w.RunScript("window.onFontPakProgress('Đang đọc file font...')");
+                _w.RunScript("window.onFontPakProgress('Membaca file font...')");
 
                 if (!File.Exists(fontFilePath))
                     throw new FileNotFoundException("File font tidak ditemukan: " + fontFilePath);
 
                 byte[] fontData = await File.ReadAllBytesAsync(fontFilePath);
                 if (fontData.Length == 0)
-                    throw new InvalidDataException("File font rỗng.");
+                    throw new InvalidDataException("File font kosong.");
 
-                _w.RunScript("window.onFontPakProgress('Đang đóng gói .pak...')");
+                _w.RunScript("window.onFontPakProgress('Membuat paket .pak...')");
 
-                var modDir = Path.Combine(gamePath, @"Client\Binaries\Win64\wuwaVietHoa");
+                var modDir = Path.Combine(gamePath, @"Client\Binaries\Win64", MainWindow.ModFolderName);
                 Directory.CreateDirectory(modDir);
 
                 foreach (var old in Directory.GetFiles(modDir, "*_100_P.pak"))
@@ -1008,7 +1031,7 @@ public class LauncherBridge
         {
             try
             {
-                var modDir = Path.Combine(gamePath, @"Client\Binaries\Win64\wuwaVietHoa");
+                var modDir = Path.Combine(gamePath, @"Client\Binaries\Win64", MainWindow.ModFolderName);
                 if (Directory.Exists(modDir))
                 {
                     foreach (var f in Directory.GetFiles(modDir, "*_100_P.pak"))
@@ -1291,7 +1314,3 @@ public class LauncherBridge
     public bool GetPerformanceConfigActive(string gamePath) =>
         File.Exists(GetPerfIniBackupPath(gamePath));
 }
-
-
-
-

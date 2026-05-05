@@ -33,14 +33,14 @@ function pmLoadToggles() {
 async function pmRefreshStatus() {
     pmLoadToggles();
     if (!S.gamePath || !bridge()) {
-        pmSetStatus('inactive', 'Chưa chọn thư mục game');
+        pmSetStatus('inactive', 'Belum memilih folder game');
         return;
     }
     try {
         const active = await bridge().GetPerformanceConfigActive(S.gamePath);
-        pmSetStatus(active ? 'active' : 'inactive', active ? 'Đang hoạt động' : 'Chưa áp dụng');
+        pmSetStatus(active ? 'active' : 'inactive', active ? 'Aktif' : 'Belum diterapkan');
     } catch(e) {
-        pmSetStatus('inactive', 'Chưa áp dụng');
+        pmSetStatus('inactive', 'Belum diterapkan');
     }
 }
 
@@ -52,7 +52,7 @@ function pmSetStatus(state, text) {
 }
 
 async function pmApply() {
-    if (!S.gamePath) { toast('Chưa chọn thư mục game!', 'err'); return; }
+    if (!S.gamePath) { toast('Belum memilih folder game!', 'err'); return; }
 
     const settings = {};
     PM_TOGGLES.forEach(({ id, key }) => {
@@ -61,44 +61,44 @@ async function pmApply() {
     });
 
     const anyEnabled = Object.values(settings).some(Boolean);
-    if (!anyEnabled) { toast('Chưa bật hiệu ứng nào để tối ưu.', 'info'); return; }
+    if (!anyEnabled) { toast('Belum ada efek yang diaktifkan untuk dioptimalkan.', 'info'); return; }
 
     S.cfg.perf = settings;
     saveSettings();
 
-    if (!bridge()) { toast('Demo: Đã lưu cấu hình hiệu năng', 'ok'); return; }
+    if (!bridge()) { toast('Demo: konfigurasi performa tersimpan', 'ok'); return; }
 
     const btn = document.getElementById('pmApplyBtn');
-    if (btn) { btn.disabled = true; btn.textContent = 'Đang ghi...'; }
+    if (btn) { btn.disabled = true; btn.textContent = 'Menulis...'; }
 
     try {
         const result = await bridge().ApplyPerformanceConfig(S.gamePath, JSON.stringify(settings));
         if (result === 'ok') {
-            toast('Đã áp dụng! Khởi động lại game để có hiệu lực.', 'ok');
-            pmSetStatus('active', 'Đang hoạt động');
+            toast('Diterapkan! Mulai ulang game agar berlaku.', 'ok');
+            pmSetStatus('active', 'Aktif');
         } else {
-            toast('Lỗi: ' + result, 'err');
+            toast('Error: ' + result, 'err');
         }
     } catch(e) {
-        toast('Lỗi khi ghi config: ' + e, 'err');
+        toast('Gagal menulis config: ' + e, 'err');
     } finally {
-        if (btn) { btn.disabled = false; btn.textContent = 'Áp dụng & Lưu'; }
+        if (btn) { btn.disabled = false; btn.textContent = 'Terapkan & Simpan'; }
     }
 }
 
 async function pmClear() {
-    if (!S.gamePath) { toast('Chưa chọn thư mục game!', 'err'); return; }
+    if (!S.gamePath) { toast('Belum memilih folder game!', 'err'); return; }
 
-    if (!bridge()) { toast('Demo: Đã xoá cấu hình hiệu năng', 'info'); return; }
+    if (!bridge()) { toast('Demo: konfigurasi performa dihapus', 'info'); return; }
 
     const btn = document.getElementById('pmClearBtn');
-    if (btn) { btn.disabled = true; btn.textContent = 'Đang xoá...'; }
+    if (btn) { btn.disabled = true; btn.textContent = 'Menghapus...'; }
 
     try {
         const result = await bridge().ClearPerformanceConfig(S.gamePath);
         if (result === 'ok') {
-            toast('Đã xoá config. Game sẽ dùng setting mặc định.', 'ok');
-            pmSetStatus('inactive', 'Chưa áp dụng');
+            toast('Config dihapus. Game akan memakai setelan default.', 'ok');
+            pmSetStatus('inactive', 'Belum diterapkan');
             S.cfg.perf = {};
             saveSettings();
             PM_TOGGLES.forEach(({ id }) => {
@@ -106,11 +106,11 @@ async function pmClear() {
                 if (el) el.checked = false;
             });
         } else {
-            toast('Lỗi: ' + result, 'err');
+            toast('Error: ' + result, 'err');
         }
     } catch(e) {
-        toast('Lỗi: ' + e, 'err');
+        toast('Error: ' + e, 'err');
     } finally {
-        if (btn) { btn.disabled = false; btn.textContent = 'Xoá config'; }
+        if (btn) { btn.disabled = false; btn.textContent = 'Hapus config'; }
     }
 }

@@ -38,9 +38,9 @@ function initBottomBar() {
         document.getElementById('btnMenu')?.classList.remove('active');
         if (bridge()) {
             bridge().ForceQuitGame();
-            toast('Đã buộc thoát game.', 'ok');
+            toast('Game berhasil dihentikan paksa.', 'ok');
         } else {
-            toast('Demo: Buộc thoát game...', 'info');
+            toast('Demo: Paksa tutup game...', 'info');
         }
     });
 
@@ -50,7 +50,7 @@ function initBottomBar() {
         if (bridge()) {
             bridge().RestartAsAdmin();
         } else {
-            toast('Demo: Khởi động lại với Admin...', 'info');
+            toast('Demo: Mulai ulang sebagai Admin...', 'info');
         }
     });
 
@@ -73,7 +73,7 @@ function initBottomBar() {
                 toast('Error: ' + result, 'err');
             }
         } else {
-            toast('Demo: Gỡ cài đặt...', 'info');
+            toast('Demo: menghapus patch...', 'info');
         }
     });
 }
@@ -94,7 +94,7 @@ function startInstall() {
     const prog = document.getElementById('progressSection');
     btn.classList.remove('installed');
     btn.classList.add('installing','disabled');
-    txt.textContent = 'Đang cài đặt...';
+    txt.textContent = 'Sedang memasang...';
     prog.style.display = '';
     const dx11Row = document.getElementById('dx11Row');
     if (dx11Row) dx11Row.style.display = 'none';
@@ -118,7 +118,7 @@ function simulateInstall() {
         if (p>=100) {
             clearInterval(iv);
             setTimeout(() => {
-                setProgress(100, 'Đang cài đặt...', '', '');
+                setProgress(100, 'Sedang memasang...', '', '');
                 setTimeout(installDone, 1200);
             }, 400);
         }
@@ -147,7 +147,7 @@ function installDone() {
     const prog = document.getElementById('progressSection');
     btn.classList.remove('installing','disabled');
     btn.classList.add('installed');
-    txt.textContent = 'Chơi Game';
+    txt.textContent = 'Mainkan Game';
     prog.style.display = 'none';
     const dx11Row = document.getElementById('dx11Row');
     if (dx11Row) dx11Row.style.display = '';
@@ -159,7 +159,7 @@ function launchGame() {
     if (bridge()) {
         bridge().LaunchGame(S.gamePath, dx11);
     } else {
-        toast('Demo: Đang khởi chạy game...','info');
+        toast('Demo: menjalankan game...','info');
     }
 }
 
@@ -171,7 +171,7 @@ window.onInstallError = msg => {
     const txt  = document.getElementById('startBtnText');
     const prog = document.getElementById('progressSection');
     btn.classList.remove('installing','disabled');
-    txt.textContent = 'Thử lại';
+    txt.textContent = 'Coba lagi';
     prog.style.display = 'none';
     const dx11Row = document.getElementById('dx11Row');
     if (dx11Row) dx11Row.style.display = 'none';
@@ -183,7 +183,7 @@ window.onAdminRequired = () => {
     const txt  = document.getElementById('startBtnText');
     const prog = document.getElementById('progressSection');
     btn.classList.remove('installing','disabled');
-    txt.textContent = 'Khởi động lại (Admin)';
+    txt.textContent = 'Mulai ulang (Admin)';
     prog.style.display = 'none';
     const dx11Row = document.getElementById('dx11Row');
     if (dx11Row) dx11Row.style.display = 'none';
@@ -196,7 +196,7 @@ window.onAdminRequired = () => {
     };
     btn.addEventListener('click', adminHandler);
     
-    toast('Thư mục game đang bị khóa. Cần quyền Admin!', 'err');
+    toast('Folder game terkunci. Perlu izin Admin!', 'err');
 };
 window.onGamePathDetected = path => {
     S.gamePath = path;
@@ -292,11 +292,11 @@ window.onMediaStatus = (status, msg) => {
         if (bar)  bar.style.display  = 'none';
         if (pct)  pct.textContent    = '';
         if (size) size.textContent   = '';
-        if (txt)  txt.textContent    = 'Đang kiểm tra cập nhật...';
+        if (txt)  txt.textContent    = 'Memeriksa pembaruan...';
     } else if (status === 'error') {
         el.style.display = '';
         if (bar) bar.style.display = 'none';
-        if (txt) txt.textContent  = msg || 'Lỗi tải tài nguyên';
+        if (txt) txt.textContent  = msg || 'Gagal memuat aset';
     }
 };
 

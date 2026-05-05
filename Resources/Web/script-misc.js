@@ -1,7 +1,7 @@
 ﻿let _launcherUpdateVer = '';
 
 function checkLauncherUpdate(silent = true) {
-    if (!silent) toast('Đang kiểm tra cập nhật Launcher...', 'info');
+    if (!silent) toast('Memeriksa pembaruan Launcher...', 'info');
     if (bridge()) bridge().CheckLauncherUpdate();
 }
 
@@ -11,7 +11,7 @@ function loadReleaseNotes() {
     } else {
         setTimeout(() => {
             window.onVHReleaseNotes('v1.0-demo', new Date().toISOString(),
-                '## Demo\n- Đây là bản thử nghiệm\n- Chức năng đầy đủ khi kết nối\n\n### Chi tiết\n- Tính năng A\n- Tính năng B',
+                '## Demo\n- Ini versi demo\n- Fitur lengkap tersedia setelah terhubung\n\n### Detail\n- Fitur A\n- Fitur B',
                 'Demo Release');
         }, 800);
     }
@@ -86,7 +86,7 @@ window.onVHReleaseNotes = (tag, dateStr, body, name) => {
         const content = (body || '').trim();
         bodyEl.innerHTML = content
             ? _rnMd(content)
-            : '<p style="opacity:0.4">Không có thông tin.</p>';
+            : '<p style="opacity:0.4">Tidak ada informasi.</p>';
     }
 
     const ap  = document.getElementById('audioPlayer');
@@ -149,7 +149,7 @@ window.onLauncherUpdateProgress = (pct, text) => {
 window.onLauncherUpdateError = (msg) => {
     const overlay = document.getElementById('luOverlay');
     if (overlay) overlay.style.display = 'none';
-    toast('Cập nhật thất bại: ' + msg, 'err');
+    toast('Pembaruan gagal: ' + msg, 'err');
 };
 
 async function loadSettings() {
@@ -172,14 +172,14 @@ async function browseFolder() {
     if (bridge()) {
         const p = await bridge().BrowseGameFolder();
         if (p === "?INVALID") {
-            toast('Không tìm thấy thư mục chứa Wuthering Waves!', 'err');
+            toast('Folder Wuthering Waves tidak ditemukan!', 'err');
             return false;
         }
         if (p) {
             S.cfg.gamePath = p;
             S.gamePath = p;
             saveSettings();
-            toast('Đã chọn thư mục: ' + p.split('\\').pop(), 'ok');
+            toast('Folder dipilih: ' + p.split('\\').pop(), 'ok');
             return true;
         }
         return false;
@@ -187,7 +187,7 @@ async function browseFolder() {
         S.gamePath = 'C:\\Wuthering Waves\\Wuthering Waves Game';
         S.cfg.gamePath = S.gamePath;
         saveSettings();
-        toast('Demo: Đã chọn thư mục game', 'info');
+        toast('Demo: folder game dipilih', 'info');
         return true;
     }
 }
@@ -421,7 +421,7 @@ function fcSetCurrentFont(name) {
         nameEl.classList.add('fc-current__name--custom');
         if (revertBtn) revertBtn.style.display = '';
     } else {
-        nameEl.textContent = 'Font gốc (UTMAlexander)';
+        nameEl.textContent = 'Font asli (UTMAlexander)';
         nameEl.classList.remove('fc-current__name--custom');
         if (revertBtn) revertBtn.style.display = 'none';
     }
@@ -448,30 +448,30 @@ async function fcBrowseFont() {
 
 async function fcBuild() {
     if (FC.building) return;
-    if (!FC.fontPath) { toast('Vui lòng chọn file font trước!', 'err'); return; }
-    if (!S.gamePath) { toast('Chưa chọn thư mục game!', 'err'); return; }
+    if (!FC.fontPath) { toast('Pilih file font terlebih dahulu!', 'err'); return; }
+    if (!S.gamePath) { toast('Belum memilih folder game!', 'err'); return; }
 
     const baseName = (document.getElementById('fcOutputName')?.value.trim() || 'CustomFont');
 
     FC.building = true;
     const btn = document.getElementById('fcBuildBtn');
     if (btn) { btn.disabled = true; btn.classList.add('fc-btn--loading'); }
-    fcSetStatus('Đang xử lý...', false);
+    fcSetStatus('Memproses...', false);
 
     if (bridge()) {
         bridge().CreateFontPak(FC.fontPath, S.gamePath, baseName);
     } else {
         setTimeout(() => {
-            window.onFontPakDone(`C:\\WW\\wuwaVietHoa\\${baseName}_100_P.pak`, '2.4 MB');
+            window.onFontPakDone(`C:\\WW\\wuwaIndonesia\\${baseName}_100_P.pak`, '2.4 MB');
         }, 1200);
     }
 }
 
 async function fcRevert() {
-    if (!S.gamePath) { toast('Chưa chọn thư mục game!', 'err'); return; }
-    const confirmed = await showConfirm('Xoá font tuỳ chỉnh và dùng lại font gốc UTMAlexander?');
+    if (!S.gamePath) { toast('Belum memilih folder game!', 'err'); return; }
+    const confirmed = await showConfirm('Hapus font kustom dan gunakan lagi font asli UTMAlexander?');
     if (!confirmed) return;
-    fcSetStatus('Đang xoá font tuỳ chỉnh...', false);
+    fcSetStatus('Menghapus font kustom...', false);
     if (bridge()) {
         bridge().RemoveCustomFont(S.gamePath);
     } else {
@@ -489,8 +489,8 @@ window.onFontPakDone = (outputPath, sizeStr) => {
     if (btn) { btn.disabled = false; btn.classList.remove('fc-btn--loading'); }
 
     const fileName = outputPath.split('\\').pop().split('/').pop();
-    fcSetStatus(`✓ Đã cài: ${fileName} (${sizeStr})`, false, true);
-    toast('Cài font thành công!', 'ok');
+    fcSetStatus(`✓ Terpasang: ${fileName} (${sizeStr})`, false, true);
+    toast('Font berhasil dipasang!', 'ok');
     fcRefreshStatus();
 };
 
@@ -498,19 +498,19 @@ window.onFontPakError = (msg) => {
     FC.building = false;
     const btn = document.getElementById('fcBuildBtn');
     if (btn) { btn.disabled = false; btn.classList.remove('fc-btn--loading'); }
-    fcSetStatus('Lỗi: ' + msg, true);
-    toast('Lỗi: ' + msg, 'err');
+    fcSetStatus('Error: ' + msg, true);
+    toast('Error: ' + msg, 'err');
 };
 
 window.onFontRevertDone = () => {
-    fcSetStatus('✓ Đã xoá font tuỳ chỉnh. Font gốc sẽ được tải lại khi cập nhật.', false, true);
-    toast('Đã dùng lại font gốc!', 'ok');
+    fcSetStatus('✓ Font kustom dihapus. Font asli akan diunduh lagi saat pembaruan.', false, true);
+    toast('Font asli digunakan kembali!', 'ok');
     fcRefreshStatus();
 };
 
 window.onFontRevertError = (msg) => {
-    fcSetStatus('Lỗi: ' + msg, true);
-    toast('Lỗi: ' + msg, 'err');
+    fcSetStatus('Error: ' + msg, true);
+    toast('Error: ' + msg, 'err');
 };
 
 function fcSetStatus(msg, isError, isSuccess = false) {
