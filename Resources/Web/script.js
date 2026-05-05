@@ -1,4 +1,4 @@
-﻿
+
 
 const S = {
     page: 'home',
@@ -266,7 +266,7 @@ function initBottomBar() {
     document.getElementById('menuCheckVH')?.addEventListener('click', () => {
         dropdown?.classList.remove('open');
         document.getElementById('btnMenu')?.classList.remove('active');
-        if (!S.gamePath) { toast('Chưa chọn thư mục game!', 'err'); return; }
+        if (!S.gamePath) { toast('Direktori game belum dipilih!', 'err'); return; }
         if (S.installing) return;
         startInstall();
     });
@@ -301,8 +301,8 @@ function initBottomBar() {
     document.getElementById('menuUninstall')?.addEventListener('click', async () => {
         dropdown?.classList.remove('open');
         document.getElementById('btnMenu')?.classList.remove('active');
-        if (!S.gamePath) { toast('Chưa chọn thư mục game!', 'err'); return; }
-        const confirmed = await showConfirm('Bạn có chắc muốn gỡ bỏ bản Việt Hoá không?');
+        if (!S.gamePath) { toast('Direktori game belum dipilih!', 'err'); return; }
+        const confirmed = await showConfirm('Yakin ingin menghapus Patch ID?');
         if (!confirmed) return;
         if (bridge()) {
             const result = await bridge().Uninstall(S.gamePath);
@@ -311,10 +311,10 @@ function initBottomBar() {
                 const btn = document.getElementById('btnStart');
                 const txt = document.getElementById('startBtnText');
                 btn.classList.remove('installed');
-                txt.textContent = 'Cài Việt Hoá';
-                toast('Đã gỡ cài đặt Việt Hoá.', 'ok');
+                txt.textContent = 'Instal Patch ID';
+                toast('Patch ID berhasil dihapus.', 'ok');
             } else {
-                toast('Lỗi: ' + result, 'err');
+                toast('Error: ' + result, 'err');
             }
         } else {
             toast('Demo: Gỡ cài đặt...', 'info');
@@ -356,7 +356,7 @@ function simulateInstall() {
     const iv = setInterval(() => {
         p += Math.random()*3+1;
         if (p>100) p = 100;
-        setProgress(p, 'Đang tải xuống bản Việt Hoá...',
+        setProgress(p, 'Mengunduh Patch ID...',
             (Math.random()*15+5).toFixed(1)+' MB/s',
             (total*p/100).toFixed(0)+' / '+total+' MB');
         if (p>=100) {
@@ -395,7 +395,7 @@ function installDone() {
     prog.style.display = 'none';
     const dx11Row = document.getElementById('dx11Row');
     if (dx11Row) dx11Row.style.display = '';
-    toast('Cài đặt Việt Hoá thành công!','ok');
+    toast('Patch ID berhasil diinstal!','ok');
 }
 
 function launchGame() {
@@ -419,7 +419,7 @@ window.onInstallError = msg => {
     prog.style.display = 'none';
     const dx11Row = document.getElementById('dx11Row');
     if (dx11Row) dx11Row.style.display = 'none';
-    toast('Lỗi: '+msg,'err');
+    toast('Error: '+msg,'err');
 };
 window.onAdminRequired = () => {
     S.installing = false;

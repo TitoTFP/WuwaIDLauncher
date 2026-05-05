@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -59,24 +59,24 @@
     <XorEncryptFiles
       SourceDir="Resources\Web\"
       DestDir="$(IntermediateOutputPath)EncryptedWeb\"
-      Key="WuwaVH@2026!xK9#mQ" />
+      Key="WuwaID@2026!xK9#mQ" />
   </Target>
 
   <ItemGroup>
-    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\index.html"          LogicalName="WuwaVHLauncher.Resources.Web.index.html" />
+    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\index.html"          LogicalName="WuwaIDLauncher.Resources.Web.index.html" />
     
-    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\styles-base.css"     LogicalName="WuwaVHLauncher.Resources.Web.styles-base.css" />
-    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\styles-panel.css"    LogicalName="WuwaVHLauncher.Resources.Web.styles-panel.css" />
-    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\styles-effects.css"  LogicalName="WuwaVHLauncher.Resources.Web.styles-effects.css" />
-    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\styles-font.css"     LogicalName="WuwaVHLauncher.Resources.Web.styles-font.css" />
+    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\styles-base.css"     LogicalName="WuwaIDLauncher.Resources.Web.styles-base.css" />
+    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\styles-panel.css"    LogicalName="WuwaIDLauncher.Resources.Web.styles-panel.css" />
+    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\styles-effects.css"  LogicalName="WuwaIDLauncher.Resources.Web.styles-effects.css" />
+    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\styles-font.css"     LogicalName="WuwaIDLauncher.Resources.Web.styles-font.css" />
     
-    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\script-core.js"      LogicalName="WuwaVHLauncher.Resources.Web.script-core.js" />
-    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\script-fx.js"        LogicalName="WuwaVHLauncher.Resources.Web.script-fx.js" />
-    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\script-nav.js"       LogicalName="WuwaVHLauncher.Resources.Web.script-nav.js" />
-    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\script-home.js"      LogicalName="WuwaVHLauncher.Resources.Web.script-home.js" />
-    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\script-misc.js"      LogicalName="WuwaVHLauncher.Resources.Web.script-misc.js" />
-    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\script-perf.js"      LogicalName="WuwaVHLauncher.Resources.Web.script-perf.js" />
-    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\assets\logo.png"     LogicalName="WuwaVHLauncher.Resources.Web.assets.logo.png" />
+    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\script-core.js"      LogicalName="WuwaIDLauncher.Resources.Web.script-core.js" />
+    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\script-fx.js"        LogicalName="WuwaIDLauncher.Resources.Web.script-fx.js" />
+    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\script-nav.js"       LogicalName="WuwaIDLauncher.Resources.Web.script-nav.js" />
+    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\script-home.js"      LogicalName="WuwaIDLauncher.Resources.Web.script-home.js" />
+    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\script-misc.js"      LogicalName="WuwaIDLauncher.Resources.Web.script-misc.js" />
+    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\script-perf.js"      LogicalName="WuwaIDLauncher.Resources.Web.script-perf.js" />
+    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\assets\logo.png"     LogicalName="WuwaIDLauncher.Resources.Web.assets.logo.png" />
   </ItemGroup>
 
   <Target Name="CleanPublishExtras" AfterTargets="Publish">

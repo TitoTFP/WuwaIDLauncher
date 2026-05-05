@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Net.Http;
@@ -11,15 +11,15 @@ using System.Windows.Interop;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Win32;
 
-namespace WuwaVHLauncher;
+namespace WuwaIDLauncher;
 
 public partial class MainWindow : Window
 {
     internal static readonly string AppDataFolder = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WuwaVHLauncher");
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WuwaIDLauncher");
     internal static readonly string CacheFolder = Path.Combine(AppDataFolder, "Cache");
     internal static readonly string SettingsPath = Path.Combine(AppDataFolder, "settings.json");
-    const string AssetsUrl = "https://raw.githubusercontent.com/CallMeDangDev/WuwaVH/refs/heads/main/Web/assets.json";
+    const string AssetsUrl = "https://raw.githubusercontent.com/TitoTFP/WuwaID/refs/heads/main/Web/assets.json";
 
     volatile bool _pageReady;
     string? _pendingBgm, _pendingVideo, _pendingUpdateDate;
@@ -171,8 +171,8 @@ public partial class MainWindow : Window
 
 
     static readonly Assembly Asm = Assembly.GetExecutingAssembly();
-    const string ResPrefix = "WuwaVHLauncher.Resources.Web.";
-    static readonly byte[] XorKey = "WuwaVH@2026!xK9#mQ"u8.ToArray();
+    const string ResPrefix = "WuwaIDLauncher.Resources.Web.";
+    static readonly byte[] XorKey = "WuwaID@2026!xK9#mQ"u8.ToArray();
 
     void OnWebResourceRequested(object? sender, CoreWebView2WebResourceRequestedEventArgs e)
     {
@@ -265,7 +265,7 @@ public partial class MainWindow : Window
             var modDir = Path.Combine(baseDir, "wuwaVietHoa");
             
             if (!Directory.Exists(baseDir))
-                throw new Exception("Không tìm thấy thư mục game. Vui lòng kiểm tra lại đường dẫn.");
+                throw new Exception("Direktori game tidak ditemukan. Silakan periksa kembali pathnya.");
 
             try
             {
@@ -281,12 +281,13 @@ public partial class MainWindow : Window
             }
             catch (Exception ex)
             {
-                throw new Exception("Không thể ghi file vào thư mục game: " + ex.Message);
+                throw new Exception("Tidak dapat menulis file ke direktori game: " + ex.Message);
             }
 
             Directory.CreateDirectory(modDir);
 
-            var releaseUrl = "https://api.github.com/repos/CallMeDangDev/WuwaVH/releases/latest";
+            // TODO: Ganti URL Repo Anda
+            var releaseUrl = "https://api.github.com/repos/TitoTFP/WuwaID/releases/latest";
 
             using var http = new HttpClient();
             http.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0");
@@ -307,7 +308,7 @@ public partial class MainWindow : Window
             {
                 var name = item.GetProperty("name").GetString() ?? "";
                 if (name == "UTMAlexander_100_P.pak" && hasCustomFont) continue;
-                if (name == "WuWaVH_99_P.pak" || name == "UTMAlexander_100_P.pak" || name == "version.dll")
+                if (name == "WuWaID_99_P.pak" || name == "UTMAlexander_100_P.pak" || name == "version.dll")
                 {
                     var url = item.GetProperty("browser_download_url").GetString() ?? "";
                     var size = item.GetProperty("size").GetInt64();
@@ -321,7 +322,7 @@ public partial class MainWindow : Window
             }
 
             if (toDownload.Count == 0)
-                throw new Exception("Không tìm thấy file cài đặt trên máy chủ.");
+                throw new Exception("File instalasi tidak ditemukan di server.");
 
             var versionCachePath = Path.Combine(AppDataFolder, "versions.json");
             var localCache = new Dictionary<string, string>();
@@ -468,7 +469,7 @@ public partial class MainWindow : Window
             }
             else
             {
-                RunScript($"window.onInstallError({JsStr("Không tìm thấy file game: " + exeName)})");
+                RunScript($"window.onInstallError({JsStr("File game tidak ditemukan: " + exeName)})");
             }
         }
         catch (Exception ex)
@@ -478,7 +479,9 @@ public partial class MainWindow : Window
     }
 
 
+    // TODO: Ganti URL Repo Anda
     const string LauncherReleasesApiUrl = "https://api.github.com/repos/CallMeDangDev/WuwaVHLauncher/releases/latest";
+    // TODO: Ganti URL Repo Anda
     const string LauncherReleasesPageUrl = "https://github.com/CallMeDangDev/WuwaVHLauncher/releases";
 
     internal async Task CheckLauncherVersion()
@@ -486,7 +489,7 @@ public partial class MainWindow : Window
         try
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaVHLauncher/1.0");
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaIDLauncher/1.0");
             var json = await http.GetStringAsync(LauncherReleasesApiUrl);
             using var doc = JsonDocument.Parse(json);
 
@@ -500,7 +503,8 @@ public partial class MainWindow : Window
             if (latest > current)
             {
                 while (!_pageReady) await Task.Delay(100);
-                var downloadUrl = $"https://github.com/CallMeDangDev/WuwaVHLauncher/releases/download/v{tag}/WuwaVHLauncher-v{tag}.zip";
+                // TODO: Ganti URL Repo Anda
+                var downloadUrl = $"https://github.com/CallMeDangDev/WuwaVHLauncher/releases/download/v{tag}/WuwaIDLauncher-v{tag}.zip";
                 RunScript($"window.onLauncherUpdateAvailable({JsStr('v' + tag)}, {JsStr(downloadUrl)})");
             }
         }
@@ -508,6 +512,7 @@ public partial class MainWindow : Window
     }
 
 
+    // TODO: Ganti URL Repo Anda
     const string VHReleasesApiUrl = "https://api.github.com/repos/CallMeDangDev/WuwaVH/releases/latest";
 
     internal async Task FetchVHReleaseNotes()
@@ -515,7 +520,7 @@ public partial class MainWindow : Window
         try
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaVHLauncher/1.0");
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaIDLauncher/1.0");
             var json = await http.GetStringAsync(VHReleasesApiUrl);
             using var doc = JsonDocument.Parse(json);
 
@@ -535,14 +540,14 @@ public partial class MainWindow : Window
     {
         try
         {
-            var updateDir = Path.Combine(Path.GetTempPath(), "WuwaVHLauncher_update");
+            var updateDir = Path.Combine(Path.GetTempPath(), "WuwaIDLauncher_update");
             if (Directory.Exists(updateDir)) Directory.Delete(updateDir, true);
             Directory.CreateDirectory(updateDir);
             var zipPath = Path.Combine(updateDir, "update.zip");
 
             RunScript("window.onLauncherUpdateProgress(0, '\u0110ang tải xuống...')");
             using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaVHLauncher/1.0");
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaIDLauncher/1.0");
 
             using var resp = await http.GetAsync(zipUrl, HttpCompletionOption.ResponseHeadersRead);
             resp.EnsureSuccessStatusCode();
@@ -575,12 +580,12 @@ public partial class MainWindow : Window
             var extractDir = Path.Combine(updateDir, "extracted");
             ZipFile.ExtractToDirectory(zipPath, extractDir);
 
-            var newExe = Directory.GetFiles(extractDir, "WuwaVHLauncher.exe", SearchOption.AllDirectories)
+            var newExe = Directory.GetFiles(extractDir, "WuwaIDLauncher.exe", SearchOption.AllDirectories)
                                    .FirstOrDefault()
-                         ?? throw new Exception("Không tìm thấy WuwaVHLauncher.exe trong file zip.");
+                         ?? throw new Exception("WuwaIDLauncher.exe tidak ditemukan dalam file zip.");
 
             var currentExe = Process.GetCurrentProcess().MainModule?.FileName
-                             ?? throw new Exception("Không xác định được đường dấn exe hiện tại.");
+                             ?? throw new Exception("Direktori exe saat ini tidak diketahui.");
             var currentPid = Environment.ProcessId;
 
             var scriptPath = Path.Combine(updateDir, "updater.ps1");
@@ -600,7 +605,7 @@ public partial class MainWindow : Window
                 "    Start-Process -FilePath $targetExe\n" +
                 "} catch {\n" +
                 "    Add-Type -AssemblyName PresentationFramework\n" +
-                "    [System.Windows.MessageBox]::Show(\"C\u1eadp nh\u1eadt th\u1ea5t b\u1ea1i: $_\", \"WuwaVHLauncher Updater\")\n" +
+                "    [System.Windows.MessageBox]::Show(\"Pembaruan gagal: $_\", \"WuwaIDLauncher Updater\")\n" +
                 "}\n" +
                 "# Cleanup\n" +
                 "Start-Sleep -Seconds 2\n" +
@@ -636,7 +641,7 @@ public partial class MainWindow : Window
         try
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaVHLauncher/1.0");
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaIDLauncher/1.0");
             var json = await http.GetStringAsync(AssetsUrl);
             using var doc = JsonDocument.Parse(json);
 
@@ -670,7 +675,7 @@ public partial class MainWindow : Window
         if (toDownload.Count > 0)
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaVHLauncher/1.0");
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaIDLauncher/1.0");
             foreach (var (name, url, _) in toDownload)
             {
                 try
@@ -905,7 +910,7 @@ public class LauncherBridge
         }
         catch (UnauthorizedAccessException)
         {
-            return "Không có quyền xoá file. Vui lòng chạy bằng Admin.";
+            return "Tidak memiliki izin menghapus file. Jalankan sebagai Admin.";
         }
         catch (Exception ex)
         {
@@ -971,7 +976,7 @@ public class LauncherBridge
                 _w.RunScript("window.onFontPakProgress('Đang đọc file font...')");
 
                 if (!File.Exists(fontFilePath))
-                    throw new FileNotFoundException("Không tìm thấy file font: " + fontFilePath);
+                    throw new FileNotFoundException("File font tidak ditemukan: " + fontFilePath);
 
                 byte[] fontData = await File.ReadAllBytesAsync(fontFilePath);
                 if (fontData.Length == 0)
@@ -1266,7 +1271,7 @@ public class LauncherBridge
         }
         catch (UnauthorizedAccessException)
         {
-            return "Không có quyền ghi file. Vui lòng chạy Launcher với quyền Admin.";
+            return "Tidak memiliki izin menulis file. Jalankan Launcher sebagai Admin.";
         }
         catch (Exception ex)
         {

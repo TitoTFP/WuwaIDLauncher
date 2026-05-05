@@ -1,7 +1,7 @@
 using System.Windows;
 using System.Windows.Media.Animation;
 
-namespace WuwaVHLauncher
+namespace WuwaIDLauncher
 {
     public partial class SplashWindow : Window
     {

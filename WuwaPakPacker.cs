@@ -1,7 +1,7 @@
 using System.IO;
 using System.Security.Cryptography;
 
-namespace WuwaVHLauncher;
+namespace WuwaIDLauncher;
 
 static class WuwaPakPacker
 {

@@ -1,26 +1,26 @@
-# WuwaVH Launcher
+# WuwaID Launcher
 
-Launcher cài đặt bản Việt Hoá Wuthering Waves.
+Launcher mempermudah instalasi patch Bahasa Indonesia untuk Wuthering Waves.
 
-## Cách dùng
+## Cara Penggunaan
 
-1. Mở `WuwaVHLauncher.exe`
-2. Chọn thư mục cài đặt game (launcher sẽ tự tìm nếu game ở vị trí mặc định)
-3. Nhấn **Cài đặt Việt Hoá** và chờ tải xong
-4. Nhấn **Chơi** để vào game
+1. Buka aplikasi `WuwaIDLauncher.exe`.
+2. Pilih direktori instalasi game (launcher akan mendeteksi otomatis jika berada di lokasi instalasi default).
+3. Klik **Instal Patch ID** dan tunggu hingga proses unduhan selesai.
+4. Klik **Mainkan** untuk masuk ke dalam game.
 
-## Tính năng
+## Fitur Utama
 
-- Cài đặt / cập nhật / gỡ bản Việt Hoá
-- Tự động nhận diện đường dẫn game
-- Khởi chạy game trực tiếp từ launcher
-- Chạy lại với quyền Admin nếu cần (menu ⋯ → Khởi động với Admin)
+- **Manajemen Patch:** Instal, perbarui, atau hapus patch Bahasa Indonesia dengan sekali klik.
+- **Deteksi Otomatis:** Mencari dan mengenali jalur folder instalasi game secara otomatis.
+- **Bermain Langsung:** Jalankan Wuthering Waves langsung melalui launcher.
+- **Hak Akses Admin:** Opsi memuat ulang aplikasi dengan hak Administrator jika diperlukan (melalui menu ⋯ → Jalankan sebagai Administrator).
 
-## Yêu cầu
+## Persyaratan Sistem
 
-- Windows 10/11
-- [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) (thường đã có sẵn trên Windows 11)
+- **OS:** Windows 10 atau 11
+- **Dependency:** [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) (Umumnya sudah terinstal bawaan pada Windows 11)
 
-## Credits
+## Kredit
 
-- [AlteriaX/WuWa-Configs](https://github.com/AlteriaX/WuWa-Configs) — Game configuration presets, used for High Performance mode
+- [AlteriaX/WuWa-Configs](https://github.com/AlteriaX/WuWa-Configs) — Menyediakan preset konfigurasi game yang digunakan untuk Mode Performa Tinggi (High Performance mode).

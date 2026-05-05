@@ -1,6 +1,6 @@
 using System.Windows;
 
-namespace WuwaVHLauncher;
+namespace WuwaIDLauncher;
 
 public partial class ConfirmDialog : Window
 {

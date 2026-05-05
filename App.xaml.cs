@@ -5,7 +5,7 @@ using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
 
-namespace WuwaVHLauncher;
+namespace WuwaIDLauncher;
 
 public partial class App : Application
 {
@@ -27,7 +27,7 @@ public partial class App : Application
         CheckRemoteDebuggerPresent(GetCurrentProcess(), out var remote);
         if (remote) { Shutdown(); return; }
 
-        _mutex = new Mutex(true, "WuwaVHLauncher_SingleInstance", out bool isNew);
+        _mutex = new Mutex(true, "WuwaIDLauncher_SingleInstance", out bool isNew);
         if (!isNew) { Shutdown(); return; }
 
         base.OnStartup(e);

@@ -32,7 +32,7 @@ jobs:
 
       - name: Publish (single-file, self-contained)
         run: |
-          dotnet publish WuwaVHLauncher.csproj `
+          dotnet publish WuwaIDLauncher.csproj `
             -c Release `
             -o ./publish
 
@@ -46,14 +46,14 @@ jobs:
           }
 
       - name: Create ZIP archive
-        run: Compress-Archive -Path ./publish/WuwaVHLauncher.exe -DestinationPath ./WuwaVHLauncher-${{ steps.tag.outputs.name }}.zip
+        run: Compress-Archive -Path ./publish/WuwaIDLauncher.exe -DestinationPath ./WuwaIDLauncher-${{ steps.tag.outputs.name }}.zip
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: WuwaVHLauncher ${{ steps.tag.outputs.name }}
+          name: WuwaIDLauncher ${{ steps.tag.outputs.name }}
           tag_name: ${{ steps.tag.outputs.name }}
           draft: false
           prerelease: false
           generate_release_notes: true
-          files: ./WuwaVHLauncher-${{ steps.tag.outputs.name }}.zip
+          files: ./WuwaIDLauncher-${{ steps.tag.outputs.name }}.zip
