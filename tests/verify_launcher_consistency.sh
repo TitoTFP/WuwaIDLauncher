@@ -26,4 +26,16 @@ if ! rg -n "Hash file .* tidak cocok" MainWindow.xaml.cs >/dev/null; then
   fail "installer must reject mismatched downloaded files"
 fi
 
+if rg -n 'if \(name == "UTMAlexander_100_P\.pak"\)' MainWindow.xaml.cs >/dev/null; then
+  fail "installer must not special-case the repository font pak"
+fi
+
+if rg -n 'name == "UTMAlexander_100_P\.pak"\s*&&' MainWindow.xaml.cs >/dev/null; then
+  fail "repository font skip must not depend on custom font detection"
+fi
+
+if rg -n '\|\|\s*name == "UTMAlexander_100_P\.pak"' MainWindow.xaml.cs >/dev/null; then
+  fail "repository font pak must not be part of installer download whitelist"
+fi
+
 echo "launcher consistency checks passed"

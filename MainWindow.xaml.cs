@@ -305,15 +305,10 @@ public partial class MainWindow : Window
 
             var toDownload = new List<(string Name, string Url, long Size, string Hash)>();
 
-            bool hasCustomFont = Directory.Exists(modDir) &&
-                Directory.GetFiles(modDir, "*_100_P.pak")
-                         .Any(f => !Path.GetFileName(f).Equals("UTMAlexander_100_P.pak", StringComparison.OrdinalIgnoreCase));
-
             foreach (var item in doc.RootElement.GetProperty("assets").EnumerateArray())
             {
                 var name = item.GetProperty("name").GetString() ?? "";
-                if (name == "UTMAlexander_100_P.pak" && hasCustomFont) continue;
-                if (name == "WuWaID_99_P.pak" || name == "UTMAlexander_100_P.pak" || name == "version.dll")
+                if (name == "WuWaID_99_P.pak" || name == "version.dll")
                 {
                     var url = item.GetProperty("browser_download_url").GetString() ?? "";
                     var size = item.GetProperty("size").GetInt64();
