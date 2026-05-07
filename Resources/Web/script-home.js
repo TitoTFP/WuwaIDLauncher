@@ -356,9 +356,8 @@ async function loadVersions() {
         const elApp = document.getElementById('verApp');
         const elVH  = document.getElementById('verVH');
         if (elApp) elApp.textContent = appVer ? `Launcher v${appVer}` : '';
-        if (elVH)  elVH.textContent  = vhVer  ? `VH ${vhVer}` : '';
+        if (elVH)  elVH.textContent  = vhVer  ? `ID ${vhVer}` : '';
     } catch(e) {}
 }
 
 let _launcherUpdateUrl = '';
-

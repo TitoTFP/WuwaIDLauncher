@@ -603,7 +603,7 @@ async function loadVersions() {
         const elApp = document.getElementById('verApp');
         const elVH  = document.getElementById('verVH');
         if (elApp) elApp.textContent = appVer ? `Launcher v${appVer}` : '';
-        if (elVH)  elVH.textContent  = vhVer  ? `VH ${vhVer}` : '';
+        if (elVH)  elVH.textContent  = vhVer  ? `ID ${vhVer}` : '';
     } catch(e) {}
 }
 
@@ -1459,4 +1459,3 @@ function fcSetStatus(msg, isError, isSuccess = false) {
     el.className = 'fc-status' + (isError ? ' fc-status--err' : isSuccess ? ' fc-status--ok' : '');
     el.textContent = msg;
 }
-
