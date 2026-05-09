@@ -22,6 +22,11 @@ public partial class MainWindow : Window
     const string AssetsUrl = "https://raw.githubusercontent.com/TitoTFP/WuwaID/refs/heads/main/Web/assets.json";
     internal const string ModFolderName = "wuwaIndonesia";
     internal const string LegacyModFolderName = "wuwaVietHoa";
+    internal const string PakFileName = "WuWaID_99_P.pak";
+    internal const string PakFolderRelativePath = @"Client\Content\Paks";
+    internal const string SigFileName = "pakchunk7-WindowsNoEditor.sig";
+    internal const string SigBackupFileName = "pakchunk7-WindowsNoEditor_backup.sig";
+    static readonly TimeSpan SigRestoreDelay = TimeSpan.FromSeconds(150);
 
     volatile bool _pageReady;
     string? _pendingBgm, _pendingVideo, _pendingUpdateDate;
@@ -264,15 +269,15 @@ public partial class MainWindow : Window
         try
         {
             var baseDir = Path.Combine(gamePath, @"Client\Binaries\Win64");
-            var modDir = Path.Combine(baseDir, ModFolderName);
-            var legacyModDir = Path.Combine(baseDir, LegacyModFolderName);
+            var pakDir = Path.Combine(gamePath, PakFolderRelativePath);
             
             if (!Directory.Exists(baseDir))
                 throw new Exception("Direktori game tidak ditemukan. Silakan periksa kembali pathnya.");
 
             try
             {
-                var testFile = Path.Combine(baseDir, "vh_write_test.tmp");
+                Directory.CreateDirectory(pakDir);
+                var testFile = Path.Combine(pakDir, "vh_write_test.tmp");
                 File.WriteAllText(testFile, "test");
                 File.Delete(testFile);
             }
@@ -287,10 +292,7 @@ public partial class MainWindow : Window
                 throw new Exception("Tidak dapat menulis file ke direktori game: " + ex.Message);
             }
 
-            if (!Directory.Exists(modDir) && Directory.Exists(legacyModDir))
-                Directory.Move(legacyModDir, modDir);
-
-            Directory.CreateDirectory(modDir);
+            DeleteLegacyLoaderFiles(baseDir);
 
             var releaseUrl = "https://api.github.com/repos/TitoTFP/WuwaID/releases/latest";
 
@@ -308,7 +310,7 @@ public partial class MainWindow : Window
             foreach (var item in doc.RootElement.GetProperty("assets").EnumerateArray())
             {
                 var name = item.GetProperty("name").GetString() ?? "";
-                if (name == "WuWaID_99_P.pak" || name == "version.dll")
+                if (name == PakFileName)
                 {
                     var url = item.GetProperty("browser_download_url").GetString() ?? "";
                     var size = item.GetProperty("size").GetInt64();
@@ -339,7 +341,7 @@ public partial class MainWindow : Window
             bool allFilesUpToDate = true;
             foreach (var (name, _, _, hash) in toDownload)
             {
-                var destPath = name == "version.dll" ? Path.Combine(baseDir, name) : Path.Combine(modDir, name);
+                var destPath = Path.Combine(pakDir, name);
                 
                 if (!File.Exists(destPath))
                 {
@@ -383,7 +385,7 @@ public partial class MainWindow : Window
             long totalBytes = 0;
             foreach (var (name, _, size, hash) in toDownload)
             {
-                var destPath = name == "version.dll" ? Path.Combine(baseDir, name) : Path.Combine(modDir, name);
+                var destPath = Path.Combine(pakDir, name);
                 bool needsUpdate = !File.Exists(destPath) ||
                                    (!string.IsNullOrEmpty(hash)
                                        ? !VerifySha256(destPath, hash)
@@ -401,7 +403,7 @@ public partial class MainWindow : Window
 
             foreach (var (name, url, size, hash) in toDownload)
             {
-                var destPath = name == "version.dll" ? Path.Combine(baseDir, name) : Path.Combine(modDir, name);
+                var destPath = Path.Combine(pakDir, name);
 
                 if (!needsUpdateSet.Contains(name))
                     continue;
@@ -463,6 +465,71 @@ public partial class MainWindow : Window
     }
 
 
+    internal static string PakFolderPath(string gamePath) =>
+        Path.Combine(gamePath, PakFolderRelativePath);
+
+    internal static string SigPath(string gamePath) =>
+        Path.Combine(PakFolderPath(gamePath), SigFileName);
+
+    internal static string SigBackupPath(string gamePath) =>
+        Path.Combine(PakFolderPath(gamePath), SigBackupFileName);
+
+    internal static void RestoreSigBackup(string gamePath)
+    {
+        var sigPath = SigPath(gamePath);
+        var backupPath = SigBackupPath(gamePath);
+
+        if (File.Exists(backupPath) && !File.Exists(sigPath))
+            File.Move(backupPath, sigPath);
+        else if (File.Exists(backupPath) && File.Exists(sigPath))
+            File.Delete(backupPath);
+    }
+
+    static void PrepareSigBypass(string gamePath)
+    {
+        RestoreSigBackup(gamePath);
+
+        var sigPath = SigPath(gamePath);
+        var backupPath = SigBackupPath(gamePath);
+
+        if (!File.Exists(sigPath))
+            throw new Exception($"File signature game tidak ditemukan: {SigFileName}");
+
+        File.Move(sigPath, backupPath, true);
+    }
+
+    async Task RestoreSigBackupAfterDelay(string gamePath)
+    {
+        await Task.Delay(SigRestoreDelay);
+        try
+        {
+            RestoreSigBackup(gamePath);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            RunScript($"window.onInstallError({JsStr("Tidak memiliki izin memulihkan signature game. Jalankan sebagai Admin.")})");
+        }
+        catch (Exception ex)
+        {
+            RunScript($"window.onInstallError({JsStr("Gagal memulihkan signature game: " + ex.Message)})");
+        }
+    }
+
+    internal static void DeleteLegacyLoaderFiles(string baseDir)
+    {
+        var modDir = Path.Combine(baseDir, ModFolderName);
+        var legacyModDir = Path.Combine(baseDir, LegacyModFolderName);
+        var versionDll = Path.Combine(baseDir, "version.dll");
+
+        if (Directory.Exists(modDir))
+            Directory.Delete(modDir, true);
+        if (Directory.Exists(legacyModDir))
+            Directory.Delete(legacyModDir, true);
+        if (File.Exists(versionDll))
+            File.Delete(versionDll);
+    }
+
+
     internal void LaunchGame(string gamePath, bool dx11)
     {
         try
@@ -471,6 +538,9 @@ public partial class MainWindow : Window
             var full = Path.Combine(gamePath, @"Client\Binaries\Win64", exeName);
             if (File.Exists(full))
             {
+                RestoreSigBackup(gamePath);
+                PrepareSigBypass(gamePath);
+
                 var args = dx11 ? "-SkipSplash -dx11" : "-SkipSplash -dx12";
                 Process.Start(new ProcessStartInfo
                 {
@@ -479,6 +549,7 @@ public partial class MainWindow : Window
                     WorkingDirectory = Path.GetDirectoryName(full),
                     UseShellExecute = true
                 });
+                _ = RestoreSigBackupAfterDelay(gamePath);
                 Dispatcher.Invoke(() => WindowState = WindowState.Minimized);
             }
             else
@@ -904,16 +975,13 @@ public class LauncherBridge
         try
         {
             var baseDir = Path.Combine(gamePath, @"Client\Binaries\Win64");
-            var modDir  = Path.Combine(baseDir, MainWindow.ModFolderName);
-            var legacyModDir = Path.Combine(baseDir, MainWindow.LegacyModFolderName);
-            var versionDll = Path.Combine(baseDir, "version.dll");
+            var pakPath = Path.Combine(MainWindow.PakFolderPath(gamePath), MainWindow.PakFileName);
 
-            if (Directory.Exists(modDir))
-                Directory.Delete(modDir, true);
-            if (Directory.Exists(legacyModDir))
-                Directory.Delete(legacyModDir, true);
-            if (File.Exists(versionDll))
-                File.Delete(versionDll);
+            MainWindow.RestoreSigBackup(gamePath);
+
+            if (File.Exists(pakPath))
+                File.Delete(pakPath);
+            MainWindow.DeleteLegacyLoaderFiles(baseDir);
 
             var versionCache = Path.Combine(MainWindow.AppDataFolder, "versions.json");
             if (File.Exists(versionCache))
@@ -971,7 +1039,7 @@ public class LauncherBridge
     {
         try
         {
-            var modDir = Path.Combine(gamePath, @"Client\Binaries\Win64", MainWindow.ModFolderName);
+            var modDir = MainWindow.PakFolderPath(gamePath);
             if (!Directory.Exists(modDir)) return "";
             var custom = Directory.GetFiles(modDir, "*_100_P.pak")
                 .Select(Path.GetFileName)
@@ -997,7 +1065,7 @@ public class LauncherBridge
 
                 _w.RunScript("window.onFontPakProgress('Membuat paket .pak...')");
 
-                var modDir = Path.Combine(gamePath, @"Client\Binaries\Win64", MainWindow.ModFolderName);
+                var modDir = MainWindow.PakFolderPath(gamePath);
                 Directory.CreateDirectory(modDir);
 
                 foreach (var old in Directory.GetFiles(modDir, "*_100_P.pak"))
@@ -1026,7 +1094,7 @@ public class LauncherBridge
         {
             try
             {
-                var modDir = Path.Combine(gamePath, @"Client\Binaries\Win64", MainWindow.ModFolderName);
+                var modDir = MainWindow.PakFolderPath(gamePath);
                 if (Directory.Exists(modDir))
                 {
                     foreach (var f in Directory.GetFiles(modDir, "*_100_P.pak"))

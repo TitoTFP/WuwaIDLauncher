@@ -1400,7 +1400,7 @@ async function fcBuild() {
         bridge().CreateFontPak(FC.fontPath, S.gamePath, baseName);
     } else {
         setTimeout(() => {
-            window.onFontPakDone(`C:\\WW\\wuwaIndonesia\\${baseName}_100_P.pak`, '2.4 MB');
+            window.onFontPakDone(`C:\\WW\\Client\\Content\\Paks\\${baseName}_100_P.pak`, '2.4 MB');
         }, 1200);
     }
 }

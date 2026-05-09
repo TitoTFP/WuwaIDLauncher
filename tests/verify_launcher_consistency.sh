@@ -26,6 +26,34 @@ if ! rg -n "Hash file .* tidak cocok" MainWindow.xaml.cs >/dev/null; then
   fail "installer must reject mismatched downloaded files"
 fi
 
+if rg -n 'name == "version\.dll"|name == "version\.dll" \?' MainWindow.xaml.cs >/dev/null; then
+  fail "installer must not download or route version.dll"
+fi
+
+if ! rg -n 'PakFolderRelativePath = @"Client\\Content\\Paks"' MainWindow.xaml.cs >/dev/null; then
+  fail "installer must target Client\\Content\\Paks"
+fi
+
+if rg -n 'Path\.Combine\(gamePath, @"Client\\Binaries\\Win64", MainWindow\.ModFolderName\)' MainWindow.xaml.cs >/dev/null; then
+  fail "mod pak operations must not target Client\\Binaries\\Win64\\wuwaIndonesia"
+fi
+
+if ! rg -n 'SigFileName = "pakchunk7-WindowsNoEditor\.sig"' MainWindow.xaml.cs >/dev/null; then
+  fail "launcher must use pakchunk7 signature file"
+fi
+
+if ! rg -n 'SigBackupFileName = "pakchunk7-WindowsNoEditor_backup\.sig"' MainWindow.xaml.cs >/dev/null; then
+  fail "launcher must use pakchunk7 signature backup file"
+fi
+
+if ! rg -n 'SigRestoreDelay = TimeSpan\.FromSeconds\(150\)' MainWindow.xaml.cs >/dev/null; then
+  fail "launcher must restore signature after 150 seconds"
+fi
+
+if ! rg -n 'RestoreSigBackup\(gamePath\)' MainWindow.xaml.cs >/dev/null; then
+  fail "launcher must restore stale signature backups"
+fi
+
 if rg -n 'if \(name == "UTMAlexander_100_P\.pak"\)' MainWindow.xaml.cs >/dev/null; then
   fail "installer must not special-case the repository font pak"
 fi

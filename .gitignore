@@ -19,3 +19,6 @@ Desktop.ini
 
 #temp files
 temp/
+
+# PT-BR launcher reference files
+PT-BR Launcher/*
