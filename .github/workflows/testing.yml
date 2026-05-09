@@ -1,0 +1,40 @@
+name: Build Testing Launcher
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-testing:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Publish testing build
+        run: |
+          dotnet publish WuwaIDLauncher.csproj `
+            -c Release `
+            -o ./publish
+
+      - name: Create ZIP archive
+        run: Compress-Archive -Path ./publish/WuwaIDLauncher.exe -DestinationPath ./WuwaIDLauncher-testing-${{ github.run_number }}.zip
+
+      - name: Upload testing artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WuwaIDLauncher-testing-${{ github.run_number }}
+          path: ./WuwaIDLauncher-testing-${{ github.run_number }}.zip
+          if-no-files-found: error
+          retention-days: 14
