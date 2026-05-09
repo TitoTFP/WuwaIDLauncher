@@ -54,6 +54,26 @@ if ! rg -n 'RestoreSigBackup\(gamePath\)' MainWindow.xaml.cs >/dev/null; then
   fail "launcher must restore stale signature backups"
 fi
 
+if ! rg -n 'Verb = "runas"' MainWindow.xaml.cs >/dev/null; then
+  fail "game launch must use runas like PT-BR launcher"
+fi
+
+if ! rg -n 'Arguments = dx11 \? "-dx11" : ""' MainWindow.xaml.cs >/dev/null; then
+  fail "game launch must only pass -dx11 when selected and no args otherwise"
+fi
+
+if rg -n -- '-SkipSplash|-dx12' MainWindow.xaml.cs >/dev/null; then
+  fail "game launch must not force -SkipSplash or -dx12"
+fi
+
+if ! rg -n '_launchInProgress' MainWindow.xaml.cs >/dev/null; then
+  fail "game launch must block second launch while signature restore timer is active"
+fi
+
+if ! rg -n 'Application\.Current\.Shutdown\(\)' MainWindow.xaml.cs >/dev/null; then
+  fail "launcher must exit after restoring signature"
+fi
+
 if rg -n 'if \(name == "UTMAlexander_100_P\.pak"\)' MainWindow.xaml.cs >/dev/null; then
   fail "installer must not special-case the repository font pak"
 fi

@@ -29,6 +29,7 @@ public partial class MainWindow : Window
     static readonly TimeSpan SigRestoreDelay = TimeSpan.FromSeconds(150);
 
     volatile bool _pageReady;
+    volatile bool _launchInProgress;
     string? _pendingBgm, _pendingVideo, _pendingUpdateDate;
     SplashWindow? _splash;
 
@@ -492,10 +493,8 @@ public partial class MainWindow : Window
         var sigPath = SigPath(gamePath);
         var backupPath = SigBackupPath(gamePath);
 
-        if (!File.Exists(sigPath))
-            throw new Exception($"File signature game tidak ditemukan: {SigFileName}");
-
-        File.Move(sigPath, backupPath, true);
+        if (File.Exists(sigPath))
+            File.Move(sigPath, backupPath, true);
     }
 
     async Task RestoreSigBackupAfterDelay(string gamePath)
@@ -512,6 +511,11 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             RunScript($"window.onInstallError({JsStr("Gagal memulihkan signature game: " + ex.Message)})");
+        }
+        finally
+        {
+            _launchInProgress = false;
+            Dispatcher.Invoke(() => Application.Current.Shutdown());
         }
     }
 
@@ -534,6 +538,12 @@ public partial class MainWindow : Window
     {
         try
         {
+            if (_launchInProgress)
+            {
+                RunScript($"window.onInstallError({JsStr("Game sedang dibuka, tunggu signature dipulihkan.")})");
+                return;
+            }
+
             const string exeName = "Client-Win64-Shipping.exe";
             var full = Path.Combine(gamePath, @"Client\Binaries\Win64", exeName);
             if (File.Exists(full))
@@ -541,16 +551,15 @@ public partial class MainWindow : Window
                 RestoreSigBackup(gamePath);
                 PrepareSigBypass(gamePath);
 
-                var args = dx11 ? "-SkipSplash -dx11" : "-SkipSplash -dx12";
+                _launchInProgress = true;
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = full,
-                    Arguments = args,
-                    WorkingDirectory = Path.GetDirectoryName(full),
-                    UseShellExecute = true
+                    Arguments = dx11 ? "-dx11" : "",
+                    UseShellExecute = true,
+                    Verb = "runas"
                 });
                 _ = RestoreSigBackupAfterDelay(gamePath);
-                Dispatcher.Invoke(() => WindowState = WindowState.Minimized);
             }
             else
             {
@@ -559,6 +568,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            _launchInProgress = false;
+            RestoreSigBackup(gamePath);
             RunScript($"window.onInstallError({JsStr("Gagal menjalankan game: " + ex.Message)})");
         }
     }

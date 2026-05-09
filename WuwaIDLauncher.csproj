@@ -25,6 +25,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Remove="PT-BR Launcher\**\*.cs" />
+    <EmbeddedResource Remove="PT-BR Launcher\**\*" />
+    <None Remove="PT-BR Launcher\**\*" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Resource Include="Resources\Images\app.ico" />
     <Resource Include="Resources\Images\header.jpg" />
     <Resource Include="Resources\Images\bg-default.jpg" />
