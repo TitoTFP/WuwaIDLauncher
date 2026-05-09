@@ -79,7 +79,7 @@ function initBottomBar() {
 }
 
 async function handleStart() {
-    if (S.installing) return;
+    if (S.installing || S.launching) return;
     if (!S.gamePath) {
         if (!await browseFolder()) return;
     }
@@ -155,6 +155,7 @@ function installDone() {
 }
 
 function launchGame() {
+    if (S.launching) return;
     const dx11 = document.getElementById('chkDx11')?.checked ?? false;
     if (bridge()) {
         bridge().LaunchGame(S.gamePath, dx11);
@@ -163,18 +164,42 @@ function launchGame() {
     }
 }
 
+function setLaunchLock(label) {
+    S.launching = true;
+    const btn = document.getElementById('btnStart');
+    const txt = document.getElementById('startBtnText');
+    if (btn) btn.classList.add('disabled');
+    if (txt) txt.textContent = label;
+}
+
+function clearLaunchLock() {
+    S.launching = false;
+    const btn = document.getElementById('btnStart');
+    const txt = document.getElementById('startBtnText');
+    if (btn) {
+        btn.classList.remove('disabled');
+        if (S.installed) btn.classList.add('installed');
+    }
+    if (txt) txt.textContent = S.installed ? 'Mainkan Game' : 'Instal Patch ID';
+}
+
 window.onProgressUpdate  = (p,t,sp,sz) => setProgress(p,t,sp,sz);
 window.onInstallComplete = () => installDone();
+window.onGameLaunchStarted = () => setLaunchLock('Game sedang berjalan');
+window.onGameLaunchWaitingRestore = () => setLaunchLock('Memulihkan signature...');
+window.onGameLaunchFinished = () => clearLaunchLock();
 window.onInstallError = msg => {
     S.installing = false;
+    S.launching = false;
     const btn  = document.getElementById('btnStart');
     const txt  = document.getElementById('startBtnText');
     const prog = document.getElementById('progressSection');
     btn.classList.remove('installing','disabled');
-    txt.textContent = 'Coba lagi';
+    if (S.installed) btn.classList.add('installed');
+    txt.textContent = S.installed ? 'Mainkan Game' : 'Coba lagi';
     prog.style.display = 'none';
     const dx11Row = document.getElementById('dx11Row');
-    if (dx11Row) dx11Row.style.display = 'none';
+    if (dx11Row) dx11Row.style.display = S.installed ? '' : 'none';
     toast('Error: '+msg,'err');
 };
 window.onAdminRequired = () => {

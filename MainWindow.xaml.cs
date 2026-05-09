@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Windows;
+using System.ComponentModel;
 using System.Windows.Interop;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Win32;
@@ -22,14 +23,20 @@ public partial class MainWindow : Window
     const string AssetsUrl = "https://raw.githubusercontent.com/TitoTFP/WuwaID/refs/heads/main/Web/assets.json";
     internal const string ModFolderName = "wuwaIndonesia";
     internal const string LegacyModFolderName = "wuwaVietHoa";
-    internal const string PakFileName = "WuWaID_99_P.pak";
+    internal const string PakFileName = "pakchunk0-ID-WindowsNoEditor_1000_P.pak";
+    internal const string LegacyPakFileName = "WuWaID_99_P.pak";
     internal const string PakFolderRelativePath = @"Client\Content\Paks";
     internal const string SigFileName = "pakchunk7-WindowsNoEditor.sig";
     internal const string SigBackupFileName = "pakchunk7-WindowsNoEditor_backup.sig";
+    const string GameExeName = "Client-Win64-Shipping.exe";
+    const string GameProcessName = "Client-Win64-Shipping";
     static readonly TimeSpan SigRestoreDelay = TimeSpan.FromSeconds(150);
 
     volatile bool _pageReady;
     volatile bool _launchInProgress;
+    volatile bool _signatureRestorePending;
+    volatile bool _gameProcessRunning;
+    string? _launchGamePath;
     string? _pendingBgm, _pendingVideo, _pendingUpdateDate;
     SplashWindow? _splash;
 
@@ -38,25 +45,54 @@ public partial class MainWindow : Window
         InitializeComponent();
         Directory.CreateDirectory(CacheFolder);
         Loaded += OnLoaded;
-        Closing += (_, _) =>
+        Closing += OnClosing;
+    }
+
+    void OnClosing(object? sender, CancelEventArgs e)
+    {
+        if (_signatureRestorePending)
         {
-            
-            try
+            if (_gameProcessRunning)
             {
-                webView.CoreWebView2?.Profile.ClearBrowsingDataAsync();
-                webView.Dispose();
+                e.Cancel = true;
+                WindowState = WindowState.Minimized;
+                return;
             }
-            catch { }
-            
-            try
+
+            if (!string.IsNullOrWhiteSpace(_launchGamePath))
             {
-                var wv2Dir = Path.Combine(AppDataFolder, "WebView2");
-                if (Directory.Exists(wv2Dir))
-                    Directory.Delete(wv2Dir, true);
+                try { RestoreSigBackup(_launchGamePath); }
+                catch { }
+                _signatureRestorePending = false;
             }
-            catch { }
-            Environment.Exit(0);
-        };
+        }
+
+        try
+        {
+            webView.CoreWebView2?.Profile.ClearBrowsingDataAsync();
+            webView.Dispose();
+        }
+        catch { }
+
+        try
+        {
+            var wv2Dir = Path.Combine(AppDataFolder, "WebView2");
+            if (Directory.Exists(wv2Dir))
+                Directory.Delete(wv2Dir, true);
+        }
+        catch { }
+        Environment.Exit(0);
+    }
+
+    internal void RequestCloseWindow()
+    {
+        if (_signatureRestorePending && _gameProcessRunning)
+        {
+            WindowState = WindowState.Minimized;
+            return;
+        }
+
+        Application.Current.Shutdown();
     }
 
     async void OnLoaded(object sender, RoutedEventArgs e)
@@ -142,6 +178,7 @@ public partial class MainWindow : Window
         ");
 
         DetectGamePath();
+        RestoreStaleSignatureFromSettings();
         FlushPendingMedia();
     }
 
@@ -264,6 +301,25 @@ public partial class MainWindow : Window
         }
     }
 
+    void RestoreStaleSignatureFromSettings()
+    {
+        try
+        {
+            if (!File.Exists(SettingsPath) || IsGameRunning())
+                return;
+
+            var json = File.ReadAllText(SettingsPath);
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("gamePath", out var pathProp))
+                return;
+
+            var gamePath = pathProp.GetString();
+            if (!string.IsNullOrWhiteSpace(gamePath))
+                RestoreSigBackup(gamePath);
+        }
+        catch { }
+    }
+
 
     internal async Task RunInstallation(string gamePath, string vhMode, bool backup)
     {
@@ -338,6 +394,9 @@ public partial class MainWindow : Window
                 }
                 catch { }
             }
+
+            DeleteLegacyPakFile(gamePath);
+            localCache.Remove(LegacyPakFileName);
 
             bool allFilesUpToDate = true;
             foreach (var (name, _, _, hash) in toDownload)
@@ -455,6 +514,8 @@ public partial class MainWindow : Window
                 localCache["_vhVersion"] = tagName;
             File.WriteAllText(versionCachePath, JsonSerializer.Serialize(localCache));
 
+            DeleteLegacyPakFile(gamePath);
+
             RunScript($"window.onProgressUpdate(100, {JsStr("Instalasi selesai!")}, '', '')");
             await Task.Delay(1000);
             RunScript("window.onInstallComplete()");
@@ -497,12 +558,25 @@ public partial class MainWindow : Window
             File.Move(sigPath, backupPath, true);
     }
 
-    async Task RestoreSigBackupAfterDelay(string gamePath)
+    async Task MonitorLaunchStateAsync(string gamePath, Process? process)
     {
-        await Task.Delay(SigRestoreDelay);
         try
         {
+            var gameExitTask = WaitForGameExitAsync(process);
+            var restoreDelayTask = Task.Delay(SigRestoreDelay);
+            var first = await Task.WhenAny(gameExitTask, restoreDelayTask);
+
+            if (first == gameExitTask)
+            {
+                _gameProcessRunning = false;
+                RunScript("window.onGameLaunchWaitingRestore()");
+            }
+
             RestoreSigBackup(gamePath);
+            _signatureRestorePending = false;
+
+            if (first != gameExitTask)
+                await gameExitTask;
         }
         catch (UnauthorizedAccessException)
         {
@@ -514,9 +588,33 @@ public partial class MainWindow : Window
         }
         finally
         {
+            _gameProcessRunning = false;
+            _signatureRestorePending = false;
             _launchInProgress = false;
-            Dispatcher.Invoke(() => Application.Current.Shutdown());
+            _launchGamePath = null;
+            RunScript("window.onGameLaunchFinished()");
         }
+    }
+
+    static async Task WaitForGameExitAsync(Process? process)
+    {
+        try
+        {
+            if (process != null)
+                await process.WaitForExitAsync();
+        }
+        catch { }
+
+        await Task.Delay(3000);
+
+        while (IsGameRunning())
+            await Task.Delay(1000);
+    }
+
+    static bool IsGameRunning()
+    {
+        try { return Process.GetProcessesByName(GameProcessName).Length > 0; }
+        catch { return false; }
     }
 
     internal static void DeleteLegacyLoaderFiles(string baseDir)
@@ -533,6 +631,13 @@ public partial class MainWindow : Window
             File.Delete(versionDll);
     }
 
+    internal static void DeleteLegacyPakFile(string gamePath)
+    {
+        var legacyPakPath = Path.Combine(PakFolderPath(gamePath), LegacyPakFileName);
+        if (File.Exists(legacyPakPath))
+            File.Delete(legacyPakPath);
+    }
+
 
     internal void LaunchGame(string gamePath, bool dx11)
     {
@@ -540,36 +645,52 @@ public partial class MainWindow : Window
         {
             if (_launchInProgress)
             {
-                RunScript($"window.onInstallError({JsStr("Game sedang dibuka, tunggu signature dipulihkan.")})");
+                RunScript("window.onGameLaunchStarted()");
                 return;
             }
 
-            const string exeName = "Client-Win64-Shipping.exe";
-            var full = Path.Combine(gamePath, @"Client\Binaries\Win64", exeName);
+            var full = Path.Combine(gamePath, @"Client\Binaries\Win64", GameExeName);
             if (File.Exists(full))
             {
                 RestoreSigBackup(gamePath);
+
+                if (!File.Exists(SigPath(gamePath)) && !File.Exists(SigBackupPath(gamePath)))
+                {
+                    RunScript($"window.onInstallError({JsStr("Signature file tidak terdeteksi, jalankan Wuthering Waves dulu tanpa mod atau launcher ini.")})");
+                    return;
+                }
+
                 PrepareSigBypass(gamePath);
 
                 _launchInProgress = true;
-                Process.Start(new ProcessStartInfo
+                _signatureRestorePending = true;
+                _gameProcessRunning = true;
+                _launchGamePath = gamePath;
+
+                var process = Process.Start(new ProcessStartInfo
                 {
                     FileName = full,
                     Arguments = dx11 ? "-dx11" : "",
                     UseShellExecute = true,
                     Verb = "runas"
                 });
-                _ = RestoreSigBackupAfterDelay(gamePath);
+                RunScript("window.onGameLaunchStarted()");
+                Dispatcher.Invoke(() => WindowState = WindowState.Minimized);
+                _ = MonitorLaunchStateAsync(gamePath, process);
             }
             else
             {
-                RunScript($"window.onInstallError({JsStr("File game tidak ditemukan: " + exeName)})");
+                RunScript($"window.onInstallError({JsStr("File game tidak ditemukan: " + GameExeName)})");
             }
         }
         catch (Exception ex)
         {
             _launchInProgress = false;
+            _signatureRestorePending = false;
+            _gameProcessRunning = false;
+            _launchGamePath = null;
             RestoreSigBackup(gamePath);
+            RunScript("window.onGameLaunchFinished()");
             RunScript($"window.onInstallError({JsStr("Gagal menjalankan game: " + ex.Message)})");
         }
     }
@@ -874,7 +995,7 @@ public class LauncherBridge
         _w.Dispatcher.Invoke(() => _w.WindowState = WindowState.Minimized);
 
     public void CloseWindow() =>
-        _w.Dispatcher.Invoke(() => Application.Current.Shutdown());
+        _w.Dispatcher.Invoke(() => _w.RequestCloseWindow());
 
         public string BrowseGameFolder() =>
         _w.Dispatcher.Invoke(() =>
@@ -992,6 +1113,7 @@ public class LauncherBridge
 
             if (File.Exists(pakPath))
                 File.Delete(pakPath);
+            MainWindow.DeleteLegacyPakFile(gamePath);
             MainWindow.DeleteLegacyLoaderFiles(baseDir);
 
             var versionCache = Path.Combine(MainWindow.AppDataFolder, "versions.json");

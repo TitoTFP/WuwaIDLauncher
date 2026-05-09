@@ -38,6 +38,18 @@ if rg -n 'Path\.Combine\(gamePath, @"Client\\Binaries\\Win64", MainWindow\.ModFo
   fail "mod pak operations must not target Client\\Binaries\\Win64\\wuwaIndonesia"
 fi
 
+if ! rg -n 'PakFileName = "pakchunk0-ID-WindowsNoEditor_1000_P\.pak"' MainWindow.xaml.cs >/dev/null; then
+  fail "installer must use pakchunk0-ID-WindowsNoEditor_1000_P.pak"
+fi
+
+if rg -n 'internal const string PakFileName = "WuWaID_99_P\.pak"' MainWindow.xaml.cs >/dev/null; then
+  fail "installer must not use legacy WuWaID_99_P.pak as primary pak"
+fi
+
+if ! rg -n 'LegacyPakFileName = "WuWaID_99_P\.pak"' MainWindow.xaml.cs >/dev/null; then
+  fail "installer must keep legacy pak name only for cleanup"
+fi
+
 if ! rg -n 'SigFileName = "pakchunk7-WindowsNoEditor\.sig"' MainWindow.xaml.cs >/dev/null; then
   fail "launcher must use pakchunk7 signature file"
 fi
@@ -70,8 +82,48 @@ if ! rg -n '_launchInProgress' MainWindow.xaml.cs >/dev/null; then
   fail "game launch must block second launch while signature restore timer is active"
 fi
 
-if ! rg -n 'Application\.Current\.Shutdown\(\)' MainWindow.xaml.cs >/dev/null; then
-  fail "launcher must exit after restoring signature"
+if rg -n 'Application\.Current\.Shutdown\(\)' MainWindow.xaml.cs | rg -n 'RestoreSigBackupAfterDelay|MonitorLaunchStateAsync' >/dev/null; then
+  fail "launcher must not exit after launch signature restore"
+fi
+
+if ! rg -n 'WindowState = WindowState\.Minimized' MainWindow.xaml.cs >/dev/null; then
+  fail "launcher must minimize during launch flow"
+fi
+
+if ! rg -n 'Signature file tidak terdeteksi, jalankan Wuthering Waves dulu tanpa mod atau launcher ini\.' MainWindow.xaml.cs >/dev/null; then
+  fail "launcher must block launch when signature and backup are missing"
+fi
+
+if ! rg -n 'window\.onGameLaunchStarted\(\)' MainWindow.xaml.cs Resources/Web/script-home.js >/dev/null; then
+  fail "launcher must notify UI when game launch starts"
+fi
+
+if ! rg -n 'window\.onGameLaunchWaitingRestore\(\)' MainWindow.xaml.cs Resources/Web/script-home.js >/dev/null; then
+  fail "launcher must notify UI when waiting for signature restore"
+fi
+
+if ! rg -n 'window\.onGameLaunchFinished\(\)' MainWindow.xaml.cs Resources/Web/script-home.js >/dev/null; then
+  fail "launcher must notify UI when game launch lock ends"
+fi
+
+if ! rg -n 'Game sedang berjalan' Resources/Web/script-home.js >/dev/null; then
+  fail "launch button must show game running state"
+fi
+
+if ! rg -n 'Memulihkan signature' Resources/Web/script-home.js >/dev/null; then
+  fail "launch button must show signature restore state"
+fi
+
+if ! rg -n 'S\.launching' Resources/Web/script-core.js Resources/Web/script-home.js >/dev/null; then
+  fail "web UI must track launch lock state"
+fi
+
+if ! rg -n 'e\.Cancel = true' MainWindow.xaml.cs >/dev/null; then
+  fail "launcher close must be cancellable during pending signature restore"
+fi
+
+if ! rg -n 'RequestCloseWindow' MainWindow.xaml.cs >/dev/null; then
+  fail "launcher close button must respect launch lock"
 fi
 
 if rg -n 'if \(name == "UTMAlexander_100_P\.pak"\)' MainWindow.xaml.cs >/dev/null; then

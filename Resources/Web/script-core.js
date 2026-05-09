@@ -2,7 +2,7 @@
 
 const S = {
     page: 'home',
-    installing: false, installed: false,
+    installing: false, installed: false, launching: false,
     gamePath: '',
     cfg: { gamePath:'' },
     autoCheckDone: false
@@ -24,4 +24,3 @@ document.addEventListener('DOMContentLoaded', () => {
     loadVersions();
     loadReleaseNotes();
 });
-
