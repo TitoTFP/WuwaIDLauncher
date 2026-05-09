@@ -878,7 +878,7 @@ public class LauncherBridge
                 var path = dlg.FolderName;
                 var exe = @"Client\Binaries\Win64\Client-Win64-Shipping.exe";
                 
-                string Check(string p) => System.IO.File.Exists(Path.Combine(p, exe)) ? p : null;
+                string? Check(string p) => System.IO.File.Exists(Path.Combine(p, exe)) ? p : null;
                 
                 var valid = Check(path) ?? Check(Path.Combine(path, "Wuthering Waves Game"));
                 if (valid == null)
