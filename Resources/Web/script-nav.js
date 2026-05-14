@@ -58,8 +58,10 @@ function switchPage(page) {
     
     const ap = document.getElementById('audioPlayer');
     const sp = document.getElementById('sidePanel');
+    const tb = document.getElementById('trakteerBtn');
     if (ap) ap.style.display = isHome ? '' : 'none';
     if (sp && sp.dataset.loaded) sp.style.display = isHome ? 'flex' : 'none';
+    if (tb) tb.style.display = isHome ? '' : 'none';
     updateNavIndicator();
     if (page === 'performance') { pmRefreshStatus(); }
     if (page === 'font-creator') { fcRefreshStatus(); checkAdminIfNeeded(); }

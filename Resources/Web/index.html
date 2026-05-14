@@ -495,6 +495,11 @@
         </div>
     </div>
 
+    <div id="trakteerBtn" class="trakteer-float" title="Dukung Saya di Trakteer">
+        <img src="https://edge-cdn.trakteer.id/images/embed/trbtn-icon.png?v=14-05-2025" alt="Trakteer" class="trakteer-float__icon">
+        <span class="trakteer-float__text">Dukung</span>
+    </div>
+
     <div id="toasts"></div>
 
     <div id="confirmModal" class="modal-backdrop" style="display:none;">
@@ -559,5 +564,16 @@
     <script src="script-home.js"></script>
     <script src="script-misc.js"></script>
     <script src="script-perf.js"></script>
+    <script type="text/javascript" src="https://edge-cdn.trakteer.id/js/trbtn-overlay.min.js?v=14-05-2025"></script>
+    <script type="text/javascript">
+    (function() {
+        var trbtnId = trbtnOverlay.init('Dukung Saya di Trakteer','#e8557e','https://trakteer.id/v1/TitoTFP/tip/embed/modal','https://edge-cdn.trakteer.id/images/embed/trbtn-icon.png?v=14-05-2025','40','inline');
+        trbtnOverlay.draw(trbtnId);
+        document.getElementById('trakteerBtn')?.addEventListener('click', function() {
+            var overlay = document.getElementById('trbtn-overlay');
+            if (overlay) overlay.style.display = 'block';
+        });
+    })();
+    </script>
 </body>
 </html>

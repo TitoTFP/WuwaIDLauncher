@@ -1506,3 +1506,34 @@ body.sidebar-open .bg-vignette {
     0%, 100% { opacity: 1; }
     50%      { opacity: .6; }
 }
+
+/* Trakteer floating button */
+.trakteer-float {
+    position: fixed;
+    right: var(--edge-gap);
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    background: rgba(40, 12, 24, 0.78);
+    backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    border: 1px solid rgba(232, 85, 126, 0.22);
+    border-radius: var(--radius);
+    box-shadow: 0 4px 28px rgba(0, 0, 0, 0.60), 0 0 20px rgba(232, 85, 126, 0.07);
+    cursor: var(--cursor-select);
+    transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+    animation: fadeUp 500ms var(--ease) 800ms both;
+}
+.trakteer-float:hover {
+    border-color: rgba(232, 85, 126, 0.5);
+    box-shadow: 0 4px 28px rgba(0, 0, 0, 0.60), 0 0 30px rgba(232, 85, 126, 0.15);
+}
+.trakteer-float__icon { width: 20px; height: 20px; object-fit: contain; }
+.trakteer-float__text { font-size: 12px; font-weight: 600; color: var(--text-1); white-space: nowrap; }
+
+/* Hide default Trakteer overlay button */
+#trbtn-overlay-btn { display: none !important; }
