@@ -1507,33 +1507,25 @@ body.sidebar-open .bg-vignette {
     50%      { opacity: .6; }
 }
 
-/* Trakteer floating button */
-.trakteer-float {
-    position: fixed;
-    right: var(--edge-gap);
-    top: 50%;
-    transform: translateY(-50%);
-    z-index: 100;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 16px;
-    background: rgba(40, 12, 24, 0.78);
-    backdrop-filter: blur(20px) saturate(160%);
-    -webkit-backdrop-filter: blur(20px) saturate(160%);
+/* Trakteer inline button */
+.trakteer-btn {
+    flex-shrink: 0;
+    display: flex; align-items: center; gap: 6px;
+    padding: 0 14px;
+    background: rgba(40, 12, 24, 0.65);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     border: 1px solid rgba(232, 85, 126, 0.22);
-    border-radius: var(--radius);
-    box-shadow: 0 4px 28px rgba(0, 0, 0, 0.60), 0 0 20px rgba(232, 85, 126, 0.07);
+    border-radius: var(--radius-sm);
     cursor: var(--cursor-select);
-    transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
-    animation: fadeUp 500ms var(--ease) 800ms both;
+    transition: background var(--dur), border-color var(--dur);
 }
-.trakteer-float:hover {
+.trakteer-btn:hover {
+    background: rgba(232, 85, 126, 0.12);
     border-color: rgba(232, 85, 126, 0.5);
-    box-shadow: 0 4px 28px rgba(0, 0, 0, 0.60), 0 0 30px rgba(232, 85, 126, 0.15);
 }
-.trakteer-float__icon { width: 20px; height: 20px; object-fit: contain; }
-.trakteer-float__text { font-size: 12px; font-weight: 600; color: var(--text-1); white-space: nowrap; }
+.trakteer-btn__icon { width: 18px; height: 18px; object-fit: contain; }
+.trakteer-btn__text { font-size: 12px; font-weight: 600; color: var(--text-1); white-space: nowrap; }
 
 /* Hide default Trakteer overlay button */
 #trbtn-overlay-btn { display: none !important; }
