@@ -166,4 +166,12 @@ if ! rg -n 'frame-src https://trakteer\.id' MainWindow.xaml.cs >/dev/null; then
   fail "CSP must allow Trakteer iframe content"
 fi
 
+if ! rg -n -- '--rp-w: 400px' Resources/Web/styles-base.css Resources/Web/styles.css >/dev/null; then
+  fail "right action panel must stay wide enough for Trakteer and install buttons"
+fi
+
+if ! rg -n 'min-width: 210px' Resources/Web/styles-effects.css Resources/Web/styles.css >/dev/null; then
+  fail "install button must keep a readable minimum width"
+fi
+
 echo "launcher consistency checks passed"
