@@ -246,12 +246,12 @@ public partial class MainWindow : Window
             $"Content-Type: {mime}\r\n" +
             "Cache-Control: no-store\r\n" +
             "Content-Security-Policy: default-src 'self' https://app.local https://cache.local; " +
-            "script-src 'self' https://app.local https://edge-cdn.trakteer.id 'unsafe-inline'; " +
-            "style-src 'self' https://app.local https://edge-cdn.trakteer.id 'unsafe-inline'; " +
-            "img-src 'self' https://app.local https://cache.local https://edge-cdn.trakteer.id data:; " +
+            "script-src 'self' https://app.local 'unsafe-inline'; " +
+            "style-src 'self' https://app.local 'unsafe-inline'; " +
+            "img-src 'self' https://app.local https://cache.local data:; " +
             "media-src 'self' https://cache.local blob:; " +
             "frame-src https://trakteer.id; " +
-            "connect-src 'self' https://app.local https://trakteer.id");
+            "connect-src 'self' https://app.local");
     }
 
     static string GetMimeType(string path) => Path.GetExtension(path).ToLowerInvariant() switch

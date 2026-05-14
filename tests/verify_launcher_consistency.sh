@@ -146,4 +146,24 @@ if ! rg -n '`ID \$\{vhVer\}`' Resources/Web/script.js Resources/Web/script-home.
   fail "version label must show ID prefix"
 fi
 
+if rg -n 'trbtnOverlay|trbtn-overlay\.min\.js|edge-cdn\.trakteer\.id' Resources/Web MainWindow.xaml.cs >/dev/null; then
+  fail "Trakteer custom button must not load the hosted overlay widget or CDN assets"
+fi
+
+if ! rg -n 'id="trakteerModal"' Resources/Web/index.html >/dev/null; then
+  fail "Trakteer button must open an internal launcher modal"
+fi
+
+if ! rg -n 'TRAKTEER_URL = .https://trakteer\.id/v1/TitoTFP/tip/embed/modal' Resources/Web/script-home.js >/dev/null; then
+  fail "Trakteer modal must use the embed modal URL"
+fi
+
+if ! rg -n 'trakteerFrame\.src = TRAKTEER_URL' Resources/Web/script-home.js >/dev/null; then
+  fail "Trakteer modal must load the iframe from the launcher click handler"
+fi
+
+if ! rg -n 'frame-src https://trakteer\.id' MainWindow.xaml.cs >/dev/null; then
+  fail "CSP must allow Trakteer iframe content"
+fi
+
 echo "launcher consistency checks passed"

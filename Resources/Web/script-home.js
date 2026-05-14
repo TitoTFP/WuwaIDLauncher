@@ -1,5 +1,6 @@
 function initBottomBar() {
     document.getElementById('btnStart')?.addEventListener('click', handleStart);
+    initTrakteerModal();
 
     const menuBtn  = document.getElementById('btnMenu');
     const dropdown = document.getElementById('rpDropdown');
@@ -75,6 +76,40 @@ function initBottomBar() {
         } else {
             toast('Demo: menghapus patch...', 'info');
         }
+    });
+}
+
+const TRAKTEER_URL = 'https://trakteer.id/v1/TitoTFP/tip/embed/modal';
+
+function initTrakteerModal() {
+    const btn   = document.getElementById('trakteerBtn');
+    const modal = document.getElementById('trakteerModal');
+    const close = document.getElementById('trakteerModalClose');
+    const frame = document.getElementById('trakteerFrame');
+    if (!btn || !modal || !close || !frame) return;
+
+    const openModal = (e) => {
+        e?.stopPropagation();
+        const trakteerFrame = frame;
+        trakteerFrame.src = TRAKTEER_URL;
+        modal.style.display = 'flex';
+        modal.setAttribute('aria-hidden', 'false');
+    };
+
+    const closeModal = () => {
+        const trakteerFrame = frame;
+        modal.style.display = 'none';
+        modal.setAttribute('aria-hidden', 'true');
+        trakteerFrame.removeAttribute('src');
+    };
+
+    btn.addEventListener('click', openModal);
+    close.addEventListener('click', closeModal);
+    modal.addEventListener('click', e => {
+        if (e.target === modal) closeModal();
+    });
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && modal.style.display !== 'none') closeModal();
     });
 }
 

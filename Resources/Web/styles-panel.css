@@ -575,6 +575,127 @@
     color: var(--accent-warm);
 }
 
+.trakteer-btn {
+    flex: 0 0 86px;
+    min-width: 86px;
+    height: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 0 12px;
+    background: linear-gradient(135deg, rgba(40,12,24,0.76), rgba(68,18,38,0.64));
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(232,85,126,0.30);
+    border-radius: var(--radius-sm);
+    color: var(--text-1);
+    cursor: var(--cursor-select);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 8px 18px rgba(0,0,0,0.24);
+    transition: background var(--dur), border-color var(--dur), color var(--dur), transform var(--dur), box-shadow var(--dur);
+}
+.trakteer-btn:hover {
+    background: linear-gradient(135deg, rgba(232,85,126,0.22), rgba(68,18,38,0.72));
+    border-color: rgba(232,85,126,0.58);
+    color: #fff;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.10), 0 10px 22px rgba(0,0,0,0.30), 0 0 18px rgba(232,85,126,0.18);
+}
+.trakteer-btn:active { transform: translateY(1px); }
+.trakteer-btn__icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    color: var(--accent-warm);
+}
+.trakteer-btn__text {
+    min-width: 0;
+    font-size: 11.5px;
+    font-weight: 800;
+    color: inherit;
+    white-space: nowrap;
+    line-height: 1;
+}
+
+.trakteer-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 900;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 22px;
+    background: rgba(12, 4, 9, 0.66);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+.trakteer-modal__panel {
+    width: min(420px, calc(100vw - 44px));
+    height: min(640px, calc(100vh - 44px));
+    min-height: 480px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: linear-gradient(180deg, rgba(38,12,24,0.96), rgba(20,6,14,0.98));
+    border: 1px solid rgba(232,85,126,0.30);
+    border-radius: 14px;
+    box-shadow: 0 24px 70px rgba(0,0,0,0.62), inset 0 1px 0 rgba(255,255,255,0.06);
+}
+.trakteer-modal__header {
+    height: 48px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 0 12px 0 16px;
+    background: rgba(255,255,255,0.03);
+    border-bottom: 1px solid rgba(232,85,126,0.18);
+}
+.trakteer-modal__title {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-1);
+    font-size: 12px;
+    font-weight: 900;
+    letter-spacing: 0.02em;
+}
+.trakteer-modal__title svg {
+    flex-shrink: 0;
+    color: var(--accent-warm);
+}
+.trakteer-modal__title span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.trakteer-modal__close {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-2);
+    border-radius: 8px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    transition: background var(--dur), color var(--dur), border-color var(--dur);
+}
+.trakteer-modal__close:hover {
+    color: #fff;
+    background: rgba(232,85,126,0.18);
+    border-color: rgba(232,85,126,0.36);
+}
+.trakteer-modal__frame {
+    flex: 1;
+    width: 100%;
+    min-height: 0;
+    border: 0;
+    background: #fff;
+}
+
 .rp-dropdown {
     position: absolute;
     bottom: calc(100% + 14px); left: 0;
