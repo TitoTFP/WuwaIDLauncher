@@ -250,7 +250,7 @@ public partial class MainWindow : Window
             "style-src 'self' https://app.local 'unsafe-inline'; " +
             "img-src 'self' https://app.local https://cache.local data:; " +
             "media-src 'self' https://cache.local blob:; " +
-            "frame-src https://trakteer.id; " +
+            
             "connect-src 'self' https://app.local");
     }
 

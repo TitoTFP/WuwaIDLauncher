@@ -150,20 +150,16 @@ if rg -n 'trbtnOverlay|trbtn-overlay\.min\.js|edge-cdn\.trakteer\.id' Resources/
   fail "Trakteer custom button must not load the hosted overlay widget or CDN assets"
 fi
 
-if ! rg -n 'id="trakteerModal"' Resources/Web/index.html >/dev/null; then
-  fail "Trakteer button must open an internal launcher modal"
+if rg -n 'id="trakteerModal"' Resources/Web/index.html >/dev/null; then
+  fail "Trakteer button must open an external link, not an internal modal"
 fi
 
-if ! rg -n 'TRAKTEER_URL = .https://trakteer\.id/v1/TitoTFP/tip/embed/modal' Resources/Web/script-home.js >/dev/null; then
-  fail "Trakteer modal must use the embed modal URL"
+if rg -n 'TRAKTEER_URL|initTrakteerModal|trakteerFrame' Resources/Web/script-home.js >/dev/null; then
+  fail "Trakteer must not use modal/iframe — open external link directly"
 fi
 
-if ! rg -n 'trakteerFrame\.src = TRAKTEER_URL' Resources/Web/script-home.js >/dev/null; then
-  fail "Trakteer modal must load the iframe from the launcher click handler"
-fi
-
-if ! rg -n 'frame-src https://trakteer\.id' MainWindow.xaml.cs >/dev/null; then
-  fail "CSP must allow Trakteer iframe content"
+if rg -n 'frame-src https://trakteer\.id' MainWindow.xaml.cs >/dev/null; then
+  fail "CSP must not allow Trakteer iframe (no iframe used)"
 fi
 
 if ! rg -n -- '--rp-w: 400px' Resources/Web/styles-base.css Resources/Web/styles.css >/dev/null; then
