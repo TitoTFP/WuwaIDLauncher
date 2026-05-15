@@ -30,6 +30,9 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore
 
+      - name: Install ripgrep
+        run: choco install ripgrep -y --no-progress
+
       - name: Run consistency checks
         run: bash tests/verify_launcher_consistency.sh
 
