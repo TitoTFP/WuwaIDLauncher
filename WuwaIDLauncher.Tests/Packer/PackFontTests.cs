@@ -39,9 +39,8 @@ public class PackFontTests
             var pakPath = WuwaPakPacker.PackFont(tempDir, "MagicTest", fontData);
 
             using var fs = File.OpenRead(pakPath);
-            fs.Seek(-200, SeekOrigin.End);
+            fs.Seek(-204, SeekOrigin.End);
             using var br = new BinaryReader(fs);
-            br.ReadUInt64(); br.ReadUInt64(); br.ReadByte();
             var magic = br.ReadUInt32();
             magic.Should().Be(0x5A6F12E1);
         }
@@ -64,7 +63,7 @@ public class PackFontTests
             var pakPath = WuwaPakPacker.PackFont(tempDir, "VersionTest", fontData);
 
             using var fs = File.OpenRead(pakPath);
-            fs.Seek(-196, SeekOrigin.End);
+            fs.Seek(-200, SeekOrigin.End);
             using var br = new BinaryReader(fs);
             var version = br.ReadUInt32();
             version.Should().Be(12);
