@@ -24,7 +24,7 @@ static class WuwaPakPacker
 
     static byte[] Sha1(byte[] data) => SHA1.HashData(data);
 
-    static ulong Fnv64Path(string path, ulong seed)
+    internal static ulong Fnv64Path(string path, ulong seed)
     {
         const ulong Off  = 0xcbf29ce484222325UL;
         const ulong Prime = 0x00000100000001b3UL;
@@ -38,7 +38,7 @@ static class WuwaPakPacker
         return h;
     }
 
-    static uint ScrambleFlags(uint f)
+    internal static uint ScrambleFlags(uint f)
         => ((f & 0x3fu) << 16)
          | ((f >> 6) & 0xFFFFu)
          | ((f << 6) & (1u << 28))
