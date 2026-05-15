@@ -21,16 +21,16 @@ public partial class MainWindow : Window
     internal static readonly string CacheFolder = Path.Combine(AppDataFolder, "Cache");
     internal static readonly string SettingsPath = Path.Combine(AppDataFolder, "settings.json");
     const string AssetsUrl = "https://raw.githubusercontent.com/TitoTFP/WuwaID/refs/heads/main/Web/assets.json";
-    internal const string ModFolderName = "wuwaIndonesia";
-    internal const string LegacyModFolderName = "wuwaVietHoa";
-    internal const string PakFileName = "pakchunk0-ID-WindowsNoEditor_1000_P.pak";
-    internal const string LegacyPakFileName = "WuWaID_99_P.pak";
-    internal const string PakFolderRelativePath = @"Client\Content\Paks";
-    internal const string SigFileName = "pakchunk7-WindowsNoEditor.sig";
-    internal const string SigBackupFileName = "pakchunk7-WindowsNoEditor_backup.sig";
+    internal const string ModFolderName = Helpers.ModFolderName;
+    internal const string LegacyModFolderName = Helpers.LegacyModFolderName;
+    internal const string PakFileName = Helpers.PakFileName;
+    internal const string LegacyPakFileName = Helpers.LegacyPakFileName;
+    internal const string PakFolderRelativePath = Helpers.PakFolderRelativePath;
+    internal const string SigFileName = Helpers.SigFileName;
+    internal const string SigBackupFileName = Helpers.SigBackupFileName;
     const string GameExeName = "Client-Win64-Shipping.exe";
     const string GameProcessName = "Client-Win64-Shipping";
-    static readonly TimeSpan SigRestoreDelay = TimeSpan.FromSeconds(150);
+    static readonly TimeSpan SigRestoreDelay = Helpers.SigRestoreDelay;
 
     volatile bool _pageReady;
     volatile bool _launchInProgress;
@@ -61,7 +61,7 @@ public partial class MainWindow : Window
 
             if (!string.IsNullOrWhiteSpace(_launchGamePath))
             {
-                try { RestoreSigBackup(_launchGamePath); }
+                try { Helpers.RestoreSigBackup(_launchGamePath); }
                 catch { }
                 _signatureRestorePending = false;
             }
@@ -239,7 +239,7 @@ public partial class MainWindow : Window
         for (int i = 0; i < enc.Length; i++)
             enc[i] ^= XorKey[i % XorKey.Length];
 
-        var mime = GetMimeType(path);
+        var mime = Helpers.GetMimeType(path);
         var ms = new MemoryStream(enc);
         e.Response = webView.CoreWebView2.Environment.CreateWebResourceResponse(
             ms, 200, "OK",
@@ -253,24 +253,6 @@ public partial class MainWindow : Window
             
             "connect-src 'self' https://app.local");
     }
-
-    static string GetMimeType(string path) => Path.GetExtension(path).ToLowerInvariant() switch
-    {
-        ".html" => "text/html; charset=utf-8",
-        ".css"  => "text/css; charset=utf-8",
-        ".js"   => "application/javascript; charset=utf-8",
-        ".json" => "application/json",
-        ".png"  => "image/png",
-        ".jpg" or ".jpeg" => "image/jpeg",
-        ".svg"  => "image/svg+xml",
-        ".woff" => "font/woff",
-        ".woff2" => "font/woff2",
-        ".webp" => "image/webp",
-        ".mp4"  => "video/mp4",
-        ".mp3"  => "audio/mpeg",
-        _       => "application/octet-stream"
-    };
-
 
     static string JsStr(string s) => JsonSerializer.Serialize(s);
 
@@ -306,7 +288,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            if (!File.Exists(SettingsPath) || IsGameRunning())
+            if (!File.Exists(SettingsPath) || Helpers.IsGameRunning())
                 return;
 
             var json = File.ReadAllText(SettingsPath);
@@ -316,7 +298,7 @@ public partial class MainWindow : Window
 
             var gamePath = pathProp.GetString();
             if (!string.IsNullOrWhiteSpace(gamePath))
-                RestoreSigBackup(gamePath);
+                Helpers.RestoreSigBackup(gamePath);
         }
         catch { }
     }
@@ -350,7 +332,7 @@ public partial class MainWindow : Window
                 throw new Exception("Tidak dapat menulis file ke direktori game: " + ex.Message);
             }
 
-            DeleteLegacyLoaderFiles(baseDir);
+            Helpers.DeleteLegacyLoaderFiles(baseDir);
 
             var releaseUrl = "https://api.github.com/repos/TitoTFP/WuwaID/releases/latest";
 
@@ -396,7 +378,7 @@ public partial class MainWindow : Window
                 catch { }
             }
 
-            DeleteLegacyPakFile(gamePath);
+            Helpers.DeleteLegacyPakFile(gamePath);
             localCache.Remove(LegacyPakFileName);
 
             bool allFilesUpToDate = true;
@@ -412,7 +394,7 @@ public partial class MainWindow : Window
                 
                 if (!string.IsNullOrEmpty(hash))
                 {
-                    if (!VerifySha256(destPath, hash))
+                    if (!Helpers.VerifySha256(destPath, hash))
                     {
                         allFilesUpToDate = false;
                         break;
@@ -449,7 +431,7 @@ public partial class MainWindow : Window
                 var destPath = Path.Combine(pakDir, name);
                 bool needsUpdate = !File.Exists(destPath) ||
                                    (!string.IsNullOrEmpty(hash)
-                                       ? !VerifySha256(destPath, hash)
+                                       ? !Helpers.VerifySha256(destPath, hash)
                                        : !localCache.TryGetValue("_vhVersion", out var cachedTag) || cachedTag != tagName);
                 if (needsUpdate)
                 {
@@ -501,7 +483,7 @@ public partial class MainWindow : Window
                 }
                 
                 fileStream.Close(); File.Move(tmpPath, destPath, true);
-                if (!string.IsNullOrEmpty(hash) && !VerifySha256(destPath, hash))
+                if (!string.IsNullOrEmpty(hash) && !Helpers.VerifySha256(destPath, hash))
                 {
                     try { File.Delete(destPath); } catch { }
                     throw new Exception($"Hash file {name} tidak cocok. Unduhan dibatalkan.");
@@ -515,7 +497,7 @@ public partial class MainWindow : Window
                 localCache["_vhVersion"] = tagName;
             File.WriteAllText(versionCachePath, JsonSerializer.Serialize(localCache));
 
-            DeleteLegacyPakFile(gamePath);
+            Helpers.DeleteLegacyPakFile(gamePath);
 
             RunScript($"window.onProgressUpdate(100, {JsStr("Instalasi selesai!")}, '', '')");
             await Task.Delay(1000);
@@ -528,32 +510,12 @@ public partial class MainWindow : Window
     }
 
 
-    internal static string PakFolderPath(string gamePath) =>
-        Path.Combine(gamePath, PakFolderRelativePath);
-
-    internal static string SigPath(string gamePath) =>
-        Path.Combine(PakFolderPath(gamePath), SigFileName);
-
-    internal static string SigBackupPath(string gamePath) =>
-        Path.Combine(PakFolderPath(gamePath), SigBackupFileName);
-
-    internal static void RestoreSigBackup(string gamePath)
-    {
-        var sigPath = SigPath(gamePath);
-        var backupPath = SigBackupPath(gamePath);
-
-        if (File.Exists(backupPath) && !File.Exists(sigPath))
-            File.Move(backupPath, sigPath);
-        else if (File.Exists(backupPath) && File.Exists(sigPath))
-            File.Delete(backupPath);
-    }
-
     static void PrepareSigBypass(string gamePath)
     {
-        RestoreSigBackup(gamePath);
+        Helpers.RestoreSigBackup(gamePath);
 
-        var sigPath = SigPath(gamePath);
-        var backupPath = SigBackupPath(gamePath);
+        var sigPath = Helpers.SigPath(gamePath);
+        var backupPath = Helpers.SigBackupPath(gamePath);
 
         if (File.Exists(sigPath))
             File.Move(sigPath, backupPath, true);
@@ -573,7 +535,7 @@ public partial class MainWindow : Window
                 RunScript("window.onGameLaunchWaitingRestore()");
             }
 
-            RestoreSigBackup(gamePath);
+            Helpers.RestoreSigBackup(gamePath);
             _signatureRestorePending = false;
 
             if (first != gameExitTask)
@@ -608,37 +570,9 @@ public partial class MainWindow : Window
 
         await Task.Delay(3000);
 
-        while (IsGameRunning())
+        while (Helpers.IsGameRunning())
             await Task.Delay(1000);
     }
-
-    static bool IsGameRunning()
-    {
-        try { return Process.GetProcessesByName(GameProcessName).Length > 0; }
-        catch { return false; }
-    }
-
-    internal static void DeleteLegacyLoaderFiles(string baseDir)
-    {
-        var modDir = Path.Combine(baseDir, ModFolderName);
-        var legacyModDir = Path.Combine(baseDir, LegacyModFolderName);
-        var versionDll = Path.Combine(baseDir, "version.dll");
-
-        if (Directory.Exists(modDir))
-            Directory.Delete(modDir, true);
-        if (Directory.Exists(legacyModDir))
-            Directory.Delete(legacyModDir, true);
-        if (File.Exists(versionDll))
-            File.Delete(versionDll);
-    }
-
-    internal static void DeleteLegacyPakFile(string gamePath)
-    {
-        var legacyPakPath = Path.Combine(PakFolderPath(gamePath), LegacyPakFileName);
-        if (File.Exists(legacyPakPath))
-            File.Delete(legacyPakPath);
-    }
-
 
     internal void LaunchGame(string gamePath, bool dx11)
     {
@@ -653,9 +587,9 @@ public partial class MainWindow : Window
             var full = Path.Combine(gamePath, @"Client\Binaries\Win64", GameExeName);
             if (File.Exists(full))
             {
-                RestoreSigBackup(gamePath);
+                Helpers.RestoreSigBackup(gamePath);
 
-                if (!File.Exists(SigPath(gamePath)) && !File.Exists(SigBackupPath(gamePath)))
+                if (!File.Exists(Helpers.SigPath(gamePath)) && !File.Exists(Helpers.SigBackupPath(gamePath)))
                 {
                     RunScript($"window.onInstallError({JsStr("Signature file tidak terdeteksi, jalankan Wuthering Waves dulu tanpa mod atau launcher ini.")})");
                     return;
@@ -690,7 +624,7 @@ public partial class MainWindow : Window
             _signatureRestorePending = false;
             _gameProcessRunning = false;
             _launchGamePath = null;
-            RestoreSigBackup(gamePath);
+            Helpers.RestoreSigBackup(gamePath);
             RunScript("window.onGameLaunchFinished()");
             RunScript($"window.onInstallError({JsStr("Gagal menjalankan game: " + ex.Message)})");
         }
@@ -882,7 +816,7 @@ public partial class MainWindow : Window
                     var url = item.GetProperty("url").GetString() ?? "";
                     var hash = item.GetProperty("sha256").GetString() ?? "";
                     var dest = Path.Combine(CacheFolder, name);
-                    if (!File.Exists(dest) || !VerifySha256(dest, hash))
+                    if (!File.Exists(dest) || !Helpers.VerifySha256(dest, hash))
                         toDownload.Add((name, url, hash));
                 }
             }
@@ -971,19 +905,6 @@ public partial class MainWindow : Window
             RunScript($"window.onMediaReady({JsStr(_pendingBgm ?? "")}, {JsStr(_pendingVideo ?? "")})");
             _pendingBgm = _pendingVideo = null;
         }
-    }
-
-
-    static bool VerifySha256(string path, string expected)
-    {
-        try
-        {
-            using var sha = SHA256.Create();
-            using var fs = File.OpenRead(path);
-            var hash = sha.ComputeHash(fs);
-            return Convert.ToHexString(hash).Equals(expected, StringComparison.OrdinalIgnoreCase);
-        }
-        catch { return false; }
     }
 }
 
@@ -1111,14 +1032,14 @@ public class LauncherBridge
         try
         {
             var baseDir = Path.Combine(gamePath, @"Client\Binaries\Win64");
-            var pakPath = Path.Combine(MainWindow.PakFolderPath(gamePath), MainWindow.PakFileName);
+            var pakPath = Path.Combine(Helpers.PakFolderPath(gamePath), Helpers.PakFileName);
 
-            MainWindow.RestoreSigBackup(gamePath);
+            Helpers.RestoreSigBackup(gamePath);
 
             if (File.Exists(pakPath))
                 File.Delete(pakPath);
-            MainWindow.DeleteLegacyPakFile(gamePath);
-            MainWindow.DeleteLegacyLoaderFiles(baseDir);
+            Helpers.DeleteLegacyPakFile(gamePath);
+            Helpers.DeleteLegacyLoaderFiles(baseDir);
 
             var versionCache = Path.Combine(MainWindow.AppDataFolder, "versions.json");
             if (File.Exists(versionCache))
@@ -1176,7 +1097,7 @@ public class LauncherBridge
     {
         try
         {
-            var modDir = MainWindow.PakFolderPath(gamePath);
+            var modDir = Helpers.PakFolderPath(gamePath);
             if (!Directory.Exists(modDir)) return "";
             var custom = Directory.GetFiles(modDir, "*_100_P.pak")
                 .Select(Path.GetFileName)
@@ -1202,7 +1123,7 @@ public class LauncherBridge
 
                 _w.RunScript("window.onFontPakProgress('Membuat paket .pak...')");
 
-                var modDir = MainWindow.PakFolderPath(gamePath);
+                var modDir = Helpers.PakFolderPath(gamePath);
                 Directory.CreateDirectory(modDir);
 
                 foreach (var old in Directory.GetFiles(modDir, "*_100_P.pak"))
@@ -1231,7 +1152,7 @@ public class LauncherBridge
         {
             try
             {
-                var modDir = MainWindow.PakFolderPath(gamePath);
+                var modDir = Helpers.PakFolderPath(gamePath);
                 if (Directory.Exists(modDir))
                 {
                     foreach (var f in Directory.GetFiles(modDir, "*_100_P.pak"))
@@ -1266,105 +1187,6 @@ public class LauncherBridge
 
     static string GetPerfIniBackupPath(string gamePath) =>
         Path.Combine(gamePath, @"Client\Saved\Config\WindowsNoEditor\Engine.ini.backup");
-
-    static readonly Dictionary<string, string[]> _managedPerfKeys = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["SystemSettings"] = new[]
-        {
-            "r.VRS.EnableMaterial", "r.VRS.EnableMesh",
-            "r.ParallelFrustumCull", "r.ParallelOcclusionCull",
-            "a.URO.ForceAnimRate", "r.Upscale.Quality",
-            "r.streaming.MeshMaxKeepMips", "r.streaming.TextureMaxKeepMips",
-            "foliage.DensityScaleLOD.DrawCallOptimize", "r.SceneColorFringeQuality",
-            "r.Shadow.MaxCSMResolution", "r.Shadow.MaxResolution", "r.Shadow.MinResolution",
-            "r.Shadow.PerObjectShadowMapResolution", "r.Shadow.PerObjectResolutionMax",
-            "r.Shadow.PerObjectResolutionMin", "r.Shadow.RadiusThreshold",
-            "r.Shadow.DistanceScale", "r.Shadow.ForbidHISMShadowStartIndex",
-            "r.SSR.MaxRoughness", "r.SSR.HalfResSceneColor",
-            "r.AmbientOcclusionMaxQuality",
-            "r.Kuro.KuroEnableFFTBloom", "r.Kuro.KuroEnableToonFFTBloom",
-            "r.DrawKuroPPLensflare", "r.EnableLensflareSceneSample", "r.kuro.kuroEnableScreenLeak",
-            "r.DepthOfFieldQuality",
-            "r.KuroMaterialQualityLevel", "r.MaterialQualityLevel", "r.DetailMode",
-            "r.Kuro.MaterialDesktopQualityShoulderRender",
-            "r.SSS.Scale", "r.SSS.Quality",
-            "r.ViewDistanceScale", "r.ScreenSizeCullRatioFactor", "r.StaticMeshLODDistanceScale",
-            "wp.Runtime.PlannedLoadingRangeScale", "wp.Runtime.SoraGridBlackListHeight",
-            "foliage.CullAll", "r.Kuro.Foliage.GrassCullDistanceMax", "r.Kuro.Foliage.Grass3_0CullDistanceMax",
-            "r.Kuro.InteractionEffect.EnableFoliageEffect", "r.Kuro.InteractionEffect.UseCppWaterEffect",
-            "r.EmitterSpawnRateScale", "fx.Niagara.QualityLevel", "r.ParticleLightQuality",
-            "r.KuroVolumeCloudEnable",
-            "r.KuroVolumetricLight.DownSampleFactor", "r.KuroVolumetricLight.ColorMaskDownSampleFactor",
-            "r.LightShaftDownSampleFactor", "r.SSFS",
-        },
-        ["/Script/Engine.RendererSettings"] = new[] { "r.RayTracing.LoadConfig" },
-    };
-
-    static string PatchIniContent(string content, Dictionary<string, List<(string key, string value)>> toSet)
-    {
-        var allManaged = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var arr in _managedPerfKeys.Values)
-            foreach (var k in arr) allManaged.Add(k);
-
-        var raw = content.Replace("\r\n", "\n").Replace("\r", "\n").TrimEnd('\n');
-        var lines = raw.Length > 0 ? raw.Split('\n').ToList() : new List<string>();
-
-        var sectionOf = new string?[lines.Count];
-        string? cur = null;
-        for (int i = 0; i < lines.Count; i++)
-        {
-            var t = lines[i].Trim();
-            if (t.StartsWith('[') && t.EndsWith(']') && t.Length > 2)
-                cur = t.Substring(1, t.Length - 2);
-            sectionOf[i] = cur;
-        }
-
-        var result = new List<(string text, string? sec)>();
-        for (int i = 0; i < lines.Count; i++)
-        {
-            var t = lines[i].Trim();
-            var eq = t.IndexOf('=');
-            if (eq > 0 && allManaged.Contains(t.Substring(0, eq).Trim())) continue;
-            result.Add((lines[i], sectionOf[i]));
-        }
-
-        foreach (var (sectionName, kvList) in toSet)
-        {
-            if (kvList.Count == 0) continue;
-
-            int secIdx = -1;
-            for (int i = 0; i < result.Count; i++)
-            {
-                if (result[i].text.Trim() == $"[{sectionName}]") { secIdx = i; break; }
-            }
-
-            if (secIdx < 0)
-            {
-                if (result.Count > 0 && result[result.Count - 1].text.Trim() != "")
-                    result.Add(("", null));
-                result.Add(($"[{sectionName}]", sectionName));
-                foreach (var (k, v) in kvList)
-                    result.Add(($"{k}={v}", sectionName));
-            }
-            else
-            {
-                int end = secIdx + 1;
-                while (end < result.Count)
-                {
-                    var t = result[end].text.Trim();
-                    if (t.StartsWith('[') && t.EndsWith(']') && t.Length > 2) break;
-                    end++;
-                }
-                int insert = end;
-                while (insert > secIdx + 1 && result[insert - 1].text.Trim() == "") insert--;
-
-                for (int j = kvList.Count - 1; j >= 0; j--)
-                    result.Insert(insert, ($"{kvList[j].key}={kvList[j].value}", sectionName));
-            }
-        }
-
-        return string.Join("\n", result.ConvertAll(x => x.text)) + "\n";
-    }
 
     public string ApplyPerformanceConfig(string gamePath, string settingsJson)
     {
@@ -1484,7 +1306,7 @@ public class LauncherBridge
                 },
             };
 
-            File.WriteAllText(iniPath, PatchIniContent(originalContent, toSet), System.Text.Encoding.UTF8);
+            File.WriteAllText(iniPath, Helpers.PatchIniContent(originalContent, toSet), System.Text.Encoding.UTF8);
             return "ok";
         }
         catch (UnauthorizedAccessException)

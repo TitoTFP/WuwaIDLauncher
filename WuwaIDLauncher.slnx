@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="WuwaIDLauncher.csproj" />
+  <Project Path="WuwaIDLauncher.Tests/WuwaIDLauncher.Tests.csproj" />
 </Solution>

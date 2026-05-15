@@ -17,8 +17,13 @@
     <PublishTrimmed>false</PublishTrimmed>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ApplicationIcon>Resources\Images\app.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="WuwaIDLauncher.Tests" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
@@ -26,8 +31,11 @@
 
   <ItemGroup>
     <Compile Remove="PT-BR Launcher\**\*.cs" />
+    <Compile Remove="WuwaIDLauncher.Tests\**\*.cs" />
     <EmbeddedResource Remove="PT-BR Launcher\**\*" />
+    <EmbeddedResource Remove="WuwaIDLauncher.Tests\**\*" />
     <None Remove="PT-BR Launcher\**\*" />
+    <None Remove="WuwaIDLauncher.Tests\**\*" />
   </ItemGroup>
 
   <ItemGroup>
