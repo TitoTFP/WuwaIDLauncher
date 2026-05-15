@@ -23,18 +23,18 @@ public class PatchIniTests
     [Fact]
     public void ExistingIni_ManagedReplaced_UnmanagedKept()
     {
-        var original = "[SystemSettings]\nr.ManagedKey=old\nr.UnmanagedKey=keep\n[/Script/Engine.RendererSettings]\nr.RayTracing.LoadConfig=1";
+        var original = "[SystemSettings]\nr.ViewDistanceScale=old\nr.UnmanagedKey=keep\n[/Script/Engine.RendererSettings]\nr.RayTracing.LoadConfig=1";
 
         var toSet = new Dictionary<string, List<(string key, string value)>>
         {
-            ["SystemSettings"] = new() { ("r.ManagedKey", "new") },
+            ["SystemSettings"] = new() { ("r.ViewDistanceScale", "0.8") },
         };
 
         var result = Helpers.PatchIniContent(original, toSet);
 
         result.Should().Contain("r.UnmanagedKey=keep");
-        result.Should().Contain("r.ManagedKey=new");
-        result.Should().NotContain("r.ManagedKey=old");
+        result.Should().Contain("r.ViewDistanceScale=0.8");
+        result.Should().NotContain("r.ViewDistanceScale=old");
     }
 
     [Fact]
@@ -58,20 +58,20 @@ public class PatchIniTests
     [Fact]
     public void MultipleSections_EachHandledCorrectly()
     {
-        var original = "[SystemSettings]\nr.Old1=1\n[/Script/Engine.RendererSettings]\nr.Old2=2";
+        var original = "[SystemSettings]\nr.ViewDistanceScale=1\n[/Script/Engine.RendererSettings]\nr.RayTracing.LoadConfig=1";
 
         var toSet = new Dictionary<string, List<(string key, string value)>>
         {
-            ["SystemSettings"] = new() { ("r.New1", "a") },
-            ["/Script/Engine.RendererSettings"] = new() { ("r.New2", "b") },
+            ["SystemSettings"] = new() { ("r.ViewDistanceScale", "0.8") },
+            ["/Script/Engine.RendererSettings"] = new() { ("r.RayTracing.LoadConfig", "0") },
         };
 
         var result = Helpers.PatchIniContent(original, toSet);
 
-        result.Should().Contain("r.New1=a");
-        result.Should().Contain("r.New2=b");
-        result.Should().NotContain("r.Old1=1");
-        result.Should().NotContain("r.Old2=2");
+        result.Should().Contain("r.ViewDistanceScale=0.8");
+        result.Should().Contain("r.RayTracing.LoadConfig=0");
+        result.Should().NotContain("r.ViewDistanceScale=1");
+        result.Should().NotContain("r.RayTracing.LoadConfig=1");
     }
 
     [Fact]
@@ -151,19 +151,19 @@ public class PatchIniTests
     [Fact]
     public void DuplicateManagedKeys_Deduplicated()
     {
-        var original = "[SystemSettings]\nr.TestKey=old1\nr.TestKey=old2";
+        var original = "[SystemSettings]\nr.ViewDistanceScale=old1\nr.ViewDistanceScale=old2";
 
         var toSet = new Dictionary<string, List<(string key, string value)>>
         {
-            ["SystemSettings"] = new() { ("r.TestKey", "new") },
+            ["SystemSettings"] = new() { ("r.ViewDistanceScale", "0.8") },
         };
 
         var result = Helpers.PatchIniContent(original, toSet);
 
         var lines = result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        var testKeyCount = lines.Count(l => l.Trim().StartsWith("r.TestKey="));
+        var testKeyCount = lines.Count(l => l.Trim().StartsWith("r.ViewDistanceScale="));
         testKeyCount.Should().Be(1);
-        result.Should().Contain("r.TestKey=new");
+        result.Should().Contain("r.ViewDistanceScale=0.8");
     }
 
     [Fact]

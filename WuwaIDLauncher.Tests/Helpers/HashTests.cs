@@ -13,8 +13,10 @@ public class HashTests
         File.WriteAllText(path, "hello world");
         try
         {
+            string hash;
+            using (var fs = File.OpenRead(path))
             using var sha = System.Security.Cryptography.SHA256.Create();
-            var hash = Convert.ToHexString(sha.ComputeHash(File.OpenRead(path)));
+            hash = Convert.ToHexString(sha.ComputeHash(fs));
             Helpers.VerifySha256(path, hash).Should().BeTrue();
         }
         finally { File.Delete(path); }
@@ -46,8 +48,10 @@ public class HashTests
         File.WriteAllText(path, "test data");
         try
         {
+            string hash;
+            using (var fs = File.OpenRead(path))
             using var sha = System.Security.Cryptography.SHA256.Create();
-            var hash = Convert.ToHexString(sha.ComputeHash(File.OpenRead(path)));
+            hash = Convert.ToHexString(sha.ComputeHash(fs));
             Helpers.VerifySha256(path, hash.ToLowerInvariant()).Should().BeTrue();
             Helpers.VerifySha256(path, hash.ToUpperInvariant()).Should().BeTrue();
         }
