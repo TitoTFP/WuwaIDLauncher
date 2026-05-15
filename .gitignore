@@ -9,6 +9,9 @@ obj/
 *.userosscache
 *.sln.docstates
 
+# VS Code
+.vscode/
+
 # Publish output
 publish/
 
@@ -17,7 +20,7 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
-#temp files
+# temp files
 temp/
 
 # PT-BR launcher reference files
