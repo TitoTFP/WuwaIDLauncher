@@ -22,3 +22,6 @@ temp/
 
 # PT-BR launcher reference files
 PT-BR Launcher/*
+
+# test results
+test-results/

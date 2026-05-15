@@ -552,6 +552,31 @@
 }
 .lu-modal__btn:disabled { opacity: 0.38; pointer-events: none; }
 
+.lu-restart-warning {
+    margin-top: 16px;
+    padding: 14px 16px;
+    background: rgba(255, 107, 157, 0.08);
+    border: 1px solid rgba(255, 107, 157, 0.25);
+    border-radius: 12px;
+    text-align: center;
+    animation: restartWarningIn 300ms ease-out;
+}
+.lu-restart-warning__icon { color: var(--accent-warm); margin-bottom: 6px; }
+.lu-restart-warning__title {
+    font-size: 14px; font-weight: 700; color: var(--text-1);
+    margin: 0 0 6px;
+}
+.lu-restart-warning__msg {
+    font-size: 12px; color: var(--text-2); margin: 0 0 4px;
+}
+.lu-restart-warning__hint {
+    font-size: 11px; color: var(--text-3); margin: 0; font-style: italic;
+}
+@keyframes restartWarningIn {
+    from { opacity: 0; transform: translateY(-8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
 .rp-menu__btn {
     flex-shrink: 0; width: 48px;
     display: flex; align-items: center; justify-content: center;

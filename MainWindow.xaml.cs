@@ -827,7 +827,10 @@ public partial class MainWindow : Window
             File.WriteAllText(scriptPath, scriptContent, System.Text.Encoding.UTF8);
 
             RunScript("window.onLauncherUpdateProgress(100, 'Memulai ulang...')");
-            await Task.Delay(800);
+
+            // Show restart warning countdown before shutting down
+            RunScript("window.onLauncherUpdateRestarting()");
+            await Task.Delay(12000);
 
             Process.Start(new ProcessStartInfo
             {

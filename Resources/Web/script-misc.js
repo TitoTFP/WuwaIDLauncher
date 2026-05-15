@@ -115,11 +115,20 @@ window.onLauncherUpdateAvailable = (latestVer, downloadUrl) => {
     const btns     = document.getElementById('luModalBtns');
     const btnLater  = document.getElementById('luBtnLater');
     const btnUpdate = document.getElementById('luBtnUpdate');
+    const warning  = document.getElementById('luRestartWarning');
+    const countdown = document.getElementById('luRestartCountdown');
 
     if (!overlay) return;
     if (verEl) verEl.textContent = latestVer;
     if (pbar)  pbar.style.display  = 'none';
     if (btns)  btns.style.display  = '';
+    if (warning) warning.style.display = 'none';
+    if (countdown) countdown.textContent = '12';
+    if (_restartTimer) {
+        clearInterval(_restartTimer);
+        _restartTimer = null;
+    }
+    if (btnUpdate) btnUpdate.disabled = false;
     overlay.style.display = '';
 
     btnLater?.addEventListener('click', () => {
@@ -150,6 +159,30 @@ window.onLauncherUpdateError = (msg) => {
     const overlay = document.getElementById('luOverlay');
     if (overlay) overlay.style.display = 'none';
     toast('Pembaruan gagal: ' + msg, 'err');
+};
+let _restartTimer = null;
+
+window.onLauncherUpdateRestarting = () => {
+    const warning  = document.getElementById('luRestartWarning');
+    const countdown = document.getElementById('luRestartCountdown');
+    const btns     = document.getElementById('luModalBtns');
+    const pbar     = document.getElementById('luPbar');
+    if (warning)  warning.style.display = '';
+    if (btns)     btns.style.display    = 'none';
+    if (pbar)     pbar.style.display    = 'none';
+
+    let sec = 12;
+    if (countdown) countdown.textContent = sec;
+
+    if (_restartTimer) clearInterval(_restartTimer);
+    _restartTimer = setInterval(() => {
+        sec--;
+        if (countdown) countdown.textContent = sec;
+        if (sec <= 0) {
+            clearInterval(_restartTimer);
+            _restartTimer = null;
+        }
+    }, 1000);
 };
 
 async function loadSettings() {
@@ -521,7 +554,6 @@ function fcSetStatus(msg, isError, isSuccess = false) {
     el.className = 'fc-status' + (isError ? ' fc-status--err' : isSuccess ? ' fc-status--ok' : '');
     el.textContent = msg;
 }
-
 
 
 
