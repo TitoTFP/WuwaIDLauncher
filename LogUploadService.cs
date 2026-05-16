@@ -10,7 +10,7 @@ namespace WuwaIDLauncher;
 
 internal static class LogUploadService
 {
-    internal const string LogUploadEndpoint = "https://telecharger-began-customized-features.trycloudflare.com/api/logs";
+    internal const string LogUploadEndpoint = "https://logs.titotfp.my.id/api/logs";
     const int MaxLogFiles = 3;
     const long MaxLogBytes = 2 * 1024 * 1024;
 
