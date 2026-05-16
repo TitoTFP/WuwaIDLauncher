@@ -146,4 +146,80 @@ if ! rg -n '`ID \$\{vhVer\}`' Resources/Web/script.js Resources/Web/script-home.
   fail "version label must show ID prefix"
 fi
 
+if [ ! -f AppLogger.cs ]; then
+  fail "launcher must include AppLogger.cs"
+fi
+
+if ! rg -n 'Path\.Combine\(appDataFolder, "Logs"\)' AppLogger.cs >/dev/null; then
+  fail "logger must write under %LOCALAPPDATA%\\WuwaIDLauncher\\Logs"
+fi
+
+if ! rg -n 'launcher-\{DateTime\.Now:yyyyMMdd\}\.log' AppLogger.cs >/dev/null; then
+  fail "logger must use daily launcher-YYYYMMDD.log files"
+fi
+
+if ! rg -n 'AddRedaction\(gamePath, "<GAME_PATH>"\)' AppLogger.cs >/dev/null; then
+  fail "logger must redact active game path"
+fi
+
+if ! rg -n 'AddRedaction\(Environment\.GetFolderPath\(Environment\.SpecialFolder\.UserProfile\), "<USERPROFILE>"\)' AppLogger.cs >/dev/null; then
+  fail "logger must redact user profile paths"
+fi
+
+if ! rg -n 'DeleteOldLogs\(TimeSpan\.FromDays\(14\)\)' AppLogger.cs >/dev/null; then
+  fail "logger must delete log files older than 14 days"
+fi
+
+if ! rg -n 'AppLogger\.Initialize\(WuwaIDLauncher\.MainWindow\.AppDataFolder\)' App.xaml.cs >/dev/null; then
+  fail "app startup must initialize file logger"
+fi
+
+if ! rg -n 'AppLogger\.SetGamePath\(gamePath\)' MainWindow.xaml.cs >/dev/null; then
+  fail "launcher must register active game path for redaction"
+fi
+
+if ! rg -n 'AppLogger\.Exception\(ex, "Launcher update failed"\)' MainWindow.xaml.cs >/dev/null; then
+  fail "launcher update failures must be logged"
+fi
+
+if [ ! -f LogUploadService.cs ]; then
+  fail "launcher must include LogUploadService.cs"
+fi
+
+if ! rg -n 'internal const string LogUploadEndpoint = ""' LogUploadService.cs >/dev/null; then
+  fail "log upload endpoint must default to empty/disabled"
+fi
+
+if ! rg -n 'const int MaxLogFiles = 3' LogUploadService.cs >/dev/null; then
+  fail "log upload must limit to latest 3 log files"
+fi
+
+if ! rg -n 'const long MaxLogBytes = 2 \* 1024 \* 1024' LogUploadService.cs >/dev/null; then
+  fail "log upload must cap raw log payload at 2 MB"
+fi
+
+if ! rg -n 'MultipartFormDataContent' LogUploadService.cs >/dev/null; then
+  fail "log upload must use multipart/form-data"
+fi
+
+if ! rg -n 'GetLogUploadEnabled\(\)' MainWindow.xaml.cs >/dev/null; then
+  fail "launcher bridge must expose log upload enabled state"
+fi
+
+if ! rg -n 'UploadLogs\(\)' MainWindow.xaml.cs >/dev/null; then
+  fail "launcher bridge must expose manual log upload"
+fi
+
+if ! rg -n 'menuUploadLogs' Resources/Web/index.html Resources/Web/script-misc.js >/dev/null; then
+  fail "web UI must include manual log upload action"
+fi
+
+if ! rg -n 'Log upload belum dikonfigurasi' Resources/Web/script-misc.js MainWindow.xaml.cs LogUploadService.cs >/dev/null; then
+  fail "log upload must show disabled/unconfigured state"
+fi
+
+if rg -n 'AKIA|SECRET|TOKEN|Bearer |x-amz-credential|github_pat|ghp_' LogUploadService.cs MainWindow.xaml.cs Resources/Web >/dev/null; then
+  fail "launcher must not embed storage or GitHub credentials for log upload"
+fi
+
 echo "launcher consistency checks passed"

@@ -20,6 +20,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initFontCreator();
     initPerformanceMode();
     initSidePanel();
+    initLogUpload();
     loadSettings();
     loadVersions();
     loadReleaseNotes();

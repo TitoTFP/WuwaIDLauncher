@@ -44,6 +44,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         Directory.CreateDirectory(CacheFolder);
+        AppLogger.Info("Main window initialized");
         Loaded += OnLoaded;
         Closing += OnClosing;
     }
@@ -54,6 +55,7 @@ public partial class MainWindow : Window
         {
             if (_gameProcessRunning)
             {
+                AppLogger.Info("Close canceled while game is running and signature restore is pending");
                 e.Cancel = true;
                 WindowState = WindowState.Minimized;
                 return;
@@ -61,8 +63,15 @@ public partial class MainWindow : Window
 
             if (!string.IsNullOrWhiteSpace(_launchGamePath))
             {
-                try { RestoreSigBackup(_launchGamePath); }
-                catch { }
+                try
+                {
+                    AppLogger.Info("Restoring signature during close");
+                    RestoreSigBackup(_launchGamePath);
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Exception(ex, "Failed to restore signature during close");
+                }
                 _signatureRestorePending = false;
             }
         }
@@ -72,7 +81,10 @@ public partial class MainWindow : Window
             webView.CoreWebView2?.Profile.ClearBrowsingDataAsync();
             webView.Dispose();
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLogger.Exception(ex, "Failed to dispose WebView2");
+        }
 
         try
         {
@@ -80,7 +92,11 @@ public partial class MainWindow : Window
             if (Directory.Exists(wv2Dir))
                 Directory.Delete(wv2Dir, true);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLogger.Exception(ex, "Failed to delete WebView2 user data");
+        }
+        AppLogger.Info("Main window closing");
         Environment.Exit(0);
     }
 
@@ -88,6 +104,7 @@ public partial class MainWindow : Window
     {
         if (_signatureRestorePending && _gameProcessRunning)
         {
+            AppLogger.Info("Close requested while game is running; minimizing launcher");
             WindowState = WindowState.Minimized;
             return;
         }
@@ -97,6 +114,7 @@ public partial class MainWindow : Window
 
     async void OnLoaded(object sender, RoutedEventArgs e)
     {
+        AppLogger.Info("Main window loaded");
         _splash = new SplashWindow();
         _splash.Show();
 
@@ -110,6 +128,7 @@ public partial class MainWindow : Window
                 userDataFolder: Path.Combine(AppDataFolder, "WebView2"));
             await webView.EnsureCoreWebView2Async(env);
             App.WebView2BrowserPid = webView.CoreWebView2.BrowserProcessId;
+            AppLogger.Info("WebView2 initialized with browser process id " + App.WebView2BrowserPid);
 
             webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
             webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
@@ -143,6 +162,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            AppLogger.Exception(ex, "WebView2 initialization failed");
             MessageBox.Show("Gagal menginisialisasi WebView2: " + ex.Message);
             _splash?.FadeOutAndClose();
             _splash = null;
@@ -153,6 +173,7 @@ public partial class MainWindow : Window
     void OnDOMContentLoaded(object? sender, CoreWebView2DOMContentLoadedEventArgs e)
     {
         _pageReady = true;
+        AppLogger.Info("Web UI DOM loaded");
         Dispatcher.Invoke(() =>
         {
             Opacity = 1;
@@ -187,7 +208,10 @@ public partial class MainWindow : Window
         var uri = new Uri(e.Uri);
         
         if (uri.Host != "app.local" && uri.Host != "cache.local")
+        {
+            AppLogger.Warn("Blocked navigation to " + e.Uri);
             e.Cancel = true;
+        }
     }
 
     [DllImport("user32.dll")]
@@ -209,7 +233,10 @@ public partial class MainWindow : Window
                     ReleaseCapture();
                     SendMessage(hwnd, WM_NCLBUTTONDOWN, HT_CAPTION, 0);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    AppLogger.Exception(ex, "Failed to process window drag message");
+                }
             });
         }
     }
@@ -228,6 +255,7 @@ public partial class MainWindow : Window
         var encStream = Asm.GetManifestResourceStream(resName);
         if (encStream == null)
         {
+            AppLogger.Warn("Web resource not found: " + path);
             e.Response = webView.CoreWebView2.Environment.CreateWebResourceResponse(
                 null, 404, "Not Found", "");
             return;
@@ -278,7 +306,10 @@ public partial class MainWindow : Window
         Dispatcher.InvokeAsync(async () =>
         {
             try { await webView.CoreWebView2.ExecuteScriptAsync(js); }
-            catch { }
+            catch (Exception ex)
+            {
+                AppLogger.Exception(ex, "Failed to execute WebView script");
+            }
         });
     }
 
@@ -295,6 +326,8 @@ public partial class MainWindow : Window
             var full = Path.Combine(p, "Wuthering Waves Game");
             if (Directory.Exists(full))
             {
+                AppLogger.SetGamePath(full);
+                AppLogger.Info("Detected game path: " + full);
                 RunScript($"window.onGamePathDetected({JsStr(full)})");
                 return;
             }
@@ -315,21 +348,33 @@ public partial class MainWindow : Window
 
             var gamePath = pathProp.GetString();
             if (!string.IsNullOrWhiteSpace(gamePath))
+            {
+                AppLogger.SetGamePath(gamePath);
+                AppLogger.Info("Restoring stale signature from settings");
                 RestoreSigBackup(gamePath);
+            }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLogger.Exception(ex, "Failed to restore stale signature from settings");
+        }
     }
 
 
     internal async Task RunInstallation(string gamePath, string vhMode, bool backup)
     {
+        AppLogger.SetGamePath(gamePath);
+        AppLogger.Info("Installation started; mode=" + vhMode + "; backup=" + backup);
         try
         {
             var baseDir = Path.Combine(gamePath, @"Client\Binaries\Win64");
             var pakDir = Path.Combine(gamePath, PakFolderRelativePath);
             
             if (!Directory.Exists(baseDir))
+            {
+                AppLogger.Warn("Game directory missing: " + baseDir);
                 throw new Exception("Direktori game tidak ditemukan. Silakan periksa kembali pathnya.");
+            }
 
             try
             {
@@ -340,16 +385,18 @@ public partial class MainWindow : Window
             }
             catch (UnauthorizedAccessException)
             {
-                
+                AppLogger.Warn("Installation needs admin permission for pak directory: " + pakDir);
                 RunScript("if(window.onAdminRequired) window.onAdminRequired(); else window.onInstallError('Folder game dikunci oleh Windows. Jalankan Launcher sebagai Admin.');");
                 return;
             }
             catch (Exception ex)
             {
+                AppLogger.Exception(ex, "Pak directory write test failed");
                 throw new Exception("Tidak dapat menulis file ke direktori game: " + ex.Message);
             }
 
             DeleteLegacyLoaderFiles(baseDir);
+            AppLogger.Info("Legacy loader cleanup completed");
 
             var releaseUrl = "https://api.github.com/repos/TitoTFP/WuwaID/releases/latest";
 
@@ -381,7 +428,10 @@ public partial class MainWindow : Window
             }
 
             if (toDownload.Count == 0)
+            {
+                AppLogger.Warn("Installation release has no matching pak asset");
                 throw new Exception("File instalasi tidak ditemukan di server.");
+            }
 
             var versionCachePath = Path.Combine(AppDataFolder, "versions.json");
             var localCache = new Dictionary<string, string>();
@@ -392,7 +442,10 @@ public partial class MainWindow : Window
                     var cacheJson = File.ReadAllText(versionCachePath);
                     localCache = JsonSerializer.Deserialize<Dictionary<string, string>>(cacheJson) ?? new();
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    AppLogger.Exception(ex, "Failed to read version cache");
+                }
             }
 
             DeleteLegacyPakFile(gamePath);
@@ -429,6 +482,7 @@ public partial class MainWindow : Window
 
             if (allFilesUpToDate)
             {
+                AppLogger.Info("Installation skipped; local files already current");
                 if (!string.IsNullOrEmpty(tagName))
                 {
                     localCache["_vhVersion"] = tagName;
@@ -472,6 +526,7 @@ public partial class MainWindow : Window
 
                 using var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
                 resp.EnsureSuccessStatusCode();
+                AppLogger.Info("Downloading installer asset: " + name);
 
                 await using var netStream = await resp.Content.ReadAsStreamAsync();
                 await using var fileStream = new FileStream(tmpPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true);
@@ -502,7 +557,8 @@ public partial class MainWindow : Window
                 fileStream.Close(); File.Move(tmpPath, destPath, true);
                 if (!string.IsNullOrEmpty(hash) && !VerifySha256(destPath, hash))
                 {
-                    try { File.Delete(destPath); } catch { }
+                    AppLogger.Error("Downloaded asset hash mismatch: " + name);
+                    try { File.Delete(destPath); } catch (Exception ex) { AppLogger.Exception(ex, "Failed to delete hash-mismatched asset"); }
                     throw new Exception($"Hash file {name} tidak cocok. Unduhan dibatalkan.");
                 }
 
@@ -516,12 +572,14 @@ public partial class MainWindow : Window
 
             DeleteLegacyPakFile(gamePath);
 
+            AppLogger.Info("Installation completed");
             RunScript($"window.onProgressUpdate(100, {JsStr("Instalasi selesai!")}, '', '')");
             await Task.Delay(1000);
             RunScript("window.onInstallComplete()");
         }
         catch (Exception ex)
         {
+            AppLogger.Exception(ex, "Installation failed");
             RunScript($"window.onInstallError({JsStr(ex.Message)})");
         }
     }
@@ -538,30 +596,43 @@ public partial class MainWindow : Window
 
     internal static void RestoreSigBackup(string gamePath)
     {
+        AppLogger.SetGamePath(gamePath);
         var sigPath = SigPath(gamePath);
         var backupPath = SigBackupPath(gamePath);
 
         if (File.Exists(backupPath) && !File.Exists(sigPath))
+        {
+            AppLogger.Info("Restoring signature backup");
             File.Move(backupPath, sigPath);
+        }
         else if (File.Exists(backupPath) && File.Exists(sigPath))
+        {
+            AppLogger.Info("Deleting redundant signature backup");
             File.Delete(backupPath);
+        }
     }
 
     static void PrepareSigBypass(string gamePath)
     {
+        AppLogger.SetGamePath(gamePath);
         RestoreSigBackup(gamePath);
 
         var sigPath = SigPath(gamePath);
         var backupPath = SigBackupPath(gamePath);
 
         if (File.Exists(sigPath))
+        {
+            AppLogger.Info("Preparing signature bypass");
             File.Move(sigPath, backupPath, true);
+        }
     }
 
     async Task MonitorLaunchStateAsync(string gamePath, Process? process)
     {
+        AppLogger.SetGamePath(gamePath);
         try
         {
+            AppLogger.Info("Launch monitor started");
             var gameExitTask = WaitForGameExitAsync(process);
             var restoreDelayTask = Task.Delay(SigRestoreDelay);
             var first = await Task.WhenAny(gameExitTask, restoreDelayTask);
@@ -569,10 +640,12 @@ public partial class MainWindow : Window
             if (first == gameExitTask)
             {
                 _gameProcessRunning = false;
+                AppLogger.Info("Game exited before signature restore delay");
                 RunScript("window.onGameLaunchWaitingRestore()");
             }
 
             RestoreSigBackup(gamePath);
+            AppLogger.Info("Signature restore completed");
             _signatureRestorePending = false;
 
             if (first != gameExitTask)
@@ -580,10 +653,12 @@ public partial class MainWindow : Window
         }
         catch (UnauthorizedAccessException)
         {
+            AppLogger.Warn("Signature restore needs admin permission");
             RunScript($"window.onInstallError({JsStr("Tidak memiliki izin memulihkan signature game. Jalankan sebagai Admin.")})");
         }
         catch (Exception ex)
         {
+            AppLogger.Exception(ex, "Signature restore failed");
             RunScript($"window.onInstallError({JsStr("Gagal memulihkan signature game: " + ex.Message)})");
         }
         finally
@@ -592,6 +667,7 @@ public partial class MainWindow : Window
             _signatureRestorePending = false;
             _launchInProgress = false;
             _launchGamePath = null;
+            AppLogger.Info("Launch monitor finished");
             RunScript("window.onGameLaunchFinished()");
         }
     }
@@ -603,7 +679,10 @@ public partial class MainWindow : Window
             if (process != null)
                 await process.WaitForExitAsync();
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLogger.Exception(ex, "Failed to wait for direct game process exit");
+        }
 
         await Task.Delay(3000);
 
@@ -614,7 +693,11 @@ public partial class MainWindow : Window
     static bool IsGameRunning()
     {
         try { return Process.GetProcessesByName(GameProcessName).Length > 0; }
-        catch { return false; }
+        catch (Exception ex)
+        {
+            AppLogger.Exception(ex, "Failed to inspect game process list");
+            return false;
+        }
     }
 
     internal static void DeleteLegacyLoaderFiles(string baseDir)
@@ -624,27 +707,43 @@ public partial class MainWindow : Window
         var versionDll = Path.Combine(baseDir, "version.dll");
 
         if (Directory.Exists(modDir))
+        {
+            AppLogger.Info("Deleting current legacy loader directory: " + modDir);
             Directory.Delete(modDir, true);
+        }
         if (Directory.Exists(legacyModDir))
+        {
+            AppLogger.Info("Deleting old legacy loader directory: " + legacyModDir);
             Directory.Delete(legacyModDir, true);
+        }
         if (File.Exists(versionDll))
+        {
+            AppLogger.Info("Deleting legacy version.dll");
             File.Delete(versionDll);
+        }
     }
 
     internal static void DeleteLegacyPakFile(string gamePath)
     {
         var legacyPakPath = Path.Combine(PakFolderPath(gamePath), LegacyPakFileName);
         if (File.Exists(legacyPakPath))
+        {
+            AppLogger.SetGamePath(gamePath);
+            AppLogger.Info("Deleting legacy pak file");
             File.Delete(legacyPakPath);
+        }
     }
 
 
     internal void LaunchGame(string gamePath, bool dx11)
     {
+        AppLogger.SetGamePath(gamePath);
+        AppLogger.Info("Game launch requested; dx11=" + dx11);
         try
         {
             if (_launchInProgress)
             {
+                AppLogger.Info("Duplicate game launch request ignored");
                 RunScript("window.onGameLaunchStarted()");
                 return;
             }
@@ -656,6 +755,7 @@ public partial class MainWindow : Window
 
                 if (!File.Exists(SigPath(gamePath)) && !File.Exists(SigBackupPath(gamePath)))
                 {
+                    AppLogger.Warn("Game signature file missing before launch");
                     RunScript($"window.onInstallError({JsStr("Signature file tidak terdeteksi, jalankan Wuthering Waves dulu tanpa mod atau launcher ini.")})");
                     return;
                 }
@@ -674,17 +774,20 @@ public partial class MainWindow : Window
                     UseShellExecute = true,
                     Verb = "runas"
                 });
+                AppLogger.Info("Game process start requested");
                 RunScript("window.onGameLaunchStarted()");
                 Dispatcher.Invoke(() => WindowState = WindowState.Minimized);
                 _ = MonitorLaunchStateAsync(gamePath, process);
             }
             else
             {
+                AppLogger.Warn("Game executable missing: " + full);
                 RunScript($"window.onInstallError({JsStr("File game tidak ditemukan: " + GameExeName)})");
             }
         }
         catch (Exception ex)
         {
+            AppLogger.Exception(ex, "Game launch failed");
             _launchInProgress = false;
             _signatureRestorePending = false;
             _gameProcessRunning = false;
@@ -703,6 +806,7 @@ public partial class MainWindow : Window
     {
         try
         {
+            AppLogger.Info("Checking launcher version");
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
             http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaIDLauncher/1.0");
             var json = await http.GetStringAsync(LauncherReleasesApiUrl);
@@ -717,12 +821,16 @@ public partial class MainWindow : Window
 
             if (latest > current)
             {
+                AppLogger.Info($"Launcher update available: v{tag}");
                 while (!_pageReady) await Task.Delay(100);
                 var downloadUrl = $"https://github.com/TitoTFP/WuwaIDLauncher/releases/download/v{tag}/WuwaIDLauncher-v{tag}.zip";
                 RunScript($"window.onLauncherUpdateAvailable({JsStr('v' + tag)}, {JsStr(downloadUrl)})");
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLogger.Exception(ex, "Launcher update check failed");
+        }
     }
 
 
@@ -732,6 +840,7 @@ public partial class MainWindow : Window
     {
         try
         {
+            AppLogger.Info("Fetching WuwaID release notes");
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
             http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaIDLauncher/1.0");
             var json = await http.GetStringAsync(VHReleasesApiUrl);
@@ -745,7 +854,10 @@ public partial class MainWindow : Window
             while (!_pageReady) await Task.Delay(100);
             RunScript($"window.onVHReleaseNotes({JsStr(tag)}, {JsStr(date)}, {JsStr(body)}, {JsStr(name)})");
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLogger.Exception(ex, "Failed to fetch WuwaID release notes");
+        }
     }
 
 
@@ -753,6 +865,7 @@ public partial class MainWindow : Window
     {
         try
         {
+            AppLogger.Info("Launcher update started: " + version);
             var updateDir = Path.Combine(Path.GetTempPath(), "WuwaIDLauncher_update");
             if (Directory.Exists(updateDir)) Directory.Delete(updateDir, true);
             Directory.CreateDirectory(updateDir);
@@ -765,6 +878,7 @@ public partial class MainWindow : Window
             using var resp = await http.GetAsync(zipUrl, HttpCompletionOption.ResponseHeadersRead);
             resp.EnsureSuccessStatusCode();
             long total = resp.Content.Headers.ContentLength ?? -1;
+            AppLogger.Info("Launcher update download started; bytes=" + total);
 
             await using (var net = await resp.Content.ReadAsStreamAsync())
             await using (var fs = new FileStream(zipPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, true))
@@ -796,6 +910,7 @@ public partial class MainWindow : Window
             var newExe = Directory.GetFiles(extractDir, "WuwaIDLauncher.exe", SearchOption.AllDirectories)
                                    .FirstOrDefault()
                          ?? throw new Exception("WuwaIDLauncher.exe tidak ditemukan dalam file zip.");
+            AppLogger.Info("Launcher update executable extracted");
 
             var currentExe = Process.GetCurrentProcess().MainModule?.FileName
                              ?? throw new Exception("Direktori exe saat ini tidak diketahui.");
@@ -824,6 +939,7 @@ public partial class MainWindow : Window
                 "Start-Sleep -Seconds 2\n" +
                 $"Remove-Item -Recurse -Force '{updateDir.Replace("'", "''")}' -ErrorAction SilentlyContinue\n";
             File.WriteAllText(scriptPath, scriptContent, System.Text.Encoding.UTF8);
+            AppLogger.Info("Launcher updater script written");
 
             RunScript("window.onLauncherUpdateProgress(100, 'Memulai ulang...')");
             await Task.Delay(800);
@@ -835,17 +951,20 @@ public partial class MainWindow : Window
                 UseShellExecute = true,
                 WindowStyle = ProcessWindowStyle.Hidden
             });
+            AppLogger.Info("Launcher updater handoff started");
 
             Dispatcher.Invoke(() => Application.Current.Shutdown());
         }
         catch (Exception ex)
         {
+            AppLogger.Exception(ex, "Launcher update failed");
             RunScript($"window.onLauncherUpdateError({JsStr(ex.Message)})");
         }
     }
 
     async Task CheckAndDownloadMedia()
     {
+        AppLogger.Info("Media check started");
         SignalMediaReady();
 
         RunScript("window.onMediaStatus('checking', '')");
@@ -883,10 +1002,14 @@ public partial class MainWindow : Window
                 }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLogger.Exception(ex, "Media manifest check failed");
+        }
 
         if (toDownload.Count > 0)
         {
+            AppLogger.Info("Media download queue count: " + toDownload.Count);
             using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
             http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaIDLauncher/1.0");
             foreach (var (name, url, _) in toDownload)
@@ -897,6 +1020,7 @@ public partial class MainWindow : Window
                 }
                 catch (Exception ex)
                 {
+                    AppLogger.Exception(ex, "Media download failed: " + name);
                     RunScript($"window.onMediaStatus('error', " +
                               $"{JsStr("Gagal mengunduh " + name + ": " + ex.Message)})");
                 }
@@ -904,11 +1028,13 @@ public partial class MainWindow : Window
             SignalMediaReady();
         }
 
+        AppLogger.Info("Media check finished");
         RunScript("window.onMediaStatus('ready', '')");
     }
 
     async Task DownloadWithProgress(HttpClient http, string url, string dest, string name)
     {
+        AppLogger.Info("Downloading media asset: " + name);
         using var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
         resp.EnsureSuccessStatusCode();
         long total = resp.Content.Headers.ContentLength ?? -1;
@@ -944,6 +1070,7 @@ public partial class MainWindow : Window
 
         if (File.Exists(dest)) File.Delete(dest);
         File.Move(tmp, dest);
+        AppLogger.Info("Media asset ready: " + name);
     }
 
     void SignalMediaReady()
@@ -1033,6 +1160,7 @@ public class LauncherBridge
         if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
             (uri.Scheme == "https" || uri.Scheme == "http"))
         {
+            AppLogger.Info("Opening external URL: " + uri.Host);
             Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
         }
     }
@@ -1043,8 +1171,12 @@ public class LauncherBridge
         {
             Directory.CreateDirectory(Path.GetDirectoryName(MainWindow.SettingsPath)!);
             File.WriteAllText(MainWindow.SettingsPath, json);
+            AppLogger.Info("Settings saved");
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLogger.Exception(ex, "Failed to save settings");
+        }
     }
 
     public string LoadSettings()
@@ -1054,7 +1186,11 @@ public class LauncherBridge
             return File.Exists(MainWindow.SettingsPath)
                 ? File.ReadAllText(MainWindow.SettingsPath) : "";
         }
-        catch { return ""; }
+        catch (Exception ex)
+        {
+            AppLogger.Exception(ex, "Failed to load settings");
+            return "";
+        }
     }
 
     public bool ShowConfirm(string message) =>
@@ -1088,6 +1224,17 @@ public class LauncherBridge
     public void PerformLauncherUpdate(string version, string zipUrl) =>
         Task.Run(() => _w.PerformLauncherUpdate(version, zipUrl));
 
+    public bool GetLogUploadEnabled() => LogUploadService.IsEnabled();
+
+    public void UploadLogs() =>
+        Task.Run(async () =>
+        {
+            _w.RunScript("window.onLogUploadStarted && window.onLogUploadStarted()");
+            var result = await LogUploadService.UploadLatestLogsAsync();
+            var escaped = JsonSerializer.Serialize(result);
+            _w.RunScript($"window.onLogUploadFinished && window.onLogUploadFinished({escaped})");
+        });
+
     public void StartInstallation(string gamePath, string vhMode, bool backup) =>
         Task.Run(() => _w.RunInstallation(gamePath, vhMode, backup));
 
@@ -1096,14 +1243,18 @@ public class LauncherBridge
 
     public void ForceQuitGame()
     {
+        AppLogger.Info("Force quit game requested");
         var names = new[] { "WutheringWaves", "Client-Win64-Shipping", "Wuthering Waves" };
         foreach (var name in names)
             foreach (var p in Process.GetProcessesByName(name))
-                try { p.Kill(true); } catch { }
+                try { p.Kill(true); }
+                catch (Exception ex) { AppLogger.Exception(ex, "Failed to kill game process: " + name); }
     }
 
     public string Uninstall(string gamePath)
     {
+        AppLogger.SetGamePath(gamePath);
+        AppLogger.Info("Uninstall started");
         try
         {
             var baseDir = Path.Combine(gamePath, @"Client\Binaries\Win64");
@@ -1120,14 +1271,17 @@ public class LauncherBridge
             if (File.Exists(versionCache))
                 File.Delete(versionCache);
 
+            AppLogger.Info("Uninstall completed");
             return "ok";
         }
         catch (UnauthorizedAccessException)
         {
+            AppLogger.Warn("Uninstall needs admin permission");
             return "Tidak memiliki izin menghapus file. Jalankan sebagai Admin.";
         }
         catch (Exception ex)
         {
+            AppLogger.Exception(ex, "Uninstall failed");
             return ex.Message;
         }
     }
@@ -1147,10 +1301,14 @@ public class LauncherBridge
                         UseShellExecute = true,
                         Verb = "runas"
                     });
+                    AppLogger.Info("Restart as admin requested");
                     Application.Current.Shutdown();
                 }
             }
-            catch {  }
+            catch (Exception ex)
+            {
+                AppLogger.Exception(ex, "Failed to restart as admin");
+            }
         });
     }
 
@@ -1170,6 +1328,7 @@ public class LauncherBridge
 
     public string GetCustomFontName(string gamePath)
     {
+        AppLogger.SetGamePath(gamePath);
         try
         {
             var modDir = MainWindow.PakFolderPath(gamePath);
@@ -1179,12 +1338,18 @@ public class LauncherBridge
                 .FirstOrDefault(n => !string.Equals(n, RepoFontPak, StringComparison.OrdinalIgnoreCase));
             return custom is null ? "" : Path.GetFileNameWithoutExtension(custom);
         }
-        catch { return ""; }
+        catch (Exception ex)
+        {
+            AppLogger.Exception(ex, "Failed to read custom font name");
+            return "";
+        }
     }
 
     public void CreateFontPak(string fontFilePath, string gamePath, string pakName) =>
         Task.Run(async () =>
         {
+            AppLogger.SetGamePath(gamePath);
+            AppLogger.Info("Font pak creation started");
             try
             {
                 _w.RunScript("window.onFontPakProgress('Membaca file font...')");
@@ -1202,7 +1367,8 @@ public class LauncherBridge
                 Directory.CreateDirectory(modDir);
 
                 foreach (var old in Directory.GetFiles(modDir, "*_100_P.pak"))
-                    try { File.Delete(old); } catch { }
+                    try { File.Delete(old); }
+                    catch (Exception ex) { AppLogger.Exception(ex, "Failed to delete old font pak"); }
 
                 var outputPakPath = WuwaPakPacker.PackFont(modDir, pakName, fontData);
 
@@ -1213,10 +1379,12 @@ public class LauncherBridge
 
                 var escapedPath = JsonSerializer.Serialize(outputPakPath);
                 var escapedSize = JsonSerializer.Serialize(sizeStr);
+                AppLogger.Info("Font pak creation completed");
                 _w.RunScript($"window.onFontPakDone({escapedPath}, {escapedSize})");
             }
             catch (Exception ex)
             {
+                AppLogger.Exception(ex, "Font pak creation failed");
                 var escaped = JsonSerializer.Serialize(ex.Message);
                 _w.RunScript($"window.onFontPakError({escaped})");
             }
@@ -1225,13 +1393,16 @@ public class LauncherBridge
     public void RemoveCustomFont(string gamePath) =>
         Task.Run(() =>
         {
+            AppLogger.SetGamePath(gamePath);
+            AppLogger.Info("Custom font removal started");
             try
             {
                 var modDir = MainWindow.PakFolderPath(gamePath);
                 if (Directory.Exists(modDir))
                 {
                     foreach (var f in Directory.GetFiles(modDir, "*_100_P.pak"))
-                        try { File.Delete(f); } catch { }
+                        try { File.Delete(f); }
+                        catch (Exception ex) { AppLogger.Exception(ex, "Failed to delete custom font pak"); }
                 }
 
                 var versionCachePath = Path.Combine(MainWindow.AppDataFolder, "versions.json");
@@ -1244,13 +1415,18 @@ public class LauncherBridge
                         dict.Remove(RepoFontPak);
                         File.WriteAllText(versionCachePath, JsonSerializer.Serialize(dict));
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        AppLogger.Exception(ex, "Failed to update version cache after font removal");
+                    }
                 }
 
+                AppLogger.Info("Custom font removal completed");
                 _w.RunScript("window.onFontRevertDone()");
             }
             catch (Exception ex)
             {
+                AppLogger.Exception(ex, "Custom font removal failed");
                 var escaped = JsonSerializer.Serialize(ex.Message);
                 _w.RunScript($"window.onFontRevertError({escaped})");
             }
@@ -1364,6 +1540,8 @@ public class LauncherBridge
 
     public string ApplyPerformanceConfig(string gamePath, string settingsJson)
     {
+        AppLogger.SetGamePath(gamePath);
+        AppLogger.Info("Applying performance config");
         try
         {
             var iniPath    = GetPerfIniPath(gamePath);
@@ -1481,20 +1659,25 @@ public class LauncherBridge
             };
 
             File.WriteAllText(iniPath, PatchIniContent(originalContent, toSet), System.Text.Encoding.UTF8);
+            AppLogger.Info("Performance config applied");
             return "ok";
         }
         catch (UnauthorizedAccessException)
         {
+            AppLogger.Warn("Performance config needs admin permission");
             return "Tidak memiliki izin menulis file. Jalankan Launcher sebagai Admin.";
         }
         catch (Exception ex)
         {
+            AppLogger.Exception(ex, "Performance config failed");
             return ex.Message;
         }
     }
 
     public string ClearPerformanceConfig(string gamePath)
     {
+        AppLogger.SetGamePath(gamePath);
+        AppLogger.Info("Clearing performance config");
         try
         {
             var iniPath    = GetPerfIniPath(gamePath);
@@ -1502,9 +1685,14 @@ public class LauncherBridge
             if (!File.Exists(backupPath)) return "no_backup";
             File.Copy(backupPath, iniPath, overwrite: true);
             File.Delete(backupPath);
+            AppLogger.Info("Performance config cleared");
             return "ok";
         }
-        catch (Exception ex) { return ex.Message; }
+        catch (Exception ex)
+        {
+            AppLogger.Exception(ex, "Clear performance config failed");
+            return ex.Message;
+        }
     }
 
     public bool GetPerformanceConfigActive(string gamePath) =>

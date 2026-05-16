@@ -1,23 +1,32 @@
-# Build output
+# .NET build output
 bin/
 obj/
+artifacts/
 
-# Visual Studio
+# Publish output
+publish/
+*.nupkg
+*.snupkg
+
+# IDE / editor
 .vs/
+.vscode/
 *.user
 *.suo
 *.userosscache
 *.sln.docstates
-
-# Publish output
-publish/
 
 # OS
 Thumbs.db
 Desktop.ini
 .DS_Store
 
-#temp files
+# Test output
+TestResults/
+test-results/
+.playwright-mcp/
+
+# Temporary files
 temp/
 
 # PT-BR launcher reference files
