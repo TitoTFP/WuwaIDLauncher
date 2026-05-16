@@ -10,7 +10,7 @@ namespace WuwaIDLauncher;
 
 internal static class LogUploadService
 {
-    internal const string LogUploadEndpoint = "";
+    internal const string LogUploadEndpoint = "https://logs.titotfp.my.id/api/logs";
     const int MaxLogFiles = 3;
     const long MaxLogBytes = 2 * 1024 * 1024;
     const long MaxGameLogBytes = 4 * 1024 * 1024;

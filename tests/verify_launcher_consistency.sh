@@ -186,8 +186,12 @@ if [ ! -f LogUploadService.cs ]; then
   fail "launcher must include LogUploadService.cs"
 fi
 
-if ! rg -n 'internal const string LogUploadEndpoint = ""' LogUploadService.cs >/dev/null; then
-  fail "log upload endpoint must default to empty/disabled"
+if ! rg -n 'internal const string LogUploadEndpoint = "https://logs\.titotfp\.my\.id/api/logs"' LogUploadService.cs >/dev/null; then
+  fail "log upload endpoint must point to configured backend"
+fi
+
+if rg -n '(token|secret|bearer|authorization|github_pat|ghp_|AKIA|aws_access_key)' LogUploadService.cs >/dev/null; then
+  fail "log upload must not embed storage tokens or credentials"
 fi
 
 if ! rg -n 'const int MaxLogFiles = 3' LogUploadService.cs >/dev/null; then
