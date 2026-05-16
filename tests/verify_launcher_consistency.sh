@@ -206,7 +206,7 @@ if ! rg -n 'GetLogUploadEnabled\(\)' MainWindow.xaml.cs >/dev/null; then
   fail "launcher bridge must expose log upload enabled state"
 fi
 
-if ! rg -n 'UploadLogs\(\)' MainWindow.xaml.cs >/dev/null; then
+if ! rg -n 'UploadLogs\(string gamePath\)' MainWindow.xaml.cs >/dev/null; then
   fail "launcher bridge must expose manual log upload"
 fi
 
@@ -220,6 +220,58 @@ fi
 
 if rg -n 'AKIA|SECRET|TOKEN|Bearer |x-amz-credential|github_pat|ghp_' LogUploadService.cs MainWindow.xaml.cs Resources/Web >/dev/null; then
   fail "launcher must not embed storage or GitHub credentials for log upload"
+fi
+
+if [ ! -f GameLogCollector.cs ]; then
+  fail "launcher must include GameLogCollector.cs"
+fi
+
+if ! rg -n 'Client", "Saved", "Logs"' GameLogCollector.cs >/dev/null; then
+  fail "game log collector must read Client\\Saved\\Logs"
+fi
+
+if ! rg -n 'Client-backup-\*\.log' GameLogCollector.cs >/dev/null; then
+  fail "game log collector must include latest Client backup logs"
+fi
+
+if ! rg -n 'Client", "Saved", "Crashes"' GameLogCollector.cs >/dev/null; then
+  fail "game log collector must inspect Client\\Saved\\Crashes"
+fi
+
+if ! rg -n 'CrashContext\.runtime-xml|CrashReportClient\.ini' GameLogCollector.cs >/dev/null; then
+  fail "game log collector must include crash text metadata"
+fi
+
+if ! rg -n 'CrashSightLog|pipe_client|cgsdk_\.log' GameLogCollector.cs >/dev/null; then
+  fail "game log collector must include small auxiliary game logs"
+fi
+
+if rg -n '\.dmp|SaveGames|LocalStorage|ManifestResource|ManifestLauncher|ManifestLang|VideoManifest|launcherDownload' GameLogCollector.cs LogUploadService.cs >/dev/null; then
+  fail "game log upload must not include dumps, save data, local storage, manifests, or launcher downloads"
+fi
+
+if ! rg -n 'SanitizeTextLog' GameLogCollector.cs LogUploadService.cs >/dev/null; then
+  fail "game text logs must be sanitized before upload"
+fi
+
+if ! rg -n 'Computer|UserName|MachineId|DeviceId|LoginId' GameLogCollector.cs >/dev/null; then
+  fail "game log sanitizer must redact machine/user/device/login fields"
+fi
+
+if ! rg -n 'GamePathRegex' GameLogCollector.cs >/dev/null; then
+  fail "game log sanitizer must redact mapped Wuthering Waves paths"
+fi
+
+if ! rg -n 'game/' LogUploadService.cs >/dev/null; then
+  fail "game logs must be placed under game/ in upload archive"
+fi
+
+if ! rg -n 'launcher/' LogUploadService.cs >/dev/null; then
+  fail "launcher logs must be placed under launcher/ in upload archive"
+fi
+
+if ! rg -n 'UploadLogs\(S\.gamePath' Resources/Web/script-misc.js >/dev/null; then
+  fail "manual log upload must pass selected game path"
 fi
 
 echo "launcher consistency checks passed"

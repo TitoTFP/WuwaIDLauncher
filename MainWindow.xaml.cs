@@ -1226,11 +1226,11 @@ public class LauncherBridge
 
     public bool GetLogUploadEnabled() => LogUploadService.IsEnabled();
 
-    public void UploadLogs() =>
+    public void UploadLogs(string gamePath) =>
         Task.Run(async () =>
         {
             _w.RunScript("window.onLogUploadStarted && window.onLogUploadStarted()");
-            var result = await LogUploadService.UploadLatestLogsAsync();
+            var result = await LogUploadService.UploadLatestLogsAsync(gamePath);
             var escaped = JsonSerializer.Serialize(result);
             _w.RunScript($"window.onLogUploadFinished && window.onLogUploadFinished({escaped})");
         });

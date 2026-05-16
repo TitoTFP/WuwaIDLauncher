@@ -28,7 +28,7 @@ function initLogUpload() {
         btn.disabled = true;
         btn.classList.add('rp-dropdown__item--loading');
         toast('Mengirim log diagnostik...', 'info');
-        bridge()?.UploadLogs();
+        bridge()?.UploadLogs(S.gamePath || '');
     });
 }
 
@@ -569,6 +569,5 @@ function fcSetStatus(msg, isError, isSuccess = false) {
     el.className = 'fc-status' + (isError ? ' fc-status--err' : isSuccess ? ' fc-status--ok' : '');
     el.textContent = msg;
 }
-
 
 

@@ -10,14 +10,15 @@ namespace WuwaIDLauncher;
 
 internal static class LogUploadService
 {
-    internal const string LogUploadEndpoint = "https://logs.titotfp.my.id/api/logs";
+    internal const string LogUploadEndpoint = "";
     const int MaxLogFiles = 3;
     const long MaxLogBytes = 2 * 1024 * 1024;
+    const long MaxGameLogBytes = 4 * 1024 * 1024;
 
     internal static bool IsEnabled() =>
         !string.IsNullOrWhiteSpace(LogUploadEndpoint);
 
-    internal static async Task<string> UploadLatestLogsAsync(CancellationToken cancellationToken = default)
+    internal static async Task<string> UploadLatestLogsAsync(string? gamePath = null, CancellationToken cancellationToken = default)
     {
         if (!IsEnabled())
             return "Log upload belum dikonfigurasi.";
@@ -25,7 +26,7 @@ internal static class LogUploadService
         try
         {
             AppLogger.Info("Manual log upload started");
-            var archive = CreateLogArchive();
+            var archive = CreateLogArchive(gamePath);
             if (archive.Length == 0)
                 return "Belum ada log untuk dikirim.";
 
@@ -53,20 +54,11 @@ internal static class LogUploadService
         }
     }
 
-    static byte[] CreateLogArchive()
+    static byte[] CreateLogArchive(string? gamePath)
     {
-        var logsDir = Path.Combine(MainWindow.AppDataFolder, "Logs");
-        if (!Directory.Exists(logsDir))
-            return [];
-
-        var files = Directory.EnumerateFiles(logsDir, "launcher-*.log")
-            .Select(path => new FileInfo(path))
-            .Where(file => file.Exists && file.Length > 0)
-            .OrderByDescending(file => file.LastWriteTimeUtc)
-            .Take(MaxLogFiles)
-            .ToList();
-
-        if (files.Count == 0)
+        var files = CollectLauncherLogs();
+        var gameLogs = GameLogCollector.Collect(gamePath, MaxGameLogBytes);
+        if (files.Count == 0 && gameLogs.Count == 0)
             return [];
 
         using var archiveStream = new MemoryStream();
@@ -84,13 +76,41 @@ internal static class LogUploadService
                     continue;
 
                 total += bytes.Length;
-                var entry = archive.CreateEntry(SafeEntryName(file.Name), CompressionLevel.Fastest);
-                using var entryStream = entry.Open();
-                entryStream.Write(bytes, 0, bytes.Length);
+                WriteEntry(archive, "launcher/" + SafeEntryName(file.Name), bytes);
+            }
+
+            foreach (var item in gameLogs)
+            {
+                if (total >= MaxLogBytes + MaxGameLogBytes)
+                    break;
+
+                var remaining = MaxLogBytes + MaxGameLogBytes - total;
+                var bytes = item.Content.Length > remaining
+                    ? item.Content.Take((int)remaining).ToArray()
+                    : item.Content;
+                if (bytes.Length == 0)
+                    continue;
+
+                total += bytes.Length;
+                WriteEntry(archive, "game/" + item.EntryName, bytes);
             }
         }
 
         return archiveStream.ToArray();
+    }
+
+    static List<FileInfo> CollectLauncherLogs()
+    {
+        var logsDir = Path.Combine(MainWindow.AppDataFolder, "Logs");
+        if (!Directory.Exists(logsDir))
+            return [];
+
+        return Directory.EnumerateFiles(logsDir, "launcher-*.log")
+            .Select(path => new FileInfo(path))
+            .Where(file => file.Exists && file.Length > 0)
+            .OrderByDescending(file => file.LastWriteTimeUtc)
+            .Take(MaxLogFiles)
+            .ToList();
     }
 
     static byte[] ReadBoundedLogBytes(string path, long maxBytes)
@@ -111,6 +131,13 @@ internal static class LogUploadService
 
     static string SafeEntryName(string fileName) =>
         Path.GetFileName(fileName).Replace('\\', '_').Replace('/', '_');
+
+    static void WriteEntry(ZipArchive archive, string entryName, byte[] bytes)
+    {
+        var entry = archive.CreateEntry(entryName, CompressionLevel.Fastest);
+        using var entryStream = entry.Open();
+        entryStream.Write(bytes, 0, bytes.Length);
+    }
 
     static string GetAppVersion() =>
         Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "1.0.0";
