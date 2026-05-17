@@ -21,20 +21,52 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        AppLogger.Initialize(WuwaIDLauncher.MainWindow.AppDataFolder);
+        AppLogger.Info("Application startup");
         
         if (Debugger.IsAttached || IsDebuggerPresent())
-        { Shutdown(); return; }
+        {
+            AppLogger.Warn("Debugger detected at startup");
+            Shutdown();
+            return;
+        }
         CheckRemoteDebuggerPresent(GetCurrentProcess(), out var remote);
-        if (remote) { Shutdown(); return; }
+        if (remote)
+        {
+            AppLogger.Warn("Remote debugger detected at startup");
+            Shutdown();
+            return;
+        }
 
         _mutex = new Mutex(true, "WuwaIDLauncher_SingleInstance", out bool isNew);
-        if (!isNew) { Shutdown(); return; }
+        if (!isNew)
+        {
+            AppLogger.Warn("Second launcher instance blocked");
+            Shutdown();
+            return;
+        }
 
         base.OnStartup(e);
 
-        DispatcherUnhandledException += (_, args) => { KillWebView2Tree(); args.Handled = false; };
-        AppDomain.CurrentDomain.UnhandledException += (_, _) => KillWebView2Tree();
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => KillWebView2Tree();
+        DispatcherUnhandledException += (_, args) =>
+        {
+            AppLogger.Exception(args.Exception, "Dispatcher unhandled exception");
+            KillWebView2Tree();
+            args.Handled = false;
+        };
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            if (args.ExceptionObject is Exception ex)
+                AppLogger.Exception(ex, "Unhandled exception");
+            else
+                AppLogger.Error("Unhandled non-exception object: " + args.ExceptionObject);
+            KillWebView2Tree();
+        };
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            AppLogger.Info("Process exit");
+            KillWebView2Tree();
+        };
 
         var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         timer.Tick += (_, _) =>
@@ -42,6 +74,7 @@ public partial class App : Application
             CheckRemoteDebuggerPresent(GetCurrentProcess(), out var r);
             if (Debugger.IsAttached || IsDebuggerPresent() || r)
             {
+                AppLogger.Warn("Debugger detected after startup");
                 KillWebView2Tree();
                 Environment.Exit(1);
             }
@@ -56,6 +89,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
+            AppLogger.Exception(ex, "Main window startup failed");
             MessageBox.Show($"Lỗi khởi tạo: {ex.Message}");
             Shutdown(1);
         }
@@ -63,6 +97,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        AppLogger.Info("Application exit");
         KillWebView2Tree();
         _mutex?.ReleaseMutex();
         _mutex?.Dispose();
@@ -76,8 +111,12 @@ public partial class App : Application
         {
             var proc = Process.GetProcessById((int)WebView2BrowserPid);
             proc.Kill(entireProcessTree: true);
+            AppLogger.Info("Killed WebView2 process tree");
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLogger.Exception(ex, "Failed to kill WebView2 process tree");
+        }
         WebView2BrowserPid = 0;
     }
 }

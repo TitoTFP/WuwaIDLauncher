@@ -5,6 +5,54 @@ function checkLauncherUpdate(silent = true) {
     if (bridge()) bridge().CheckLauncherUpdate();
 }
 
+function initLogUpload() {
+    const btn = document.getElementById('menuUploadLogs');
+    if (!btn) return;
+
+    let enabled = false;
+    try {
+        enabled = !!bridge()?.GetLogUploadEnabled();
+    } catch {}
+
+    btn.disabled = !enabled;
+    btn.title = enabled
+        ? 'Kirim log diagnostik'
+        : 'Log upload belum dikonfigurasi';
+    btn.classList.toggle('rp-dropdown__item--dim', !enabled);
+
+    btn.addEventListener('click', () => {
+        if (!enabled) {
+            toast('Log upload belum dikonfigurasi', 'info');
+            return;
+        }
+        btn.disabled = true;
+        btn.classList.add('rp-dropdown__item--loading');
+        toast('Mengirim log diagnostik...', 'info');
+        bridge()?.UploadLogs(S.gamePath || '');
+    });
+}
+
+window.onLogUploadStarted = () => {
+    const btn = document.getElementById('menuUploadLogs');
+    if (btn) {
+        btn.disabled = true;
+        btn.classList.add('rp-dropdown__item--loading');
+    }
+};
+
+window.onLogUploadFinished = (msg) => {
+    const btn = document.getElementById('menuUploadLogs');
+    const enabled = !!bridge()?.GetLogUploadEnabled?.();
+    if (btn) {
+        btn.disabled = !enabled;
+        btn.classList.remove('rp-dropdown__item--loading');
+        btn.classList.toggle('rp-dropdown__item--dim', !enabled);
+    }
+
+    const text = msg || 'Log upload selesai.';
+    toast(text, text.toLowerCase().startsWith('gagal') ? 'err' : 'ok');
+};
+
 function loadReleaseNotes() {
     if (bridge()) {
         bridge().GetVHReleaseNotes();
@@ -554,6 +602,3 @@ function fcSetStatus(msg, isError, isSuccess = false) {
     el.className = 'fc-status' + (isError ? ' fc-status--err' : isSuccess ? ' fc-status--ok' : '');
     el.textContent = msg;
 }
-
-
-

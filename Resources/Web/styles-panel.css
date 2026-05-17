@@ -699,6 +699,16 @@
 .rp-dropdown__item:disabled {
     color: var(--text-3); cursor: var(--cursor-select);
 }
+.rp-dropdown__item--loading {
+    opacity: 0.65;
+}
+.rp-dropdown__item--loading svg {
+    animation: logUploadPulse 900ms ease-in-out infinite;
+}
+@keyframes logUploadPulse {
+    0%, 100% { transform: translateY(0); opacity: 0.5; }
+    50% { transform: translateY(-2px); opacity: 1; }
+}
 .rp-dropdown__item--danger {
     color: var(--red) !important;
 }

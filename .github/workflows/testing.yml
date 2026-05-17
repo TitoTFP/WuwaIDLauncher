@@ -46,4 +46,4 @@ jobs:
           name: WuwaIDLauncher-testing-${{ github.run_number }}
           path: ./WuwaIDLauncher-testing-${{ github.run_number }}.zip
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
