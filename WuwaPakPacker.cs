@@ -8,8 +8,6 @@ static class WuwaPakPacker
     const uint Magic            = 0x5A6F12E1;
     const uint VersionMajorWuwa = 12;
 
-    const string FontInPakPath   = "Client/Content/Aki/UI/Framework/LGUI/Font/LaguSansBold.ufont";
-    const string DefaultMount    = "../../../";
 
 
     static void WriteString(BinaryWriter w, string s)
@@ -181,11 +179,4 @@ static class WuwaPakPacker
     }
 
 
-    public static string PackFont(string modDir, string pakName, byte[] fontData)
-    {
-        Directory.CreateDirectory(modDir);
-        var dest = Path.Combine(modDir, pakName + "_100_P.pak");
-        Pack(dest, DefaultMount, 0, [(FontInPakPath, fontData)]);
-        return dest;
-    }
 }

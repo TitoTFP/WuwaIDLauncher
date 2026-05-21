@@ -1,4 +1,4 @@
-﻿
+
 .start-btn {
     position: relative;
     width: 100%; min-width: 210px; height: 54px;
@@ -199,6 +199,8 @@
 .dx11-row {
     display: flex;
     padding: 0 0 5px;
+    width: 306px;
+    align-self: flex-end;
 }
 .dx11-label {
     display: flex;

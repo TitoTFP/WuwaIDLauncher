@@ -36,6 +36,7 @@ public partial class MainWindow : Window
     volatile bool _launchInProgress;
     volatile bool _signatureRestorePending;
     volatile bool _gameProcessRunning;
+    volatile bool _updateInProgress;
     string? _launchGamePath;
     string? _pendingBgm, _pendingVideo, _pendingUpdateDate;
     SplashWindow? _splash;
@@ -151,6 +152,7 @@ public partial class MainWindow : Window
 
             webView.CoreWebView2.DOMContentLoaded += OnDOMContentLoaded;
             webView.CoreWebView2.NavigationStarting += OnNavigationStarting;
+            webView.CoreWebView2.NewWindowRequested += OnNewWindowRequested;
             webView.CoreWebView2.Navigate("https://app.local/index.html");
 
 #if DEBUG
@@ -167,6 +169,23 @@ public partial class MainWindow : Window
             _splash?.FadeOutAndClose();
             _splash = null;
             Application.Current.Shutdown(1);
+        }
+    }
+
+    void OnNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs e)
+    {
+        e.Handled = true;
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = e.Uri,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Exception(ex, "Failed to open link in system browser: " + e.Uri);
         }
     }
 
@@ -774,11 +793,34 @@ public partial class MainWindow : Window
 
     internal async Task PerformLauncherUpdate(string version, string zipUrl)
     {
+        if (_updateInProgress)
+        {
+            AppLogger.Warn("Duplicate launcher update request ignored");
+            return;
+        }
+        _updateInProgress = true;
         try
         {
             AppLogger.Info("Launcher update started: " + version);
             var updateDir = Path.Combine(Path.GetTempPath(), "WuwaIDLauncher_update");
-            if (Directory.Exists(updateDir)) Directory.Delete(updateDir, true);
+            
+            if (Directory.Exists(updateDir))
+            {
+                for (int i = 0; i < 5; i++)
+                {
+                    try
+                    {
+                        Directory.Delete(updateDir, true);
+                        break;
+                    }
+                    catch (IOException ex) when (i < 4)
+                    {
+                        AppLogger.Warn($"Failed to delete update directory (attempt {i + 1}): {ex.Message}. Retrying...");
+                        await Task.Delay(500);
+                    }
+                }
+            }
+            
             Directory.CreateDirectory(updateDir);
             var zipPath = Path.Combine(updateDir, "update.zip");
 
@@ -792,31 +834,46 @@ public partial class MainWindow : Window
             AppLogger.Info("Launcher update download started; bytes=" + total);
 
             await using (var net = await resp.Content.ReadAsStreamAsync())
-            await using (var fs = new FileStream(zipPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, true))
             {
-                var buf = new byte[65536];
-                long got = 0;
-                var sw = Stopwatch.StartNew();
-                int read;
-                while ((read = await net.ReadAsync(buf)) > 0)
+                await using (var fs = new FileStream(zipPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, true))
                 {
-                    await fs.WriteAsync(buf.AsMemory(0, read));
-                    got += read;
-                    if (sw.ElapsedMilliseconds >= 300)
+                    var buf = new byte[65536];
+                    long got = 0;
+                    var sw = Stopwatch.StartNew();
+                    int read;
+                    while ((read = await net.ReadAsync(buf)) > 0)
                     {
-                        int pct = total > 0 ? (int)(got * 100 / total) : 0;
-                        var sizeText = total > 0
-                            ? $"{got / 1_048_576.0:F1} / {total / 1_048_576.0:F1} MB"
-                            : $"{got / 1_048_576.0:F1} MB";
-                        RunScript($"window.onLauncherUpdateProgress({pct}, {JsStr(sizeText)})");
-                        sw.Restart();
+                        await fs.WriteAsync(buf.AsMemory(0, read));
+                        got += read;
+                        if (sw.ElapsedMilliseconds >= 300)
+                        {
+                            int pct = total > 0 ? (int)(got * 100 / total) : 0;
+                            var sizeText = total > 0
+                                ? $"{got / 1_048_576.0:F1} / {total / 1_048_576.0:F1} MB"
+                                : $"{got / 1_048_576.0:F1} MB";
+                            RunScript($"window.onLauncherUpdateProgress({pct}, {JsStr(sizeText)})");
+                            sw.Restart();
+                        }
                     }
                 }
             }
 
             RunScript("window.onLauncherUpdateProgress(95, 'Mengekstrak...')");
             var extractDir = Path.Combine(updateDir, "extracted");
-            ZipFile.ExtractToDirectory(zipPath, extractDir);
+            
+            for (int i = 0; i < 5; i++)
+            {
+                try
+                {
+                    ZipFile.ExtractToDirectory(zipPath, extractDir);
+                    break;
+                }
+                catch (IOException ex) when (i < 4)
+                {
+                    AppLogger.Warn($"Failed to extract update.zip (attempt {i + 1}): {ex.Message}. Retrying...");
+                    await Task.Delay(500);
+                }
+            }
 
             var newExe = Directory.GetFiles(extractDir, "WuwaIDLauncher.exe", SearchOption.AllDirectories)
                                    .FirstOrDefault()
@@ -827,7 +884,7 @@ public partial class MainWindow : Window
                              ?? throw new Exception("Direktori exe saat ini tidak diketahui.");
             var currentPid = Environment.ProcessId;
 
-            var scriptPath = Path.Combine(updateDir, "updater.ps1");
+            var scriptPath = Path.Combine(Path.GetTempPath(), "WuwaIDLauncher_updater.ps1");
             var newExeEscaped = newExe.Replace("'", "''");
             var currentExeEscaped = currentExe.Replace("'", "''");
             var scriptContent =
@@ -848,9 +905,10 @@ public partial class MainWindow : Window
                 "}\n" +
                 "# Cleanup\n" +
                 "Start-Sleep -Seconds 2\n" +
-                $"Remove-Item -Recurse -Force '{updateDir.Replace("'", "''")}' -ErrorAction SilentlyContinue\n";
+                $"Remove-Item -Recurse -Force '{updateDir.Replace("'", "''")}' -ErrorAction SilentlyContinue\n" +
+                $"Remove-Item -Force $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue\n";
             File.WriteAllText(scriptPath, scriptContent, System.Text.Encoding.UTF8);
-            AppLogger.Info("Launcher updater script written");
+            AppLogger.Info("Launcher updater script written to: " + scriptPath);
 
             RunScript("window.onLauncherUpdateProgress(100, 'Memulai ulang...')");
 
@@ -873,6 +931,10 @@ public partial class MainWindow : Window
         {
             AppLogger.Exception(ex, "Launcher update failed");
             RunScript($"window.onLauncherUpdateError({JsStr(ex.Message)})");
+        }
+        finally
+        {
+            _updateInProgress = false;
         }
     }
 
@@ -1214,124 +1276,7 @@ public class LauncherBridge
     }
 
 
-    static readonly string RepoFontPak = "UTMAlexander_100_P.pak";
 
-    public string BrowseFontFile() =>
-        _w.Dispatcher.Invoke(() =>
-        {
-            var dlg = new OpenFileDialog
-            {
-                Title  = "Pilih file font",
-                Filter = "Font files (*.ttf;*.otf)|*.ttf;*.otf|All files (*.*)|*.*"
-            };
-            return dlg.ShowDialog(_w) == true ? dlg.FileName : "";
-        });
-
-    public string GetCustomFontName(string gamePath)
-    {
-        AppLogger.SetGamePath(gamePath);
-        try
-        {
-            var modDir = Helpers.PakFolderPath(gamePath);
-            if (!Directory.Exists(modDir)) return "";
-            var custom = Directory.GetFiles(modDir, "*_100_P.pak")
-                .Select(Path.GetFileName)
-                .FirstOrDefault(n => !string.Equals(n, RepoFontPak, StringComparison.OrdinalIgnoreCase));
-            return custom is null ? "" : Path.GetFileNameWithoutExtension(custom);
-        }
-        catch (Exception ex)
-        {
-            AppLogger.Exception(ex, "Failed to read custom font name");
-            return "";
-        }
-    }
-
-    public void CreateFontPak(string fontFilePath, string gamePath, string pakName) =>
-        Task.Run(async () =>
-        {
-            AppLogger.SetGamePath(gamePath);
-            AppLogger.Info("Font pak creation started");
-            try
-            {
-                _w.RunScript("window.onFontPakProgress('Membaca file font...')");
-
-                if (!File.Exists(fontFilePath))
-                    throw new FileNotFoundException("File font tidak ditemukan: " + fontFilePath);
-
-                byte[] fontData = await File.ReadAllBytesAsync(fontFilePath);
-                if (fontData.Length == 0)
-                    throw new InvalidDataException("File font kosong.");
-
-                _w.RunScript("window.onFontPakProgress('Membuat paket .pak...')");
-
-                var modDir = Helpers.PakFolderPath(gamePath);
-                Directory.CreateDirectory(modDir);
-
-                foreach (var old in Directory.GetFiles(modDir, "*_100_P.pak"))
-                    try { File.Delete(old); }
-                    catch (Exception ex) { AppLogger.Exception(ex, "Failed to delete old font pak"); }
-
-                var outputPakPath = WuwaPakPacker.PackFont(modDir, pakName, fontData);
-
-                long pakSize = new FileInfo(outputPakPath).Length;
-                string sizeStr = pakSize < 1_048_576
-                    ? $"{pakSize / 1024.0:F1} KB"
-                    : $"{pakSize / 1_048_576.0:F2} MB";
-
-                var escapedPath = JsonSerializer.Serialize(outputPakPath);
-                var escapedSize = JsonSerializer.Serialize(sizeStr);
-                AppLogger.Info("Font pak creation completed");
-                _w.RunScript($"window.onFontPakDone({escapedPath}, {escapedSize})");
-            }
-            catch (Exception ex)
-            {
-                AppLogger.Exception(ex, "Font pak creation failed");
-                var escaped = JsonSerializer.Serialize(ex.Message);
-                _w.RunScript($"window.onFontPakError({escaped})");
-            }
-        });
-
-    public void RemoveCustomFont(string gamePath) =>
-        Task.Run(() =>
-        {
-            AppLogger.SetGamePath(gamePath);
-            AppLogger.Info("Custom font removal started");
-            try
-            {
-                var modDir = Helpers.PakFolderPath(gamePath);
-                if (Directory.Exists(modDir))
-                {
-                    foreach (var f in Directory.GetFiles(modDir, "*_100_P.pak"))
-                        try { File.Delete(f); }
-                        catch (Exception ex) { AppLogger.Exception(ex, "Failed to delete custom font pak"); }
-                }
-
-                var versionCachePath = Path.Combine(MainWindow.AppDataFolder, "versions.json");
-                if (File.Exists(versionCachePath))
-                {
-                    try
-                    {
-                        var json = File.ReadAllText(versionCachePath);
-                        var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(json) ?? new();
-                        dict.Remove(RepoFontPak);
-                        File.WriteAllText(versionCachePath, JsonSerializer.Serialize(dict));
-                    }
-                    catch (Exception ex)
-                    {
-                        AppLogger.Exception(ex, "Failed to update version cache after font removal");
-                    }
-                }
-
-                AppLogger.Info("Custom font removal completed");
-                _w.RunScript("window.onFontRevertDone()");
-            }
-            catch (Exception ex)
-            {
-                AppLogger.Exception(ex, "Custom font removal failed");
-                var escaped = JsonSerializer.Serialize(ex.Message);
-                _w.RunScript($"window.onFontRevertError({escaped})");
-            }
-        });
 
 
     static string GetPerfIniPath(string gamePath) =>
