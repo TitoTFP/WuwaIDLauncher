@@ -1,0 +1,32 @@
+name: CI - Consistency & Tests
+
+on:
+  pull_request:
+  push:
+    branches: [alpha, main]
+
+permissions:
+  contents: read
+
+jobs:
+  consistency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ripgrep
+        run: sudo apt-get install -y ripgrep
+      - name: Run consistency checks
+        run: bash tests/verify_launcher_consistency.sh
+
+  unit-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore dependencies
+        run: dotnet restore
+      - name: Run unit tests
+        run: dotnet test WuwaIDLauncher.Tests/WuwaIDLauncher.Tests.csproj --no-restore --verbosity normal

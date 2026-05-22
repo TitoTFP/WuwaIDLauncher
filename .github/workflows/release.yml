@@ -30,6 +30,15 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore
 
+      - name: Install ripgrep
+        run: choco install ripgrep -y --no-progress
+
+      - name: Run consistency checks
+        run: bash tests/verify_launcher_consistency.sh
+
+      - name: Run unit tests
+        run: dotnet test WuwaIDLauncher.Tests/WuwaIDLauncher.Tests.csproj --no-restore --verbosity normal
+
       - name: Publish (single-file, self-contained)
         run: |
           dotnet publish WuwaIDLauncher.csproj `

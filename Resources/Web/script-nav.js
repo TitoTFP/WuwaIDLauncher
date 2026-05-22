@@ -1,4 +1,4 @@
-﻿function initTopNav() {
+function initTopNav() {
     document.querySelectorAll('.top-nav__item').forEach(btn => {
         btn.addEventListener('click', () => switchPage(btn.dataset.page));
     });
@@ -54,7 +54,6 @@ function switchPage(page) {
         b.classList.toggle('active', b.dataset.page === page));
     document.getElementById('rightPanel').style.display        = isHome                  ? '' : 'none';
     document.getElementById('pagePerformance').style.display   = page === 'performance'  ? '' : 'none';
-    document.getElementById('pageFontCreator').style.display   = page === 'font-creator' ? '' : 'none';
     
     const ap = document.getElementById('audioPlayer');
     const sp = document.getElementById('sidePanel');
@@ -62,7 +61,6 @@ function switchPage(page) {
     if (sp && sp.dataset.loaded) sp.style.display = isHome ? 'flex' : 'none';
     updateNavIndicator();
     if (page === 'performance') { pmRefreshStatus(); }
-    if (page === 'font-creator') { fcRefreshStatus(); checkAdminIfNeeded(); }
 }
 
 function updateNavIndicator() {

@@ -7,7 +7,6 @@
     <link rel="stylesheet" href="styles-base.css">
     <link rel="stylesheet" href="styles-panel.css">
     <link rel="stylesheet" href="styles-effects.css">
-    <link rel="stylesheet" href="styles-font.css">
 </head>
 <body>
     
@@ -51,7 +50,6 @@
             <nav class="top-nav" id="topNav">
                 <button class="top-nav__item active" data-page="home">HOME</button>
                 <button class="top-nav__item" data-page="performance">PERFORMA</button>
-                <button class="top-nav__item" data-page="font-creator">FONT KUSTOM</button>
                 <div class="top-nav__indicator" id="topNavIndicator">
                     <canvas id="navWaveCanvas"></canvas>
                 </div>
@@ -81,6 +79,12 @@
                     <div class="lu-pbar__fill" id="luPbarFill"></div>
                 </div>
                 <div class="lu-pbar__sub" id="luPbarSub"></div>
+            </div>
+            <div class="lu-restart-warning" id="luRestartWarning" style="display:none;">
+                <div class="lu-restart-warning__icon">⚠️</div>
+                <p class="lu-restart-warning__title">Launcher akan dimulai ulang</p>
+                <p class="lu-restart-warning__msg">Launcher akan menutup otomatis dalam <strong id="luRestartCountdown">12</strong> detik</p>
+                <p class="lu-restart-warning__hint">Jangan buka launcher secara manual — biarkan proses restart berjalan.</p>
             </div>
             <div class="lu-modal__btns" id="luModalBtns">
                 <button class="lu-modal__btn lu-modal__btn--secondary" id="luBtnLater">Nanti</button>
@@ -160,6 +164,12 @@
                 <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg>
                 Kirim log diagnostik
             </button>
+            <a class="rp-dropdown__item rp-dropdown__item--trakteer" id="menuDukung" href="https://trakteer.id/TitoTFP" target="_blank" rel="noopener noreferrer" title="Dukung Kami di Trakteer">
+                <svg viewBox="0 0 24 24" width="14" height="14">
+                    <path fill="currentColor" d="M7 3h8.5a4.5 4.5 0 0 1 .5 8.97V13a5 5 0 0 1-5 5H7a5 5 0 0 1-5-5V8a5 5 0 0 1 5-5Zm9 2.1v4.8A2.5 2.5 0 0 0 16 5.1ZM7.1 8.2c-1.1 0-1.9.83-1.9 1.88 0 2.18 3.52 4.1 3.8 4.1s3.8-1.92 3.8-4.1c0-1.05-.8-1.88-1.9-1.88-.74 0-1.45.43-1.9 1.08-.45-.65-1.16-1.08-1.9-1.08ZM5 20h12v2H5v-2Z"/>
+                </svg>
+                Dukung Kami
+            </a>
             <div class="rp-dropdown__sep"></div>
             <button class="rp-dropdown__item rp-dropdown__item--danger" id="menuUninstall">
                 <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
@@ -397,53 +407,6 @@
         </div>
     </div>
 
-    <div id="pageFontCreator" class="page-overlay" style="display:none;">
-        <div class="fc-panel">
-
-            <div class="fc-panel__header">
-                <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M9.6 14L12 7.2 14.4 14M11 5L5.5 19h2.2l1.1-3H15l1.1 3h2.2L13 5h-2z"/></svg>
-                <span>Pasang Font Kustom</span>
-            </div>
-            <p class="fc-panel__sub">Ganti font bawaan Patch ID dengan font kustom</p>
-
-            <div class="fc-current" id="fcCurrent">
-                <span class="fc-current__label">Font saat ini:</span>
-                <span class="fc-current__name" id="fcCurrentName">Memuat...</span>
-                <button class="fc-btn fc-btn--ghost" id="fcRevertBtn" style="display:none;" title="Hapus font kustom, gunakan font asli dari repo">
-                    <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>
-                    Gunakan font asli
-                </button>
-            </div>
-
-            <div class="fc-divider"></div>
-
-            <div class="fc-field">
-                <label class="fc-label">File Font baru <span class="fc-label__note">(TTF / OTF)</span></label>
-                <div class="fc-file-row">
-                    <div class="fc-file-display" id="fcFontDisplay">Belum memilih file</div>
-                    <button class="fc-btn fc-btn--secondary" id="fcBrowseFont">Telusuri...</button>
-                </div>
-            </div>
-
-            <div class="fc-field">
-                <label class="fc-label">Nama identitas</label>
-                <div class="fc-name-row">
-                    <input class="fc-input" id="fcOutputName" type="text" value="" placeholder="Pilih font untuk mengisi otomatis..." spellcheck="false" autocomplete="off" />
-                    <span class="fc-name-suffix">_100_P.pak</span>
-                </div>
-            </div>
-
-            <div class="fc-status" id="fcStatus" style="display:none;"></div>
-
-            <div class="fc-actions">
-                <button class="fc-btn fc-btn--primary" id="fcBuildBtn" disabled>
-                    <svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M5 13h11.17l-4.88 4.88c-.39.39-.39 1.03 0 1.42.39.39 1.02.39 1.41 0l6.59-6.59c.39-.39.39-1.02 0-1.41l-6.58-6.6c-.39-.39-1.02-.39-1.41 0-.39.39-.39 1.02 0 1.41L16.17 11H5c-.55 0-1 .45-1 1s.45 1 1 1z"/></svg>
-                    Pasang font ini
-                </button>
-            </div>
-
-        </div>
-    </div>
 
     <div class="audio-player" id="audioPlayer">
         <div class="ap-art">
@@ -499,6 +462,8 @@
         </div>
     </div>
 
+
+
     <div id="toasts"></div>
 
     <div id="confirmModal" class="modal-backdrop" style="display:none;">
@@ -535,12 +500,12 @@
             </p>
             <div class="admin-modal__features">
                 <div class="admin-modal__feat">
-                    <div class="admin-modal__feat-icon admin-modal__feat-icon--font">
-                        <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M9.6 14.4 6.4 4H4L.8 14.4h2.1l.7-2.4h3.2l.7 2.4H9.6zM4 10.4l1.2-4 1.2 4H4zm10.4-6.4v5.6l-1.6-5.6H10v12h2V7.6l1.8 6h1.2l1.8-6V16h2V4h-2.8l-1.6 5.6z"/></svg>
+                    <div class="admin-modal__feat-icon admin-modal__feat-icon--perf">
+                        <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 16h-2v-2h2v2zm0-4h-2V7h2v7z"/></svg>
                     </div>
                     <div>
-                        <div class="admin-modal__feat-title">FONT KUSTOM</div>
-                        <div class="admin-modal__feat-desc">Instal file <code>.pak</code> ke dalam direktori mod game</div>
+                        <div class="admin-modal__feat-title">OPTIMASI PERFORMA</div>
+                        <div class="admin-modal__feat-desc">Modifikasi file konfigurasi Engine.ini game</div>
                     </div>
                 </div>
             </div>
@@ -554,7 +519,8 @@
             </div>
         </div>
     </div>
-    <audio id="bgMusic" loop preload="auto">
+
+<audio id="bgMusic" loop preload="auto">
         
     </audio>
     <script src="script-core.js"></script>
@@ -565,3 +531,4 @@
     <script src="script-perf.js"></script>
 </body>
 </html>
+

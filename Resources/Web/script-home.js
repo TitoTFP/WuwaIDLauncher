@@ -78,6 +78,8 @@ function initBottomBar() {
     });
 }
 
+
+
 async function handleStart() {
     if (S.installing || S.launching) return;
     if (!S.gamePath) {

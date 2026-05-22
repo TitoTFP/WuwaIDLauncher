@@ -33,7 +33,7 @@
 
     --top-h: 70px;
     --sidebar-w: 340px;
-    --rp-w: 280px;
+    --rp-w: 400px;
     --edge-gap: 20px;
     --radius: 14px;
     --radius-sm: 8px;
@@ -228,4 +228,3 @@ body.sidebar-open .bg-vignette {
     width: 100%; height: 100%;
     background: transparent;
 }
-

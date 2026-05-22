@@ -8,8 +8,6 @@ static class WuwaPakPacker
     const uint Magic            = 0x5A6F12E1;
     const uint VersionMajorWuwa = 12;
 
-    const string FontInPakPath   = "Client/Content/Aki/UI/Framework/LGUI/Font/LaguSansBold.ufont";
-    const string DefaultMount    = "../../../";
 
 
     static void WriteString(BinaryWriter w, string s)
@@ -24,7 +22,7 @@ static class WuwaPakPacker
 
     static byte[] Sha1(byte[] data) => SHA1.HashData(data);
 
-    static ulong Fnv64Path(string path, ulong seed)
+    internal static ulong Fnv64Path(string path, ulong seed)
     {
         const ulong Off  = 0xcbf29ce484222325UL;
         const ulong Prime = 0x00000100000001b3UL;
@@ -38,7 +36,7 @@ static class WuwaPakPacker
         return h;
     }
 
-    static uint ScrambleFlags(uint f)
+    internal static uint ScrambleFlags(uint f)
         => ((f & 0x3fu) << 16)
          | ((f >> 6) & 0xFFFFu)
          | ((f << 6) & (1u << 28))
@@ -181,11 +179,4 @@ static class WuwaPakPacker
     }
 
 
-    public static string PackFont(string modDir, string pakName, byte[] fontData)
-    {
-        Directory.CreateDirectory(modDir);
-        var dest = Path.Combine(modDir, pakName + "_100_P.pak");
-        Pack(dest, DefaultMount, 0, [(FontInPakPath, fontData)]);
-        return dest;
-    }
 }

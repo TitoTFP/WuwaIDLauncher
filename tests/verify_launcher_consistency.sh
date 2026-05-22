@@ -30,7 +30,7 @@ if rg -n 'name == "version\.dll"|name == "version\.dll" \?' MainWindow.xaml.cs >
   fail "installer must not download or route version.dll"
 fi
 
-if ! rg -n 'PakFolderRelativePath = @"Client\\Content\\Paks"' MainWindow.xaml.cs >/dev/null; then
+if ! rg -n 'PakFolderRelativePath = @"Client\\Content\\Paks"' MainWindow.xaml.cs Helpers.cs >/dev/null; then
   fail "installer must target Client\\Content\\Paks"
 fi
 
@@ -38,7 +38,7 @@ if rg -n 'Path\.Combine\(gamePath, @"Client\\Binaries\\Win64", MainWindow\.ModFo
   fail "mod pak operations must not target Client\\Binaries\\Win64\\wuwaIndonesia"
 fi
 
-if ! rg -n 'PakFileName = "pakchunk0-ID-WindowsNoEditor_1000_P\.pak"' MainWindow.xaml.cs >/dev/null; then
+if ! rg -n 'PakFileName = "pakchunk0-ID-WindowsNoEditor_1000_P\.pak"' MainWindow.xaml.cs Helpers.cs >/dev/null; then
   fail "installer must use pakchunk0-ID-WindowsNoEditor_1000_P.pak"
 fi
 
@@ -46,23 +46,23 @@ if rg -n 'internal const string PakFileName = "WuWaID_99_P\.pak"' MainWindow.xam
   fail "installer must not use legacy WuWaID_99_P.pak as primary pak"
 fi
 
-if ! rg -n 'LegacyPakFileName = "WuWaID_99_P\.pak"' MainWindow.xaml.cs >/dev/null; then
+if ! rg -n 'LegacyPakFileName = "WuWaID_99_P\.pak"' MainWindow.xaml.cs Helpers.cs >/dev/null; then
   fail "installer must keep legacy pak name only for cleanup"
 fi
 
-if ! rg -n 'SigFileName = "pakchunk7-WindowsNoEditor\.sig"' MainWindow.xaml.cs >/dev/null; then
+if ! rg -n 'SigFileName = "pakchunk7-WindowsNoEditor\.sig"' MainWindow.xaml.cs Helpers.cs >/dev/null; then
   fail "launcher must use pakchunk7 signature file"
 fi
 
-if ! rg -n 'SigBackupFileName = "pakchunk7-WindowsNoEditor_backup\.sig"' MainWindow.xaml.cs >/dev/null; then
+if ! rg -n 'SigBackupFileName = "pakchunk7-WindowsNoEditor_backup\.sig"' MainWindow.xaml.cs Helpers.cs >/dev/null; then
   fail "launcher must use pakchunk7 signature backup file"
 fi
 
-if ! rg -n 'SigRestoreDelay = TimeSpan\.FromSeconds\(150\)' MainWindow.xaml.cs >/dev/null; then
+if ! rg -n 'SigRestoreDelay = TimeSpan\.FromSeconds\(150\)' MainWindow.xaml.cs Helpers.cs >/dev/null; then
   fail "launcher must restore signature after 150 seconds"
 fi
 
-if ! rg -n 'RestoreSigBackup\(gamePath\)' MainWindow.xaml.cs >/dev/null; then
+if ! rg -n 'RestoreSigBackup\(gamePath\)' MainWindow.xaml.cs Helpers.cs >/dev/null; then
   fail "launcher must restore stale signature backups"
 fi
 
@@ -144,6 +144,30 @@ fi
 
 if ! rg -n '`ID \$\{vhVer\}`' Resources/Web/script.js Resources/Web/script-home.js >/dev/null; then
   fail "version label must show ID prefix"
+fi
+
+if rg -n 'trbtnOverlay|trbtn-overlay\.min\.js|edge-cdn\.trakteer\.id' Resources/Web MainWindow.xaml.cs >/dev/null; then
+  fail "Trakteer custom button must not load the hosted overlay widget or CDN assets"
+fi
+
+if rg -n 'id="trakteerModal"' Resources/Web/index.html >/dev/null; then
+  fail "Trakteer button must open an external link, not an internal modal"
+fi
+
+if rg -n 'TRAKTEER_URL|initTrakteerModal|trakteerFrame' Resources/Web/script-home.js >/dev/null; then
+  fail "Trakteer must not use modal/iframe — open external link directly"
+fi
+
+if rg -n 'frame-src https://trakteer\.id' MainWindow.xaml.cs >/dev/null; then
+  fail "CSP must not allow Trakteer iframe (no iframe used)"
+fi
+
+if ! rg -n -- '--rp-w: 400px' Resources/Web/styles-base.css Resources/Web/styles.css >/dev/null; then
+  fail "right action panel must stay wide enough for Trakteer and install buttons"
+fi
+
+if ! rg -n 'min-width: 210px' Resources/Web/styles-effects.css Resources/Web/styles.css >/dev/null; then
+  fail "install button must keep a readable minimum width"
 fi
 
 if [ ! -f AppLogger.cs ]; then

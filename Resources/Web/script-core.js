@@ -1,4 +1,4 @@
-﻿
+
 
 const S = {
     page: 'home',
@@ -17,7 +17,6 @@ document.addEventListener('DOMContentLoaded', () => {
     initBottomBar();
     initAudioPlayer();
     initWaterRipple();
-    initFontCreator();
     initPerformanceMode();
     initSidePanel();
     initLogUpload();
