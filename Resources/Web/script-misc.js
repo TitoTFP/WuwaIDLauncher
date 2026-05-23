@@ -240,6 +240,8 @@ async function loadSettings() {
             if (j) {
                 Object.assign(S.cfg, JSON.parse(j));
                 S.gamePath = S.cfg.gamePath || '';
+                S.cfg.installMethod = normalizeInstallMethod(S.cfg.installMethod);
+                updateMethodMenu();
             }
         } catch(e) {}
     }

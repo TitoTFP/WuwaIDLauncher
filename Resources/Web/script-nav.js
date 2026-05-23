@@ -1,11 +1,56 @@
 function initTopNav() {
-    document.querySelectorAll('.top-nav__item').forEach(btn => {
+    document.querySelectorAll('.top-nav__item[data-page]').forEach(btn => {
         btn.addEventListener('click', () => switchPage(btn.dataset.page));
     });
+    initMethodMenu();
     
     requestAnimationFrame(() => {
         updateNavIndicator();
         initNavWave();
+    });
+}
+
+function normalizeInstallMethod(method) {
+    return method === 'method2' ? 'method2' : 'method1';
+}
+
+function initMethodMenu() {
+    const btn = document.getElementById('methodNavBtn');
+    const menu = document.getElementById('methodMenu');
+    if (!btn || !menu) return;
+
+    btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const open = menu.classList.toggle('open');
+        btn.classList.toggle('open', open);
+        updateMethodMenu();
+    });
+
+    menu.addEventListener('click', e => e.stopPropagation());
+    menu.querySelectorAll('[data-method]').forEach(item => {
+        item.addEventListener('click', () => {
+            S.cfg.installMethod = normalizeInstallMethod(item.dataset.method);
+            saveSettings();
+            updateMethodMenu();
+            menu.classList.remove('open');
+            btn.classList.remove('open');
+            S.installed = false;
+            clearLaunchLock();
+            toast(S.cfg.installMethod === 'method2' ? 'Metode 2 dipilih.' : 'Metode 1 dipilih.', 'ok');
+        });
+    });
+
+    document.addEventListener('click', () => {
+        menu.classList.remove('open');
+        btn.classList.remove('open');
+    });
+    updateMethodMenu();
+}
+
+function updateMethodMenu() {
+    S.cfg.installMethod = normalizeInstallMethod(S.cfg.installMethod);
+    document.querySelectorAll('.method-menu__item').forEach(item => {
+        item.classList.toggle('active', item.dataset.method === S.cfg.installMethod);
     });
 }
 
@@ -50,7 +95,7 @@ function showAdminModal() {
 function switchPage(page) {
     S.page = page;
     const isHome = page === 'home';
-    document.querySelectorAll('.top-nav__item').forEach(b =>
+    document.querySelectorAll('.top-nav__item[data-page]').forEach(b =>
         b.classList.toggle('active', b.dataset.page === page));
     document.getElementById('rightPanel').style.display        = isHome                  ? '' : 'none';
     document.getElementById('pagePerformance').style.display   = page === 'performance'  ? '' : 'none';

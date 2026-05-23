@@ -102,7 +102,7 @@ function startInstall() {
     if (dx11Row) dx11Row.style.display = 'none';
 
     if (bridge()) {
-        bridge().StartInstallation(S.gamePath, S.cfg.vhMode, S.cfg.backup);
+        bridge().StartInstallation(S.gamePath, S.cfg.vhMode, S.cfg.backup, S.cfg.installMethod || 'method1');
     } else {
         simulateInstall();
     }
@@ -160,7 +160,7 @@ function launchGame() {
     if (S.launching) return;
     const dx11 = document.getElementById('chkDx11')?.checked ?? false;
     if (bridge()) {
-        bridge().LaunchGame(S.gamePath, dx11);
+        bridge().LaunchGame(S.gamePath, dx11, S.cfg.installMethod || 'method1');
     } else {
         toast('Demo: menjalankan game...','info');
     }

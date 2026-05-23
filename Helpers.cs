@@ -13,6 +13,9 @@ internal static class Helpers
     internal const string LegacyModFolderName = "wuwaVietHoa";
     internal const string PakFileName = "pakchunk0-ID-WindowsNoEditor_1000_P.pak";
     internal const string LegacyPakFileName = "WuWaID_99_P.pak";
+    internal const string ManualPakFileName = "WuWa_ID_99_P.pak";
+    internal const string HidLoaderFileName = "hid.dll";
+    internal const string VersionLoaderFileName = "version.dll";
     const string GameProcessName = "Client-Win64-Shipping";
 
     internal static readonly TimeSpan SigRestoreDelay = TimeSpan.FromSeconds(150);
@@ -20,11 +23,31 @@ internal static class Helpers
     internal static string PakFolderPath(string gamePath) =>
         Path.Combine(gamePath, PakFolderRelativePath);
 
+    internal static string Method1PakPath(string gamePath) =>
+        Path.Combine(PakFolderPath(gamePath), PakFileName);
+
     internal static string SigPath(string gamePath) =>
         Path.Combine(PakFolderPath(gamePath), SigFileName);
 
     internal static string SigBackupPath(string gamePath) =>
         Path.Combine(PakFolderPath(gamePath), SigBackupFileName);
+
+    internal static string GameBinaryFolderPath(string gamePath) =>
+        Path.Combine(gamePath, @"Client\Binaries\Win64");
+
+    internal static string Method2PakFolderPath(string gamePath) =>
+        Path.Combine(GameBinaryFolderPath(gamePath), ModFolderName);
+
+    internal static string Method2PakPath(string gamePath) =>
+        Path.Combine(Method2PakFolderPath(gamePath), ManualPakFileName);
+
+    internal static string Method2LoaderPath(string gamePath) =>
+        Path.Combine(GameBinaryFolderPath(gamePath), HidLoaderFileName);
+
+    internal static string AlternatePakPathForMethod(string gamePath, string installMethod) =>
+        string.Equals(installMethod, "method2", StringComparison.OrdinalIgnoreCase)
+            ? Method1PakPath(gamePath)
+            : Method2PakPath(gamePath);
 
     internal static void RestoreSigBackup(string gamePath)
     {
@@ -76,7 +99,8 @@ internal static class Helpers
     {
         var modDir = Path.Combine(baseDir, ModFolderName);
         var legacyModDir = Path.Combine(baseDir, LegacyModFolderName);
-        var versionDll = Path.Combine(baseDir, "version.dll");
+        var versionDll = Path.Combine(baseDir, VersionLoaderFileName);
+        var hidDll = Path.Combine(baseDir, HidLoaderFileName);
 
         if (Directory.Exists(modDir))
             Directory.Delete(modDir, true);
@@ -84,6 +108,32 @@ internal static class Helpers
             Directory.Delete(legacyModDir, true);
         if (File.Exists(versionDll))
             File.Delete(versionDll);
+        if (File.Exists(hidDll))
+            File.Delete(hidDll);
+    }
+
+    internal static void DeleteManualLoaderFiles(string gamePath, bool preservePak = false)
+    {
+        var modDir = Method2PakFolderPath(gamePath);
+        var hidDll = Method2LoaderPath(gamePath);
+
+        if (File.Exists(hidDll))
+            File.Delete(hidDll);
+
+        if (!Directory.Exists(modDir))
+            return;
+
+        if (!preservePak)
+        {
+            Directory.Delete(modDir, true);
+            return;
+        }
+
+        foreach (var file in Directory.EnumerateFiles(modDir))
+        {
+            if (!Path.GetFileName(file).Equals(ManualPakFileName, StringComparison.OrdinalIgnoreCase))
+                File.Delete(file);
+        }
     }
 
     internal static void DeleteLegacyPakFile(string gamePath)
@@ -91,6 +141,10 @@ internal static class Helpers
         var legacyPakPath = Path.Combine(PakFolderPath(gamePath), LegacyPakFileName);
         if (File.Exists(legacyPakPath))
             File.Delete(legacyPakPath);
+
+        var manualPakPath = Path.Combine(PakFolderPath(gamePath), ManualPakFileName);
+        if (File.Exists(manualPakPath))
+            File.Delete(manualPakPath);
     }
 
 

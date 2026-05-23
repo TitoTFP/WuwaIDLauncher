@@ -363,14 +363,25 @@ public partial class MainWindow : Window
     }
 
 
-    internal async Task RunInstallation(string gamePath, string vhMode, bool backup)
+    static string NormalizeInstallMethod(string? installMethod) =>
+        string.Equals(installMethod, "method2", StringComparison.OrdinalIgnoreCase)
+            ? "method2"
+            : "method1";
+
+    static bool UsesManualLoaderMethod(string? installMethod) =>
+        NormalizeInstallMethod(installMethod) == "method2";
+
+    internal async Task RunInstallation(string gamePath, string vhMode, bool backup, string installMethod = "method1")
     {
         AppLogger.SetGamePath(gamePath);
-        AppLogger.Info("Installation started; mode=" + vhMode + "; backup=" + backup);
+        var method = NormalizeInstallMethod(installMethod);
+        AppLogger.Info("Installation started; mode=" + vhMode + "; backup=" + backup + "; installMethod=" + method);
         try
         {
-            var baseDir = Path.Combine(gamePath, @"Client\Binaries\Win64");
-            var pakDir = Path.Combine(gamePath, PakFolderRelativePath);
+            var baseDir = Helpers.GameBinaryFolderPath(gamePath);
+            var pakDir = UsesManualLoaderMethod(method)
+                ? Helpers.Method2PakFolderPath(gamePath)
+                : Path.Combine(gamePath, PakFolderRelativePath);
             
             if (!Directory.Exists(baseDir))
             {
@@ -380,10 +391,17 @@ public partial class MainWindow : Window
 
             try
             {
-                Directory.CreateDirectory(pakDir);
-                var testFile = Path.Combine(pakDir, "vh_write_test.tmp");
-                File.WriteAllText(testFile, "test");
-                File.Delete(testFile);
+                var writeCheckDirs = UsesManualLoaderMethod(method)
+                    ? new[] { baseDir, pakDir }
+                    : new[] { pakDir };
+
+                foreach (var dir in writeCheckDirs.Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    Directory.CreateDirectory(dir);
+                    var testFile = Path.Combine(dir, "vh_write_test.tmp");
+                    File.WriteAllText(testFile, "test");
+                    File.Delete(testFile);
+                }
             }
             catch (UnauthorizedAccessException)
             {
@@ -397,8 +415,30 @@ public partial class MainWindow : Window
                 throw new Exception("Tidak dapat menulis file ke direktori game: " + ex.Message);
             }
 
-            Helpers.DeleteLegacyLoaderFiles(baseDir);
-            AppLogger.Info("Legacy loader cleanup completed");
+            if (UsesManualLoaderMethod(method))
+            {
+                Helpers.RestoreSigBackup(gamePath);
+                var oldVersionLoader = Path.Combine(baseDir, Helpers.VersionLoaderFileName);
+                var legacyModDir = Path.Combine(baseDir, Helpers.LegacyModFolderName);
+
+                Helpers.DeleteLegacyPakFile(gamePath);
+                if (File.Exists(oldVersionLoader))
+                    File.Delete(oldVersionLoader);
+                if (Directory.Exists(legacyModDir))
+                    Directory.Delete(legacyModDir, true);
+            }
+            else
+            {
+                Helpers.DeleteManualLoaderFiles(gamePath, preservePak: true);
+                var oldVersionLoader = Path.Combine(baseDir, Helpers.VersionLoaderFileName);
+                var legacyModDir = Path.Combine(baseDir, Helpers.LegacyModFolderName);
+
+                if (File.Exists(oldVersionLoader))
+                    File.Delete(oldVersionLoader);
+                if (Directory.Exists(legacyModDir))
+                    Directory.Delete(legacyModDir, true);
+                AppLogger.Info("Legacy loader cleanup completed");
+            }
 
             var releaseUrl = "https://api.github.com/repos/TitoTFP/WuwaID/releases/latest";
 
@@ -411,12 +451,15 @@ public partial class MainWindow : Window
             var tagName = doc.RootElement.TryGetProperty("tag_name", out var tagProp)
                 ? tagProp.GetString() ?? "" : "";
 
-            var toDownload = new List<(string Name, string Url, long Size, string Hash)>();
+            var expectedAssets = UsesManualLoaderMethod(method)
+                ? new[] { Helpers.ManualPakFileName, Helpers.HidLoaderFileName }
+                : new[] { PakFileName };
+            var toDownload = new List<(string Name, string Url, long Size, string Hash, string DestPath)>();
 
             foreach (var item in doc.RootElement.GetProperty("assets").EnumerateArray())
             {
                 var name = item.GetProperty("name").GetString() ?? "";
-                if (name == PakFileName)
+                if (expectedAssets.Contains(name, StringComparer.OrdinalIgnoreCase))
                 {
                     var url = item.GetProperty("browser_download_url").GetString() ?? "";
                     var size = item.GetProperty("size").GetInt64();
@@ -425,13 +468,16 @@ public partial class MainWindow : Window
                     if (item.TryGetProperty("digest", out var digestProp) && digestProp.ValueKind == JsonValueKind.String)
                         digest = digestProp.GetString()?.Replace("sha256:", "") ?? "";
 
-                    toDownload.Add((name, url, size, digest));
+                    var destPath = name.Equals(Helpers.HidLoaderFileName, StringComparison.OrdinalIgnoreCase)
+                        ? Helpers.Method2LoaderPath(gamePath)
+                        : Path.Combine(pakDir, name);
+                    toDownload.Add((name, url, size, digest, destPath));
                 }
             }
 
-            if (toDownload.Count == 0)
+            if (expectedAssets.Any(asset => !toDownload.Any(download => download.Name.Equals(asset, StringComparison.OrdinalIgnoreCase))))
             {
-                AppLogger.Warn("Installation release has no matching pak asset");
+                AppLogger.Warn("Installation release has no matching assets for " + method);
                 throw new Exception("File instalasi tidak ditemukan di server.");
             }
 
@@ -450,14 +496,15 @@ public partial class MainWindow : Window
                 }
             }
 
-            Helpers.DeleteLegacyPakFile(gamePath);
-            localCache.Remove(LegacyPakFileName);
+            if (!UsesManualLoaderMethod(method))
+            {
+                Helpers.DeleteLegacyPakFile(gamePath);
+                localCache.Remove(LegacyPakFileName);
+            }
 
             bool allFilesUpToDate = true;
-            foreach (var (name, _, _, hash) in toDownload)
+            foreach (var (name, _, _, hash, destPath) in toDownload)
             {
-                var destPath = Path.Combine(pakDir, name);
-                
                 if (!File.Exists(destPath))
                 {
                     allFilesUpToDate = false;
@@ -475,7 +522,8 @@ public partial class MainWindow : Window
                     localCache[name] = hash;
                 }
                 else if (!string.IsNullOrEmpty(tagName) &&
-                         (!localCache.TryGetValue("_vhVersion", out var cachedTag) || cachedTag != tagName))
+                         (!localCache.TryGetValue("_vhVersion", out var cachedTag) || cachedTag != tagName ||
+                          !localCache.TryGetValue("_installMethod", out var cachedMethod) || cachedMethod != method))
                 {
                     allFilesUpToDate = false;
                     break;
@@ -484,10 +532,12 @@ public partial class MainWindow : Window
 
             if (allFilesUpToDate)
             {
+                CleanupInactiveMethodFiles(gamePath, method);
                 AppLogger.Info("Installation skipped; local files already current");
                 if (!string.IsNullOrEmpty(tagName))
                 {
                     localCache["_vhVersion"] = tagName;
+                    localCache["_installMethod"] = method;
                     File.WriteAllText(versionCachePath, JsonSerializer.Serialize(localCache));
                 }
                 RunScript($"window.onProgressUpdate(100, {JsStr("Anda sudah menggunakan versi terbaru!")}, '', '')");
@@ -499,13 +549,13 @@ public partial class MainWindow : Window
             
             var needsUpdateSet = new HashSet<string>();
             long totalBytes = 0;
-            foreach (var (name, _, size, hash) in toDownload)
+            foreach (var (name, _, size, hash, destPath) in toDownload)
             {
-                var destPath = Path.Combine(pakDir, name);
                 bool needsUpdate = !File.Exists(destPath) ||
                                    (!string.IsNullOrEmpty(hash)
                                        ? !Helpers.VerifySha256(destPath, hash)
-                                       : !localCache.TryGetValue("_vhVersion", out var cachedTag) || cachedTag != tagName);
+                                       : !localCache.TryGetValue("_vhVersion", out var cachedTag) || cachedTag != tagName ||
+                                         !localCache.TryGetValue("_installMethod", out var cachedMethod) || cachedMethod != method);
                 if (needsUpdate)
                 {
                     needsUpdateSet.Add(name);
@@ -517,14 +567,28 @@ public partial class MainWindow : Window
             var sw = Stopwatch.StartNew();
             long lastDownloaded = 0;
 
-            foreach (var (name, url, size, hash) in toDownload)
+            foreach (var (name, url, size, hash, destPath) in toDownload)
             {
-                var destPath = Path.Combine(pakDir, name);
-
                 if (!needsUpdateSet.Contains(name))
                     continue;
+
+                if (IsPakAsset(name))
+                {
+                    var alternatePakPath = Helpers.AlternatePakPathForMethod(gamePath, method);
+                    if (TryCopyReusablePak(alternatePakPath, destPath, hash))
+                    {
+                        AppLogger.Info("Reused existing pak for installer asset: " + name);
+                        needsUpdateSet.Remove(name);
+                        if (!string.IsNullOrEmpty(hash))
+                            localCache[name] = hash;
+                        RunScript($"window.onProgressUpdate(100, " +
+                                  $"{JsStr("Menggunakan file patch yang sudah ada...")}, '', '')");
+                        continue;
+                    }
+                }
                 
                 var tmpPath = destPath + ".tmp";
+                Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
 
                 using var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
                 resp.EnsureSuccessStatusCode();
@@ -570,9 +634,10 @@ public partial class MainWindow : Window
 
             if (!string.IsNullOrEmpty(tagName))
                 localCache["_vhVersion"] = tagName;
+            localCache["_installMethod"] = method;
             File.WriteAllText(versionCachePath, JsonSerializer.Serialize(localCache));
 
-            Helpers.DeleteLegacyPakFile(gamePath);
+            CleanupInactiveMethodFiles(gamePath, method);
 
             AppLogger.Info("Installation completed");
             RunScript($"window.onProgressUpdate(100, {JsStr("Instalasi selesai!")}, '', '')");
@@ -583,6 +648,40 @@ public partial class MainWindow : Window
         {
             AppLogger.Exception(ex, "Installation failed");
             RunScript($"window.onInstallError({JsStr(ex.Message)})");
+        }
+    }
+
+    static bool IsPakAsset(string name) =>
+        name.Equals(Helpers.PakFileName, StringComparison.OrdinalIgnoreCase) ||
+        name.Equals(Helpers.ManualPakFileName, StringComparison.OrdinalIgnoreCase) ||
+        name.Equals(Helpers.LegacyPakFileName, StringComparison.OrdinalIgnoreCase);
+
+    static bool TryCopyReusablePak(string sourcePath, string destPath, string hash)
+    {
+        if (!File.Exists(sourcePath))
+            return false;
+
+        if (!string.IsNullOrEmpty(hash) && !Helpers.VerifySha256(sourcePath, hash))
+            return false;
+
+        Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+        File.Copy(sourcePath, destPath, overwrite: true);
+        return string.IsNullOrEmpty(hash) || Helpers.VerifySha256(destPath, hash);
+    }
+
+    static void CleanupInactiveMethodFiles(string gamePath, string method)
+    {
+        if (UsesManualLoaderMethod(method))
+        {
+            var method1PakPath = Helpers.Method1PakPath(gamePath);
+            if (File.Exists(method1PakPath))
+                File.Delete(method1PakPath);
+            Helpers.RestoreSigBackup(gamePath);
+        }
+        else
+        {
+            Helpers.DeleteManualLoaderFiles(gamePath);
+            Helpers.DeleteLegacyPakFile(gamePath);
         }
     }
 
@@ -602,12 +701,18 @@ public partial class MainWindow : Window
         }
     }
 
-    async Task MonitorLaunchStateAsync(string gamePath, Process? process)
+    async Task MonitorLaunchStateAsync(string gamePath, Process? process, bool restoreSignature = true)
     {
         AppLogger.SetGamePath(gamePath);
         try
         {
             AppLogger.Info("Launch monitor started");
+            if (!restoreSignature)
+            {
+                await WaitForGameExitAsync(process);
+                return;
+            }
+
             var gameExitTask = WaitForGameExitAsync(process);
             var restoreDelayTask = Task.Delay(SigRestoreDelay);
             var first = await Task.WhenAny(gameExitTask, restoreDelayTask);
@@ -665,10 +770,11 @@ public partial class MainWindow : Window
             await Task.Delay(1000);
     }
 
-    internal void LaunchGame(string gamePath, bool dx11)
+    internal void LaunchGame(string gamePath, bool dx11, string installMethod = "method1")
     {
         AppLogger.SetGamePath(gamePath);
-        AppLogger.Info("Game launch requested; dx11=" + dx11);
+        var method = NormalizeInstallMethod(installMethod);
+        AppLogger.Info("Game launch requested; dx11=" + dx11 + "; installMethod=" + method);
         try
         {
             if (_launchInProgress)
@@ -681,19 +787,22 @@ public partial class MainWindow : Window
             var full = Path.Combine(gamePath, @"Client\Binaries\Win64", GameExeName);
             if (File.Exists(full))
             {
-                Helpers.RestoreSigBackup(gamePath);
-
-                if (!File.Exists(Helpers.SigPath(gamePath)) && !File.Exists(Helpers.SigBackupPath(gamePath)))
+                if (!UsesManualLoaderMethod(method))
                 {
-                    AppLogger.Warn("Game signature file missing before launch");
-                    RunScript($"window.onInstallError({JsStr("Signature file tidak terdeteksi, jalankan Wuthering Waves dulu tanpa mod atau launcher ini.")})");
-                    return;
+                    Helpers.RestoreSigBackup(gamePath);
+
+                    if (!File.Exists(Helpers.SigPath(gamePath)) && !File.Exists(Helpers.SigBackupPath(gamePath)))
+                    {
+                        AppLogger.Warn("Game signature file missing before launch");
+                        RunScript($"window.onInstallError({JsStr("Signature file tidak terdeteksi, jalankan Wuthering Waves dulu tanpa mod atau launcher ini.")})");
+                        return;
+                    }
+
+                    PrepareSigBypass(gamePath);
                 }
 
-                PrepareSigBypass(gamePath);
-
                 _launchInProgress = true;
-                _signatureRestorePending = true;
+                _signatureRestorePending = !UsesManualLoaderMethod(method);
                 _gameProcessRunning = true;
                 _launchGamePath = gamePath;
 
@@ -707,7 +816,7 @@ public partial class MainWindow : Window
                 AppLogger.Info("Game process start requested");
                 RunScript("window.onGameLaunchStarted()");
                 Dispatcher.Invoke(() => WindowState = WindowState.Minimized);
-                _ = MonitorLaunchStateAsync(gamePath, process);
+                _ = MonitorLaunchStateAsync(gamePath, process, !UsesManualLoaderMethod(method));
             }
             else
             {
@@ -722,7 +831,8 @@ public partial class MainWindow : Window
             _signatureRestorePending = false;
             _gameProcessRunning = false;
             _launchGamePath = null;
-            Helpers.RestoreSigBackup(gamePath);
+            if (!UsesManualLoaderMethod(method))
+                Helpers.RestoreSigBackup(gamePath);
             RunScript("window.onGameLaunchFinished()");
             RunScript($"window.onInstallError({JsStr("Gagal menjalankan game: " + ex.Message)})");
         }
@@ -1198,11 +1308,11 @@ public class LauncherBridge
             _w.RunScript($"window.onLogUploadFinished && window.onLogUploadFinished({escaped})");
         });
 
-    public void StartInstallation(string gamePath, string vhMode, bool backup) =>
-        Task.Run(() => _w.RunInstallation(gamePath, vhMode, backup));
+    public void StartInstallation(string gamePath, string vhMode, bool backup, string installMethod) =>
+        Task.Run(() => _w.RunInstallation(gamePath, vhMode, backup, installMethod));
 
-    public void LaunchGame(string gamePath, bool dx11) =>
-        _w.LaunchGame(gamePath, dx11);
+    public void LaunchGame(string gamePath, bool dx11, string installMethod) =>
+        _w.LaunchGame(gamePath, dx11, installMethod);
 
     public void ForceQuitGame()
     {
@@ -1220,13 +1330,16 @@ public class LauncherBridge
         AppLogger.Info("Uninstall started");
         try
         {
-            var baseDir = Path.Combine(gamePath, @"Client\Binaries\Win64");
+            var baseDir = Helpers.GameBinaryFolderPath(gamePath);
             var pakPath = Path.Combine(Helpers.PakFolderPath(gamePath), Helpers.PakFileName);
+            var method2PakPath = Helpers.Method2PakPath(gamePath);
 
             Helpers.RestoreSigBackup(gamePath);
 
             if (File.Exists(pakPath))
                 File.Delete(pakPath);
+            if (File.Exists(method2PakPath))
+                File.Delete(method2PakPath);
             Helpers.DeleteLegacyPakFile(gamePath);
             Helpers.DeleteLegacyLoaderFiles(baseDir);
 

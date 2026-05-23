@@ -4,7 +4,7 @@ const S = {
     page: 'home',
     installing: false, installed: false, launching: false,
     gamePath: '',
-    cfg: { gamePath:'' },
+    cfg: { gamePath:'', installMethod:'method1' },
     autoCheckDone: false
 };
 

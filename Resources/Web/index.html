@@ -50,10 +50,21 @@
             <nav class="top-nav" id="topNav">
                 <button class="top-nav__item active" data-page="home">HOME</button>
                 <button class="top-nav__item" data-page="performance">PERFORMA</button>
+                <button class="top-nav__item top-nav__item--menu" id="methodNavBtn" type="button">METODE</button>
                 <div class="top-nav__indicator" id="topNavIndicator">
                     <canvas id="navWaveCanvas"></canvas>
                 </div>
             </nav>
+            <div class="method-menu" id="methodMenu">
+                <button class="method-menu__item active" data-method="method1" type="button">
+                    <span class="method-menu__title">Metode 1</span>
+                    <span class="method-menu__desc">Signature bypass</span>
+                </button>
+                <button class="method-menu__item" data-method="method2" type="button">
+                    <span class="method-menu__title">Metode 2</span>
+                    <span class="method-menu__desc">hid.dll loader</span>
+                </button>
+            </div>
             <div class="top-bar__sep"></div>
             <button class="top-bar__btn" id="btnMinimize" title="Minimalkan">
                 <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13H5v-2h14v2z"/></svg>

@@ -34,20 +34,32 @@ if ! rg -n 'PakFolderRelativePath = @"Client\\Content\\Paks"' MainWindow.xaml.cs
   fail "installer must target Client\\Content\\Paks"
 fi
 
-if rg -n 'Path\.Combine\(gamePath, @"Client\\Binaries\\Win64", MainWindow\.ModFolderName\)' MainWindow.xaml.cs >/dev/null; then
-  fail "mod pak operations must not target Client\\Binaries\\Win64\\wuwaIndonesia"
+if ! rg -n 'Method2PakFolderPath\(string gamePath\)' Helpers.cs >/dev/null; then
+  fail "method 2 must target Client\\Binaries\\Win64\\wuwaIndonesia"
 fi
 
 if ! rg -n 'PakFileName = "pakchunk0-ID-WindowsNoEditor_1000_P\.pak"' MainWindow.xaml.cs Helpers.cs >/dev/null; then
-  fail "installer must use pakchunk0-ID-WindowsNoEditor_1000_P.pak"
+  fail "method 1 installer must use pakchunk0-ID-WindowsNoEditor_1000_P.pak"
 fi
 
 if rg -n 'internal const string PakFileName = "WuWaID_99_P\.pak"' MainWindow.xaml.cs >/dev/null; then
-  fail "installer must not use legacy WuWaID_99_P.pak as primary pak"
+  fail "method 1 pak name must not be WuWaID_99_P.pak"
+fi
+
+if ! rg -n 'ManualPakFileName = "WuWa_ID_99_P\.pak"' MainWindow.xaml.cs Helpers.cs >/dev/null; then
+  fail "method 2 installer must use WuWa_ID_99_P.pak"
 fi
 
 if ! rg -n 'LegacyPakFileName = "WuWaID_99_P\.pak"' MainWindow.xaml.cs Helpers.cs >/dev/null; then
-  fail "installer must keep legacy pak name only for cleanup"
+  fail "launcher must keep old WuWaID_99_P.pak only for cleanup"
+fi
+
+if ! rg -n 'HidLoaderFileName = "hid\.dll"' MainWindow.xaml.cs Helpers.cs >/dev/null; then
+  fail "method 2 installer must use hid.dll"
+fi
+
+if ! rg -n 'UsesManualLoaderMethod\(method\)' MainWindow.xaml.cs >/dev/null; then
+  fail "launcher must branch install and launch behavior by selected method"
 fi
 
 if ! rg -n 'SigFileName = "pakchunk7-WindowsNoEditor\.sig"' MainWindow.xaml.cs Helpers.cs >/dev/null; then
