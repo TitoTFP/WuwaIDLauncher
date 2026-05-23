@@ -46,6 +46,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         Directory.CreateDirectory(CacheFolder);
         AppLogger.Info("Main window initialized");
+        ActivePlayerService.Start();
         Loaded += OnLoaded;
         Closing += OnClosing;
     }
@@ -775,6 +776,7 @@ public partial class MainWindow : Window
         AppLogger.SetGamePath(gamePath);
         var method = NormalizeInstallMethod(installMethod);
         AppLogger.Info("Game launch requested; dx11=" + dx11 + "; installMethod=" + method);
+        _ = ActivePlayerService.SendLaunchHeartbeatAsync(method);
         try
         {
             if (_launchInProgress)
