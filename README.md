@@ -25,3 +25,7 @@ Launcher mempermudah instalasi patch Bahasa Indonesia untuk Wuthering Waves.
 
 - [AlteriaX/WuWa-Configs](https://github.com/AlteriaX/WuWa-Configs) — Menyediakan preset konfigurasi game yang digunakan untuk Mode Performa Tinggi (High Performance mode).
 - **[CallMeDangDev](https://github.com/CallMeDangDev)** — Terima kasih untuk referensi WuwaVH dan launcher. Source code launcher WuwaID mengacu pada repo [WuwaVHLauncher](https://github.com/CallMeDangDev/WuwaVHLauncher).
+
+## Lisensi
+
+Proyek ini dilisensikan di bawah [GNU General Public License v3.0](LICENSE).
