@@ -474,7 +474,6 @@ body.sidebar-open .bg-vignette {
 }
 .ap__play:active { transform: scale(0.95); }
 
-.ap__ico { transition: opacity var(--dur); }
 .ap__ico--pause { display: none; }
 .ap--playing .ap__ico--play  { display: none; }
 .ap--playing .ap__ico--pause { display: block; }
@@ -562,4 +561,23 @@ body.sidebar-open .bg-vignette {
     min-width: 22px;
     text-align: right;
     flex-shrink: 0;
+}
+
+.ap__play:focus-visible,
+.ap__mute:focus-visible,
+.ap__range:focus-visible {
+    outline: 2px solid var(--cyan-accent);
+    outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ap,
+    .ap--playing .ap__dot {
+        animation: none;
+    }
+    .ap__play,
+    .ap__track,
+    .ap__fill {
+        transition: none;
+    }
 }
