@@ -33,3 +33,6 @@ temp/
 
 # PT-BR launcher reference files
 PT-BR Launcher/
+
+# Command Code
+.commandcode/
