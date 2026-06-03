@@ -150,11 +150,11 @@ if rg -n '\|\|\s*name == "UTMAlexander_100_P\.pak"' MainWindow.xaml.cs >/dev/nul
   fail "repository font pak must not be part of installer download whitelist"
 fi
 
-if rg -n '`VH \$\{vhVer\}`' Resources/Web/script.js Resources/Web/script-home.js >/dev/null; then
+if rg -n '`VH \$\{vhVer\}`' Resources/Web/script-home.js >/dev/null; then
   fail "version label must use ID prefix, not VH"
 fi
 
-if ! rg -n '`ID \$\{vhVer\}`' Resources/Web/script.js Resources/Web/script-home.js >/dev/null; then
+if ! rg -n '`ID \$\{vhVer\}`' Resources/Web/script-home.js >/dev/null; then
   fail "version label must show ID prefix"
 fi
 
@@ -174,11 +174,11 @@ if rg -n 'frame-src https://trakteer\.id' MainWindow.xaml.cs >/dev/null; then
   fail "CSP must not allow Trakteer iframe (no iframe used)"
 fi
 
-if ! rg -n -- '--rp-w: 400px' Resources/Web/styles-base.css Resources/Web/styles.css >/dev/null; then
+if ! rg -n -- '--rp-w: 400px' Resources/Web/styles-base.css >/dev/null; then
   fail "right action panel must stay wide enough for Trakteer and install buttons"
 fi
 
-if ! rg -n 'min-width: 210px' Resources/Web/styles-effects.css Resources/Web/styles.css >/dev/null; then
+if ! rg -n 'min-width: 210px' Resources/Web/styles-effects.css >/dev/null; then
   fail "install button must keep a readable minimum width"
 fi
 

@@ -369,8 +369,6 @@
 .admin-modal__feat-desc code { background: rgba(255,255,255,0.07); border-radius: 3px; padding: 1px 5px; font-size: 11px; color: #a0c4f0; }
 .admin-modal__actions { display: flex; justify-content: flex-end; gap: 10px; }
 .admin-modal__ok { display: flex; align-items: center; gap: 7px; padding: 0 16px; }
-<<<<<<< HEAD
-=======
 
 /* --- Background Audio Visualizer (Matrix Rain Canvas) --- */
 .audio-viz {
@@ -437,5 +435,3 @@
     80% { transform: translate(2px, 2px); opacity: 1; filter: invert(0.1); }
     100% { transform: translate(0); opacity: 1; }
 }
-
->>>>>>> 417b118e62c8690bcf4dfd714ce34651d12cf70f
