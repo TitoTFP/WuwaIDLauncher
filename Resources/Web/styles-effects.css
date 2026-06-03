@@ -191,7 +191,7 @@
 }
 .dx11-text {
     flex: 1;
-    font-size: 12px;
+    font-size: 11px;
     font-family: var(--font-ui);
     font-weight: 600;
     color: rgba(140, 195, 255, 0.78);
