@@ -32,6 +32,11 @@ jobs:
         run: |
           dotnet publish WuwaIDLauncher.csproj `
             -c Release `
+            -p:Version=0.0.1 `
+            -p:AssemblyVersion=0.0.1.0 `
+            -p:FileVersion=0.0.1.0 `
+            -p:InformationalVersion=0.0.1 `
+            -p:EnableCompressionInSingleFile=false `
             -o ./publish
 
       - name: Run unit tests
