@@ -61,7 +61,7 @@ input { font-family: inherit; }
 .bg-layer {
     position: fixed; inset: 0; z-index: 0;
     
-    background: url('https://launcher.local/Images/bg-default.jpg') center/cover no-repeat;
+    background: url('https://app.local/Images/bg-default.jpg') center/cover no-repeat;
 }
 .bg-layer video {
     width: 100%; height: 100%; object-fit: cover;
@@ -94,8 +94,8 @@ body.sidebar-open .bg-vignette {
     z-index: 100;
     width: 220px;
     background: rgba(40, 12, 24, 0.55);
-    backdrop-filter: blur(18px) saturate(150%);
-    -webkit-backdrop-filter: blur(18px) saturate(150%);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
     border: 1px solid rgba(232, 85, 126, 0.2);
     border-radius: var(--radius);
     padding: 14px 16px 12px;
@@ -412,46 +412,60 @@ body.sidebar-open .bg-vignette {
     color: var(--text-1);
 }
 .lu-modal__btn--primary {
-    background: linear-gradient(135deg, var(--accent-gold), var(--accent-warm));
-    color: #1a0a12;
+    background: var(--accent-gold);
+    border: none;
+    color: #000;
+    clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
 }
-.lu-modal__btn--primary:hover { opacity: 0.88; transform: scale(1.02); }
+.lu-modal__btn--primary:hover { background: #fff; transform: translateY(-2px); box-shadow: 0 0 16px rgba(255,255,255,0.4); }
 .lu-modal__btn:disabled { opacity: 0.38; pointer-events: none; }
 
 .rp-menu__btn {
     flex-shrink: 0; width: 46px;
     display: flex; align-items: center; justify-content: center;
-    background: rgba(40, 12, 24, 0.65);
+    background: rgba(10, 10, 10, 0.92);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: var(--radius-sm);
+    border: 1px solid rgba(0, 240, 255, 0.3);
+    border-radius: 0px;
+    clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
     color: var(--text-2);
     cursor: var(--cursor-select);
     transition: background var(--dur), color var(--dur), border-color var(--dur);
 }
 .rp-menu__btn:hover {
-    background: rgba(255, 255, 255, 0.08);
-    color: var(--text-1);
-    border-color: rgba(255, 255, 255, 0.22);
+    background: rgba(0, 240, 255, 0.1);
+    color: var(--cyan-accent);
+    border-color: var(--cyan-accent);
 }
 .rp-menu__btn.active {
-    background: rgba(232, 85, 126, 0.12);
-    color: var(--accent-warm);
-    border-color: rgba(232, 85, 126, 0.35);
+    background: rgba(0, 240, 255, 0.2);
+    color: var(--cyan-accent);
+    border-color: var(--cyan-accent);
+    box-shadow: inset 0 0 8px rgba(0,240,255,0.3);
+}
+
+.rp-dropdown-overlay {
+    position: fixed; inset: 0;
+    z-index: 150;
+    display: none;
+    -webkit-app-region: no-drag;
+}
+.rp-dropdown.open + .rp-dropdown-overlay {
+    display: block;
 }
 
 .rp-dropdown {
     position: absolute;
-    bottom: calc(100% + 8px); left: 0;
+    bottom: 104px; right: auto; left: 0;
     width: 220px;
-    background: rgba(40, 12, 24, 0.96);
+    background: rgba(10, 10, 10, 0.96);
     backdrop-filter: blur(24px) saturate(160%);
     -webkit-backdrop-filter: blur(24px) saturate(160%);
-    border: 1px solid rgba(255, 255, 255, 0.10);
-    border-radius: var(--radius);
-    box-shadow: 0 -6px 32px rgba(0, 0, 0, 0.65),
-                0 0 0 1px rgba(232, 85, 126, 0.05);
+    border: 1px solid rgba(0, 240, 255, 0.3);
+    border-radius: 0px;
+    clip-path: polygon(0 0, 100% 0, 100% calc(100% - 15px), calc(100% - 15px) 100%, 0 100%);
+    box-shadow: 0 -6px 32px rgba(0, 0, 0, 0.85);
     padding: 6px 0;
     opacity: 0; transform: translateY(8px);
     pointer-events: none;
@@ -491,16 +505,16 @@ body.sidebar-open .bg-vignette {
 }
 .progress__head { margin-bottom: 5px; }
 .progress__foot { margin-top: 5px; }
-.progress__head span:last-child { color: var(--accent-warm); font-weight: 600; }
+.progress__head span:last-child { color: var(--cyan-accent); font-weight: 600; }
 .progress__track {
     height: 6px; background: rgba(255,255,255,0.10);
-    border-radius: 3px; overflow: hidden;
+    border-radius: 0px; overflow: hidden;
 }
 .progress__fill {
     height: 100%; width: 0%;
-    background: linear-gradient(90deg, var(--accent-gold), var(--accent-warm));
-    border-radius: 3px; transition: width 250ms ease;
-    box-shadow: 0 0 8px rgba(232,85,126,0.5);
+    background: var(--cyan-accent);
+    border-radius: 0px; transition: width 250ms ease;
+    box-shadow: 0 0 12px rgba(0,240,255,0.6);
 }
 
 .start-btn {
@@ -582,10 +596,7 @@ body.sidebar-open .bg-vignette {
         rgba(255,230,240,0.06) 70%,
         transparent           90%
     );
-    transform: skewX(-14deg);
-    animation: liquidSweep 5s cubic-bezier(0.45, 0, 0.35, 1) infinite;
-    pointer-events: none;
-    z-index: 2;
+    transform: skewX(-14deg);\n    pointer-events: none;\n    z-index: 2;\n    opacity: 0;\n}\n.start-btn:hover .start-btn__shine {\n    animation: liquidSweep 0.6s cubic-bezier(0.45, 0, 0.35, 1) both;
 }
 
 @keyframes liquidSweep {

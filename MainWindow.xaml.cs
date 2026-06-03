@@ -123,11 +123,16 @@ public partial class MainWindow : Window
         try
         {
             
-            Environment.SetEnvironmentVariable("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-                "--remote-debugging-port=0");
+            var opts = new CoreWebView2EnvironmentOptions(
+                "--disable-background-networking " +
+                "--disable-features=Translate,AutofillServerCommunication,OptimizationHints,msSmartScreen " +
+                "--disable-extensions " +
+                "--renderer-process-limit=1");
 
             var env = await CoreWebView2Environment.CreateAsync(
-                userDataFolder: Path.Combine(AppDataFolder, "WebView2"));
+                browserExecutableFolder: null,
+                userDataFolder: Path.Combine(AppDataFolder, "WebView2"),
+                options: opts);
             await webView.EnsureCoreWebView2Async(env);
             App.WebView2BrowserPid = webView.CoreWebView2.BrowserProcessId;
             AppLogger.Info("WebView2 initialized with browser process id " + App.WebView2BrowserPid);

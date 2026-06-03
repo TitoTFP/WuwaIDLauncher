@@ -349,9 +349,9 @@ function initAudioPlayer() {
 
     function updateProgress() {
         const pct = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0;
-        fill.style.width  = pct + '%';
-        curEl.textContent = fmt(audio.currentTime);
-        if (audio.duration) durEl.textContent = fmt(audio.duration);
+        if (fill)  fill.style.width  = pct + '%';
+        if (curEl) curEl.textContent = fmt(audio.currentTime);
+        if (audio.duration && durEl) durEl.textContent = fmt(audio.duration);
     }
 
     function updateVolIcon(vol) {
@@ -422,7 +422,7 @@ function initAudioPlayer() {
     });
 
     audio.addEventListener('timeupdate',     updateProgress);
-    audio.addEventListener('loadedmetadata', () => { durEl.textContent = fmt(audio.duration); });
+    audio.addEventListener('loadedmetadata', () => { if (durEl) durEl.textContent = fmt(audio.duration); });
     audio.addEventListener('play',  () => setPlaying(true));
     audio.addEventListener('pause', () => setPlaying(false));
     audio.addEventListener('ended', () => { if (!audio.loop) setPlaying(false); });
