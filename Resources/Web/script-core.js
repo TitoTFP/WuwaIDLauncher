@@ -17,11 +17,8 @@ document.addEventListener('DOMContentLoaded', () => {
     initBottomBar();
     initAudioPlayer();
     initWaterRipple();
-<<<<<<< HEAD
-=======
     initCyberEffects();
-    initFontCreator();
->>>>>>> 417b118e62c8690bcf4dfd714ce34651d12cf70f
+    // initFontCreator();
     initPerformanceMode();
     initSidePanel();
     initLogUpload();
