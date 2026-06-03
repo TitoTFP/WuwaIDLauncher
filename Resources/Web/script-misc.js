@@ -353,10 +353,6 @@ function initAudioPlayer() {
         v = Math.max(0, Math.min(100, parseInt(v, 10) || 0));
         if (+range.value !== v) range.value = v;
         audio.volume = v / 100;
-        if (audio.muted && v > 0) {
-            audio.muted = false;
-            localStorage.setItem('apMuted', '0');
-        }
         fill.style.width = v + '%';
         num.textContent  = v;
         updateMuteIcon(v);
@@ -364,6 +360,14 @@ function initAudioPlayer() {
         if (audio.muted)         setState('MUTED');
         else if (audio.paused)   setState(audio.currentTime > 0 ? 'PAUSED' : 'IDLE');
         else                     setState('PLAYING');
+    }
+
+    function setVolumeFromSlider(v) {
+        if (audio.muted && v > 0) {
+            audio.muted = false;
+            localStorage.setItem('apMuted', '0');
+        }
+        setVolume(v, true);
     }
 
     btnPlay?.addEventListener('click', () => {
@@ -377,8 +381,8 @@ function initAudioPlayer() {
         setVolume(parseInt(range.value, 10) || 0, false);
     });
 
-    range?.addEventListener('input',  () => setVolume(range.value, true));
-    range?.addEventListener('change', () => setVolume(range.value, true));
+    range?.addEventListener('input',  () => setVolumeFromSlider(range.value));
+    range?.addEventListener('change', () => setVolumeFromSlider(range.value));
 
     if (track && range) {
         let dragging = false;
@@ -386,7 +390,7 @@ function initAudioPlayer() {
         const setFromX = (cx) => {
             const r = track.getBoundingClientRect();
             const x = Math.max(0, Math.min(r.width, cx - r.left));
-            setVolume(Math.round((x / r.width) * 100), true);
+            setVolumeFromSlider(Math.round((x / r.width) * 100));
         };
         const onDown = (e) => { dragging = true; setFromX(getX(e)); e.preventDefault(); };
         const onMove = (e) => { if (dragging && getX(e) != null) setFromX(getX(e)); };
