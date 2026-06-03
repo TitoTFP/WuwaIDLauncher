@@ -306,7 +306,129 @@ function initWaterRipple() {
     });
 }
 
-function initAudioPlayer() { /* stub — full impl lands in Task 4 */ }
+function initAudioPlayer() {
+    const audio   = document.getElementById('apAudio');
+    const root    = document.getElementById('ap');
+    const btnPlay = document.getElementById('apPlay');
+    const btnMute = document.getElementById('apMute');
+    const range   = document.getElementById('apRange');
+    const fill    = document.getElementById('apFill');
+    const num     = document.getElementById('apNum');
+    const status  = document.getElementById('apStatus');
+    const track   = document.getElementById('apTrack');
+    if (!audio || !root) return;
+
+    const savedVol  = parseInt(localStorage.getItem('apVol')  ?? '35', 10);
+    const savedMute = localStorage.getItem('apMuted') === '1';
+    const initVol   = Math.max(0, Math.min(100, isNaN(savedVol) ? 35 : savedVol));
+    audio.volume = initVol / 100;
+    audio.muted  = savedMute;
+    audio.loop   = true;
+    range.value      = initVol;
+    fill.style.width  = initVol + '%';
+    num.textContent   = initVol;
+    setState(savedMute ? 'MUTED' : 'IDLE');
+
+    function setState(s) {
+        status.textContent = s;
+        root.classList.toggle('ap--playing', s === 'PLAYING');
+        root.classList.toggle('ap--muted',   s === 'MUTED');
+        btnPlay.setAttribute('aria-pressed', s === 'PLAYING' ? 'true' : 'false');
+        btnMute.setAttribute('aria-pressed', s === 'MUTED'   ? 'true' : 'false');
+    }
+
+    function updateMuteIcon(v) {
+        const icon = document.getElementById('apMuteIcon');
+        if (!icon) return;
+        const paths = {
+            0:  'M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z',
+            lo: 'M18.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM5 9v6h4l5 5V4L9 9H5z',
+            hi: 'M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z'
+        };
+        icon.firstElementChild.setAttribute('d',
+            audio.muted || v === 0 ? paths[0] : v < 50 ? paths.lo : paths.hi);
+    }
+
+    function setVolume(v, persist) {
+        v = Math.max(0, Math.min(100, parseInt(v, 10) || 0));
+        if (+range.value !== v) range.value = v;
+        audio.volume = v / 100;
+        if (audio.muted && v > 0) audio.muted = false;
+        fill.style.width = v + '%';
+        num.textContent  = v;
+        updateMuteIcon(v);
+        if (persist) localStorage.setItem('apVol', v);
+        if (audio.muted)         setState('MUTED');
+        else if (audio.paused)   setState(audio.currentTime > 0 ? 'PAUSED' : 'IDLE');
+        else                     setState('PLAYING');
+    }
+
+    btnPlay?.addEventListener('click', () => {
+        if (audio.paused) audio.play().then(() => setState('PLAYING')).catch(() => {});
+        else             { audio.pause(); setState('PAUSED'); }
+    });
+
+    btnMute?.addEventListener('click', () => {
+        audio.muted = !audio.muted;
+        localStorage.setItem('apMuted', audio.muted ? '1' : '0');
+        const v = parseInt(range.value, 10) || 0;
+        if (audio.muted) {
+            fill.style.width = '0%';
+            num.textContent  = '0';
+            setState('MUTED');
+        } else {
+            audio.volume = v / 100;
+            fill.style.width = v + '%';
+            num.textContent  = v;
+            setState(audio.paused ? 'IDLE' : 'PLAYING');
+        }
+        updateMuteIcon(v);
+    });
+
+    range?.addEventListener('input',  () => setVolume(range.value, true));
+    range?.addEventListener('change', () => setVolume(range.value, true));
+
+    if (track && range) {
+        let dragging = false;
+        const getX = (e) => e.clientX ?? (e.touches && e.touches[0].clientX);
+        const setFromX = (cx) => {
+            const r = track.getBoundingClientRect();
+            const x = Math.max(0, Math.min(r.width, cx - r.left));
+            setVolume(Math.round((x / r.width) * 100), true);
+        };
+        const onDown = (e) => { dragging = true; setFromX(getX(e)); e.preventDefault(); };
+        const onMove = (e) => { if (dragging && getX(e) != null) setFromX(getX(e)); };
+        const onUp   = () => { dragging = false; };
+        track.addEventListener('mousedown',  onDown);
+        track.addEventListener('touchstart', onDown, { passive: false });
+        range.addEventListener('mousedown',  onDown);
+        range.addEventListener('touchstart', onDown, { passive: false });
+        window.addEventListener('mousemove',  onMove);
+        window.addEventListener('touchmove',  onMove, { passive: true });
+        window.addEventListener('mouseup',    onUp);
+        window.addEventListener('touchend',   onUp);
+    }
+
+    audio.addEventListener('play',  () => { if (!audio.muted) setState('PLAYING'); });
+    audio.addEventListener('pause', () => { if (!audio.muted) setState(audio.currentTime > 0 ? 'PAUSED' : 'IDLE'); });
+    audio.addEventListener('ended', () => setState('IDLE'));
+    audio.addEventListener('error', () => setState('IDLE'));
+
+    window.apSetAudioSource = (url) => {
+        if (!url) return;
+        audio.src = url;
+        audio.load();
+        audio.addEventListener('canplaythrough', () => {
+            audio.play().then(() => setState('PLAYING')).catch(() => {});
+        }, { once: true });
+        document.addEventListener('click', function onFirstClick() {
+            if (audio.paused && audio.src) {
+                audio.play().then(() => setState('PLAYING')).catch(() => {});
+            }
+            document.removeEventListener('click', onFirstClick);
+        });
+    };
+}
 
 function showConfirm(message) {
     return new Promise(resolve => {
