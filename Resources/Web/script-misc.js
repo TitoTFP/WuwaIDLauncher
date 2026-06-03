@@ -137,7 +137,7 @@ window.onVHReleaseNotes = (tag, dateStr, body, name) => {
             : '<p style="opacity:0.4">Tidak ada informasi.</p>';
     }
 
-    const ap  = document.getElementById('audioPlayer');
+    const ap  = document.getElementById('ap');
     const gap = parseInt(getComputedStyle(document.documentElement)
         .getPropertyValue('--edge-gap')) || 20;
     panel.style.bottom = ap

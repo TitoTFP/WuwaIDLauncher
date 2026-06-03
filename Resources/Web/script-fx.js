@@ -138,7 +138,7 @@ function initGlitchEffect() {
 
 let _audioCtx, _analyser, _srcNode;
 function initAudioVisualizer() {
-    const audio = document.getElementById('bgMusic');
+    const audio = document.getElementById('apAudio');
     const vizCanvas = document.getElementById('audioViz');
     const stageContainer = document.getElementById('stageLights');
     if (!audio || !vizCanvas) return;

@@ -100,7 +100,7 @@ function switchPage(page) {
     document.getElementById('rightPanel').style.display        = isHome                  ? '' : 'none';
     document.getElementById('pagePerformance').style.display   = page === 'performance'  ? '' : 'none';
     
-    const ap = document.getElementById('audioPlayer');
+    const ap = document.getElementById('ap');
     const sp = document.getElementById('sidePanel');
     if (ap) ap.style.display = isHome ? '' : 'none';
     if (sp && sp.dataset.loaded) sp.style.display = isHome ? 'flex' : 'none';
