@@ -353,7 +353,10 @@ function initAudioPlayer() {
         v = Math.max(0, Math.min(100, parseInt(v, 10) || 0));
         if (+range.value !== v) range.value = v;
         audio.volume = v / 100;
-        if (audio.muted && v > 0) audio.muted = false;
+        if (audio.muted && v > 0) {
+            audio.muted = false;
+            localStorage.setItem('apMuted', '0');
+        }
         fill.style.width = v + '%';
         num.textContent  = v;
         updateMuteIcon(v);
@@ -364,25 +367,14 @@ function initAudioPlayer() {
     }
 
     btnPlay?.addEventListener('click', () => {
-        if (audio.paused) audio.play().then(() => setState('PLAYING')).catch(() => {});
+        if (audio.paused) audio.play().catch(() => {});
         else             { audio.pause(); setState('PAUSED'); }
     });
 
     btnMute?.addEventListener('click', () => {
         audio.muted = !audio.muted;
         localStorage.setItem('apMuted', audio.muted ? '1' : '0');
-        const v = parseInt(range.value, 10) || 0;
-        if (audio.muted) {
-            fill.style.width = '0%';
-            num.textContent  = '0';
-            setState('MUTED');
-        } else {
-            audio.volume = v / 100;
-            fill.style.width = v + '%';
-            num.textContent  = v;
-            setState(audio.paused ? 'IDLE' : 'PLAYING');
-        }
-        updateMuteIcon(v);
+        setVolume(parseInt(range.value, 10) || 0, false);
     });
 
     range?.addEventListener('input',  () => setVolume(range.value, true));
@@ -390,7 +382,7 @@ function initAudioPlayer() {
 
     if (track && range) {
         let dragging = false;
-        const getX = (e) => e.clientX ?? (e.touches && e.touches[0].clientX);
+        const getX = (e) => e.clientX ?? e.touches?.[0]?.clientX;
         const setFromX = (cx) => {
             const r = track.getBoundingClientRect();
             const x = Math.max(0, Math.min(r.width, cx - r.left));
@@ -412,21 +404,20 @@ function initAudioPlayer() {
     audio.addEventListener('play',  () => { if (!audio.muted) setState('PLAYING'); });
     audio.addEventListener('pause', () => { if (!audio.muted) setState(audio.currentTime > 0 ? 'PAUSED' : 'IDLE'); });
     audio.addEventListener('ended', () => setState('IDLE'));
-    audio.addEventListener('error', () => setState('IDLE'));
+    audio.addEventListener('error', () => { console.error('[audio] error', audio.error); setState('IDLE'); });
 
+    document.addEventListener('click', function onFirstClick() {
+        if (audio.paused && audio.src) audio.play().catch(() => {});
+    }, { once: true });
+
+    let _canplayHandler = null;
     window.apSetAudioSource = (url) => {
         if (!url) return;
+        if (_canplayHandler) audio.removeEventListener('canplaythrough', _canplayHandler);
+        _canplayHandler = () => audio.play().catch(() => {});
+        audio.addEventListener('canplaythrough', _canplayHandler, { once: true });
         audio.src = url;
         audio.load();
-        audio.addEventListener('canplaythrough', () => {
-            audio.play().then(() => setState('PLAYING')).catch(() => {});
-        }, { once: true });
-        document.addEventListener('click', function onFirstClick() {
-            if (audio.paused && audio.src) {
-                audio.play().then(() => setState('PLAYING')).catch(() => {});
-            }
-            document.removeEventListener('click', onFirstClick);
-        });
     };
 }
 
