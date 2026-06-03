@@ -424,25 +424,25 @@
     </div>
 
     <div class="ap" id="ap">
-      <header class="ap__head">
-        <span class="ap__tag">BGM</span>
-        <span class="ap__dot" id="apDot"></span>
-        <span class="ap__status" id="apStatus">IDLE</span>
-      </header>
-      <div class="ap__body">
-        <button class="ap__play" id="apPlay" title="Putar / Jeda" aria-label="Putar / Jeda">
-          <svg class="ap__ico ap__ico--play"  viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
-          <svg class="ap__ico ap__ico--pause" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-        </button>
-        <div class="ap__track" id="apTrack">
-          <input type="range" class="ap__range" id="apRange" min="0" max="100" value="35" step="1" aria-label="Volume">
-          <div class="ap__fill" id="apFill" style="width:35%"></div>
+        <header class="ap__head">
+            <span class="ap__tag">BGM</span>
+            <span class="ap__dot" id="apDot" aria-hidden="true"></span>
+            <span class="ap__status" id="apStatus">IDLE</span>
+        </header>
+        <div class="ap__body">
+            <button type="button" class="ap__play" id="apPlay" aria-label="Putar / Jeda" aria-pressed="false">
+                <svg class="ap__ico ap__ico--play" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+                <svg class="ap__ico ap__ico--pause" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+            </button>
+            <div class="ap__track" id="apTrack">
+                <input type="range" class="ap__range" id="apRange" min="0" max="100" value="35" step="1" aria-label="Volume">
+                <div class="ap__fill" id="apFill" style="width:35%"></div>
+            </div>
+            <button type="button" class="ap__mute" id="apMute" aria-label="Bisukan / Aktifkan" aria-pressed="false">
+                <svg class="ap__ico" id="apMuteIcon" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
+            </button>
+            <span class="ap__num" id="apNum" aria-live="polite">35</span>
         </div>
-        <button class="ap__mute" id="apMute" title="Bisukan / Aktifkan" aria-label="Bisukan / Aktifkan">
-          <svg class="ap__ico" id="apMuteIcon" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
-        </button>
-        <span class="ap__num" id="apNum">35</span>
-      </div>
     </div>
 
     <div id="toasts"></div>
