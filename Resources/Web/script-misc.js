@@ -306,6 +306,8 @@ function initWaterRipple() {
     });
 }
 
+function initAudioPlayer() { /* stub — full impl lands in Task 4 */ }
+
 function showConfirm(message) {
     return new Promise(resolve => {
         const modal  = document.getElementById('confirmModal');
