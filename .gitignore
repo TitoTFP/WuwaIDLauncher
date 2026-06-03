@@ -39,3 +39,6 @@ PT-BR Launcher/
 
 # superpowers
 docs/superpowers/
+
+# codegraph
+.codegraph/
