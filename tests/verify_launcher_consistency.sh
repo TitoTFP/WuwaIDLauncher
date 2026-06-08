@@ -6,6 +6,21 @@ fail() {
   exit 1
 }
 
+if ! command -v rg &>/dev/null; then
+  rg() {
+    local python_cmd
+    if command -v python3 &>/dev/null; then
+      python_cmd="python3"
+    elif command -v python &>/dev/null; then
+      python_cmd="python"
+    else
+      echo "FAIL: neither rg nor python found in path" >&2
+      exit 1
+    fi
+    "$python_cmd" "$(dirname "$0")/rg_fallback.py" "$@"
+  }
+fi
+
 if rg -n "wuwaVietHoa" MainWindow.xaml.cs Resources/Web | rg -v "LegacyModFolderName"; then
   fail "legacy mod folder name must only remain as migration fallback"
 fi
