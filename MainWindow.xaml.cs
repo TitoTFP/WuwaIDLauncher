@@ -511,6 +511,7 @@ public partial class MainWindow : Window
             bool allFilesUpToDate = true;
             foreach (var (name, _, _, hash, destPath) in toDownload)
             {
+
                 if (!File.Exists(destPath))
                 {
                     allFilesUpToDate = false;
@@ -557,6 +558,7 @@ public partial class MainWindow : Window
             long totalBytes = 0;
             foreach (var (name, _, size, hash, destPath) in toDownload)
             {
+
                 bool needsUpdate = !File.Exists(destPath) ||
                                    (!string.IsNullOrEmpty(hash)
                                        ? !Helpers.VerifySha256(destPath, hash)
@@ -575,6 +577,7 @@ public partial class MainWindow : Window
 
             foreach (var (name, url, size, hash, destPath) in toDownload)
             {
+
                 if (!needsUpdateSet.Contains(name))
                     continue;
 
@@ -1394,6 +1397,7 @@ public class LauncherBridge
             }
         });
     }
+
 
 
 

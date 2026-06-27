@@ -5,8 +5,8 @@ function initParticles() {
     const ctx = c.getContext('2d');
     let W, H;
     const P = [];
-    const N = 20; // reduced from 35
-    const INTERVAL = 1000 / 24; // cap at 24fps
+    const N = 20;
+    const INTERVAL = 1000 / 24;
     let lastT = 0;
 
     function resize() { W = c.width = innerWidth; H = c.height = innerHeight; }
@@ -55,9 +55,9 @@ function initParticles() {
     })(0);
 }
 
-let navWaveT = 0;      // global time tick
-let _indCurL = 0, _indCurW = 0;   // currently rendered bounds (px from nav left)
-let _indTgtL = 0, _indTgtW = 0;   // target bounds
+let navWaveT = 0;
+let _indCurL = 0, _indCurW = 0;
+let _indTgtL = 0, _indTgtW = 0;
 let _indReady = false;
 
 function initNavWave() {
@@ -72,8 +72,8 @@ function drawNavWave(canvas) {
 
     ctx.clearRect(0, 0, W, H);
 
-    const cL = _indCurL;        // indicator left edge (lerped)
-    const cW = _indCurW;        // indicator width (lerped)
+    const cL = _indCurL;
+    const cW = _indCurW;
     if (cW <= 1) return;
 
     const t = navWaveT;
@@ -116,8 +116,8 @@ function drawNavWave(canvas) {
         }
     };
 
-    drawArc(-1); // top arcs
-    drawArc(+1); // bottom arcs
+    drawArc(-1);
+    drawArc(+1);
 }
 
 function initCyberEffects() {
@@ -136,6 +136,20 @@ function initGlitchEffect() {
     }, 3000);
 }
 
+function getE(d, a, b) {
+    let s = 0;
+    for (let i = a; i < b && i < d.length; i++) s += d[i];
+    return s / ((b - a) * 255);
+}
+
+function getPeak(d, a, b) {
+    let mx = 0;
+    for (let i = a; i < b && i < d.length; i++) {
+        if (d[i] > mx) mx = d[i];
+    }
+    return mx / 255;
+}
+
 let _audioCtx, _analyser, _srcNode;
 function initAudioVisualizer() {
     const audio = document.getElementById('apAudio');
@@ -143,7 +157,6 @@ function initAudioVisualizer() {
     const stageContainer = document.getElementById('stageLights');
     if (!audio || !vizCanvas) return;
 
-    // --- Matrix Rain Setup ---
     const RAIN_CHARS = 'ｦｧｨｩｪｫｬｭｮｯｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789ABCDEF';
     const EASTER_EGGS = ['LUCY','REBECCA','DAVID','JOHNNY','ROVER','AEMEATH','SHOREKEEPER'];
     const COL_W = 11, CHAR_H = 11, TRAIL = 14;
@@ -172,7 +185,6 @@ function initAudioVisualizer() {
     initCanvas();
     window.addEventListener('resize', initCanvas);
 
-    // Stage lights: 3 lights only
     const lights = [];
     if (stageContainer) {
         stageContainer.innerHTML = '';
@@ -190,7 +202,9 @@ function initAudioVisualizer() {
     let _vizLastT = 0;
     const bgLayer = document.querySelector('.bg-layer');
     let _bgScale = 1.0;
+    let _bgVelocity = 0;
     let _fftData = null;
+    let bassE = 0, midE = 0, hiE = 0, overallE = 0;
 
     const vizLoop = (ts) => {
         if (!_vizRunning || document.hidden) return;
@@ -200,21 +214,41 @@ function initAudioVisualizer() {
         if (!_fftData) _fftData = new Uint8Array(_analyser.frequencyBinCount);
         _analyser.getByteFrequencyData(_fftData);
 
-        const bass    = _fftData[2] || 0;
         const dataLen = _fftData.length;
 
-        // Stage lights
-        const op = (0.1 + (bass * 0.00275)).toFixed(2);
+        const rBass = getE(_fftData, 0, 12);
+        const rMid  = getE(_fftData, 12, 100);
+        const rHi   = getE(_fftData, 100, 320);
+        const rAll  = getE(_fftData, 0, 360);
+        bassE    += (rBass - bassE)    * 0.20;
+        midE     += (rMid  - midE)     * 0.15;
+        hiE      += (rHi   - hiE)      * 0.12;
+        overallE += (rAll  - overallE) * 0.10;
+
+        const op = (0.1 + bassE * 0.70).toFixed(2);
         lights.forEach(l => { l.style.opacity = op; });
 
-        // Background zoom
+        const BASS_END = 20;
+        let weightedSum = 0, totalWeight = 0;
+        for (let i = 0; i < BASS_END && i < dataLen; i++) {
+            const weight = (i + 1) / BASS_END;
+            weightedSum += _fftData[i] * weight;
+            totalWeight += weight;
+        }
+        const bassAvg = weightedSum / totalWeight;
+
         if (bgLayer) {
-            const target = 1.0 + (bass * 0.000549);
-            _bgScale += (target - _bgScale) * (target > _bgScale ? 0.55 : 0.45);
+            let target = 1.0;
+            if (bassAvg > 60) {
+                target = 1.0 + ((bassAvg - 60) / 195) * 0.12;
+            }
+            const force = (target - _bgScale) * 0.12;
+            _bgVelocity = _bgVelocity * 0.75 + force;
+            _bgScale += _bgVelocity;
+            _bgScale = Math.max(1.0, Math.min(1.15, _bgScale));
             bgLayer.style.transform = 'scale(' + _bgScale.toFixed(4) + ')';
         }
 
-        // --- Matrix Rain Draw ---
         if (!ctx) { requestAnimationFrame(vizLoop); return; }
         ctx.clearRect(0, 0, vizCanvas.width, vizCanvas.height);
 
@@ -225,7 +259,6 @@ function initAudioVisualizer() {
             const freq    = _fftData[freqIdx] || 0;
             const energy  = freq / 255;
 
-            // Speed reacts to frequency
             col.y += col.speed + energy * 4;
             if (col.y > vizCanvas.height + TRAIL * CHAR_H) {
                 col.y = -CHAR_H;
@@ -233,7 +266,6 @@ function initAudioVisualizer() {
                 col.eggOff = Math.floor(Math.random() * (TRAIL - 9));
             }
 
-            // Randomly mutate characters
             col.charT++;
             if (col.charT > 2) {
                 col.charT = 0;
@@ -248,7 +280,6 @@ function initAudioVisualizer() {
                 const trailFade = (1 - t / TRAIL);
                 const alpha = trailFade * (0.65 + energy * 0.35);
 
-                // Easter egg chars render gold
                 if (col.egg) {
                     const eggIdx = (col.eggOff + col.egg.length - 1) - t;
                     if (eggIdx >= 0 && eggIdx < col.egg.length) {
@@ -259,7 +290,6 @@ function initAudioVisualizer() {
                 }
 
                 if (t === 0) {
-                    // Head: bright white-cyan
                     ctx.fillStyle = 'rgba(200,255,255,' + Math.min(1, alpha * 1.6).toFixed(2) + ')';
                 } else {
                     ctx.fillStyle = 'rgba(0,240,200,' + alpha.toFixed(2) + ')';
@@ -276,7 +306,8 @@ function initAudioVisualizer() {
             if (!_audioCtx) {
                 _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 _analyser = _audioCtx.createAnalyser();
-                _analyser.fftSize = 128;
+                _analyser.fftSize = 2048;
+                _analyser.smoothingTimeConstant = 0.15;
                 _srcNode = _audioCtx.createMediaElementSource(audio);
                 _srcNode.connect(_analyser);
                 _analyser.connect(_audioCtx.destination);

@@ -461,4 +461,3 @@ function toast(msg, type='info') {
     }, 3500);
 }
 
-
