@@ -458,7 +458,7 @@ public partial class MainWindow : Window
                 ? tagProp.GetString() ?? "" : "";
 
             var expectedAssets = UsesManualLoaderMethod(method)
-                ? new[] { Helpers.ManualPakFileName, Helpers.HidLoaderFileName }
+                ? new[] { Helpers.ManualPakFileName, Helpers.WinHttpLoaderFileName }
                 : new[] { PakFileName };
             var toDownload = new List<(string Name, string Url, long Size, string Hash, string DestPath)>();
 
@@ -474,7 +474,7 @@ public partial class MainWindow : Window
                     if (item.TryGetProperty("digest", out var digestProp) && digestProp.ValueKind == JsonValueKind.String)
                         digest = digestProp.GetString()?.Replace("sha256:", "") ?? "";
 
-                    var destPath = name.Equals(Helpers.HidLoaderFileName, StringComparison.OrdinalIgnoreCase)
+                    var destPath = name.Equals(Helpers.WinHttpLoaderFileName, StringComparison.OrdinalIgnoreCase)
                         ? Helpers.Method2LoaderPath(gamePath)
                         : Path.Combine(pakDir, name);
                     toDownload.Add((name, url, size, digest, destPath));

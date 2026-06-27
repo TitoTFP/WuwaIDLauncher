@@ -69,8 +69,8 @@ if ! rg -n 'LegacyPakFileName = "WuWaID_99_P\.pak"' MainWindow.xaml.cs Helpers.c
   fail "launcher must keep old WuWaID_99_P.pak only for cleanup"
 fi
 
-if ! rg -n 'HidLoaderFileName = "hid\.dll"' MainWindow.xaml.cs Helpers.cs >/dev/null; then
-  fail "method 2 installer must use hid.dll"
+if ! rg -n 'WinHttpLoaderFileName = "winhttp\.dll"' MainWindow.xaml.cs Helpers.cs >/dev/null; then
+  fail "method 2 installer must use winhttp.dll"
 fi
 
 if ! rg -n 'UsesManualLoaderMethod\(method\)' MainWindow.xaml.cs >/dev/null; then

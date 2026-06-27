@@ -50,22 +50,22 @@ public class InstallMethodTests : IDisposable
     }
 
     [Fact]
-    public void Method2LoaderPath_UsesHidDllNextToGameExe()
+    public void Method2LoaderPath_UsesWinHttpDllNextToGameExe()
     {
-        var expected = Path.Combine(_baseDir, Helpers.HidLoaderFileName);
+        var expected = Path.Combine(_baseDir, Helpers.WinHttpLoaderFileName);
 
         Helpers.Method2LoaderPath(_gamePath).Should().Be(expected);
     }
 
     [Fact]
-    public void DeleteLegacyLoaderFiles_RemovesHidDll()
+    public void DeleteLegacyLoaderFiles_RemovesWinHttpDll()
     {
-        var hidPath = Path.Combine(_baseDir, Helpers.HidLoaderFileName);
-        File.WriteAllText(hidPath, "loader");
+        var winhttpPath = Path.Combine(_baseDir, Helpers.WinHttpLoaderFileName);
+        File.WriteAllText(winhttpPath, "loader");
 
         Helpers.DeleteLegacyLoaderFiles(_baseDir);
 
-        File.Exists(hidPath).Should().BeFalse();
+        File.Exists(winhttpPath).Should().BeFalse();
     }
 
     [Fact]

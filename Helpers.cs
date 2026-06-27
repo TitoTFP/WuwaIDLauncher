@@ -14,7 +14,7 @@ internal static class Helpers
     internal const string PakFileName = "pakchunk0-ID-WindowsNoEditor_1000_P.pak";
     internal const string LegacyPakFileName = "WuWaID_99_P.pak";
     internal const string ManualPakFileName = "WuWa_ID_99_P.pak";
-    internal const string HidLoaderFileName = "hid.dll";
+    internal const string WinHttpLoaderFileName = "winhttp.dll";
     internal const string VersionLoaderFileName = "version.dll";
     const string GameProcessName = "Client-Win64-Shipping";
 
@@ -42,7 +42,7 @@ internal static class Helpers
         Path.Combine(Method2PakFolderPath(gamePath), ManualPakFileName);
 
     internal static string Method2LoaderPath(string gamePath) =>
-        Path.Combine(GameBinaryFolderPath(gamePath), HidLoaderFileName);
+        Path.Combine(GameBinaryFolderPath(gamePath), WinHttpLoaderFileName);
 
     internal static string AlternatePakPathForMethod(string gamePath, string installMethod) =>
         string.Equals(installMethod, "method2", StringComparison.OrdinalIgnoreCase)
@@ -100,7 +100,8 @@ internal static class Helpers
         var modDir = Path.Combine(baseDir, ModFolderName);
         var legacyModDir = Path.Combine(baseDir, LegacyModFolderName);
         var versionDll = Path.Combine(baseDir, VersionLoaderFileName);
-        var hidDll = Path.Combine(baseDir, HidLoaderFileName);
+        var winhttpDll = Path.Combine(baseDir, WinHttpLoaderFileName);
+        var hidDll = Path.Combine(baseDir, "hid.dll"); // Legacy loader
 
         if (Directory.Exists(modDir))
             Directory.Delete(modDir, true);
@@ -108,6 +109,8 @@ internal static class Helpers
             Directory.Delete(legacyModDir, true);
         if (File.Exists(versionDll))
             File.Delete(versionDll);
+        if (File.Exists(winhttpDll))
+            File.Delete(winhttpDll);
         if (File.Exists(hidDll))
             File.Delete(hidDll);
     }
@@ -115,10 +118,10 @@ internal static class Helpers
     internal static void DeleteManualLoaderFiles(string gamePath, bool preservePak = false)
     {
         var modDir = Method2PakFolderPath(gamePath);
-        var hidDll = Method2LoaderPath(gamePath);
+        var winhttpDll = Method2LoaderPath(gamePath);
 
-        if (File.Exists(hidDll))
-            File.Delete(hidDll);
+        if (File.Exists(winhttpDll))
+            File.Delete(winhttpDll);
 
         if (!Directory.Exists(modDir))
             return;
