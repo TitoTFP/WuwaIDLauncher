@@ -123,6 +123,7 @@ function drawNavWave(canvas) {
 function initCyberEffects() {
     initGlitchEffect();
     initAudioVisualizer();
+    initWaterEffect();
 }
 
 function initGlitchEffect() {
@@ -157,30 +158,61 @@ function initAudioVisualizer() {
     const stageContainer = document.getElementById('stageLights');
     if (!audio || !vizCanvas) return;
 
-    const RAIN_CHARS = 'ｦｧｨｩｪｫｬｭｮｯｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789ABCDEF';
-    const EASTER_EGGS = ['LUCY','REBECCA','DAVID','JOHNNY','ROVER','AEMEATH','SHOREKEEPER'];
-    const COL_W = 11, CHAR_H = 11, TRAIL = 14;
-    let ctx = null, rainCols = [];
+    const VIZ_H = 180;
+    let ctx = null, clouds = [];
+
+    function makeCloudSprite(w, h) {
+        const cv = document.createElement('canvas');
+        cv.width = Math.ceil(w); cv.height = Math.ceil(h);
+        const c = cv.getContext('2d');
+        const puffs = 7 + Math.floor(Math.random() * 6);
+        for (let i = 0; i < puffs; i++) {
+            const r  = h * (0.22 + Math.random() * 0.34);
+            const px = r + Math.random() * (w - 2 * r);
+            const py = h * 0.55 + (Math.random() - 0.5) * h * 0.4;
+            const g  = c.createRadialGradient(px, py, 0, px, py, r);
+            g.addColorStop(0.0, 'rgba(255,252,242,0.42)');
+            g.addColorStop(0.45,'rgba(246,228,188,0.22)');
+            g.addColorStop(1.0, 'rgba(232,204,150,0)');
+            c.fillStyle = g;
+            c.beginPath(); c.arc(px, py, r, 0, Math.PI * 2); c.fill();
+        }
+
+        c.globalCompositeOperation = 'lighter';
+        for (let i = 0; i < 3; i++) {
+            const r  = h * (0.14 + Math.random() * 0.18);
+            const px = r + Math.random() * (w - 2 * r);
+            const py = h * 0.45 + (Math.random() - 0.5) * h * 0.3;
+            const g  = c.createRadialGradient(px, py, 0, px, py, r);
+            g.addColorStop(0, 'rgba(255,250,235,0.26)');
+            g.addColorStop(1, 'rgba(255,250,235,0)');
+            c.fillStyle = g;
+            c.beginPath(); c.arc(px, py, r, 0, Math.PI * 2); c.fill();
+        }
+        return cv;
+    }
 
     function initCanvas() {
         vizCanvas.width  = window.innerWidth;
-        vizCanvas.height = 180;
+        vizCanvas.height = VIZ_H;
         ctx = vizCanvas.getContext('2d');
-        ctx.font = (CHAR_H - 1) + 'px Consolas';
-        ctx.textBaseline = 'top';
-        const count = Math.floor(vizCanvas.width / COL_W);
-        rainCols = [];
+        const W = vizCanvas.width;
+        const count = Math.max(5, Math.round(W / 360));
+        clouds = [];
         for (let i = 0; i < count; i++) {
-            const hasEgg = Math.random() < 0.18;
-            rainCols.push({
-                y:      -Math.random() * 180,
-                speed:  0.3 + Math.random() * 0.7,
-                chars:  Array.from({length: TRAIL}, () => RAIN_CHARS[Math.floor(Math.random() * RAIN_CHARS.length)]),
-                charT:  0,
-                egg:    hasEgg ? EASTER_EGGS[Math.floor(Math.random() * EASTER_EGGS.length)] : null,
-                eggOff: Math.floor(Math.random() * (TRAIL - 9)),
+            const depth = Math.random();
+            const h = VIZ_H * (0.5 + depth * 0.6);
+            const w = h * (2.2 + Math.random() * 1.6);
+            clouds.push({
+                sprite: makeCloudSprite(w, h),
+                w, h,
+                x: Math.random() * (W + w) - w,
+                y: -h * 0.30 + Math.random() * (VIZ_H - h * 0.6),
+                speed: 0.15 + depth * 0.55,
+                alpha: 0.35 + depth * 0.45,
             });
         }
+        clouds.sort((a, b) => a.alpha - b.alpha);
     }
     initCanvas();
     window.addEventListener('resize', initCanvas);
@@ -207,99 +239,56 @@ function initAudioVisualizer() {
     let bassE = 0, midE = 0, hiE = 0, overallE = 0;
 
     const vizLoop = (ts) => {
-        if (!_vizRunning || document.hidden) return;
+        if (document.hidden) { requestAnimationFrame(vizLoop); return; }
         if (ts - _vizLastT < VIZ_INTERVAL) { requestAnimationFrame(vizLoop); return; }
         _vizLastT = ts;
 
-        if (!_fftData) _fftData = new Uint8Array(_analyser.frequencyBinCount);
-        _analyser.getByteFrequencyData(_fftData);
+        const hasAudio = _vizRunning && _analyser;
+        if (hasAudio) {
+            if (!_fftData) _fftData = new Uint8Array(_analyser.frequencyBinCount);
+            _analyser.getByteFrequencyData(_fftData);
 
-        const dataLen = _fftData.length;
+            const dataLen = _fftData.length;
 
-        const rBass = getE(_fftData, 0, 12);
-        const rMid  = getE(_fftData, 12, 100);
-        const rHi   = getE(_fftData, 100, 320);
-        const rAll  = getE(_fftData, 0, 360);
-        bassE    += (rBass - bassE)    * 0.20;
-        midE     += (rMid  - midE)     * 0.15;
-        hiE      += (rHi   - hiE)      * 0.12;
-        overallE += (rAll  - overallE) * 0.10;
+            const rBass = getE(_fftData, 0, 12);
+            const rMid  = getE(_fftData, 12, 100);
+            const rHi   = getE(_fftData, 100, 320);
+            const rAll  = getE(_fftData, 0, 360);
+            bassE    += (rBass - bassE)    * 0.20;
+            midE     += (rMid  - midE)     * 0.15;
+            hiE      += (rHi   - hiE)      * 0.12;
+            overallE += (rAll  - overallE) * 0.10;
 
-        const op = (0.1 + bassE * 0.70).toFixed(2);
-        lights.forEach(l => { l.style.opacity = op; });
+            const op = (0.1 + bassE * 0.70).toFixed(2);
+            lights.forEach(l => { l.style.opacity = op; });
 
-        const BASS_END = 20;
-        let weightedSum = 0, totalWeight = 0;
-        for (let i = 0; i < BASS_END && i < dataLen; i++) {
-            const weight = (i + 1) / BASS_END;
-            weightedSum += _fftData[i] * weight;
-            totalWeight += weight;
-        }
-        const bassAvg = weightedSum / totalWeight;
+        } else {
 
-        if (bgLayer) {
-            let target = 1.0;
-            if (bassAvg > 60) {
-                target = 1.0 + ((bassAvg - 60) / 195) * 0.12;
-            }
-            const force = (target - _bgScale) * 0.12;
-            _bgVelocity = _bgVelocity * 0.75 + force;
-            _bgScale += _bgVelocity;
-            _bgScale = Math.max(1.0, Math.min(1.15, _bgScale));
-            bgLayer.style.transform = 'scale(' + _bgScale.toFixed(4) + ')';
+            bassE *= 0.92; midE *= 0.92; hiE *= 0.92; overallE *= 0.92;
+            lights.forEach(l => { l.style.opacity = (0.1 + bassE * 0.70).toFixed(2); });
         }
 
         if (!ctx) { requestAnimationFrame(vizLoop); return; }
-        ctx.clearRect(0, 0, vizCanvas.width, vizCanvas.height);
+        const W = vizCanvas.width, H = vizCanvas.height;
+        ctx.clearRect(0, 0, W, H);
 
-        const colCount = rainCols.length;
-        for (let i = 0; i < colCount; i++) {
-            const col = rainCols[i];
-            const freqIdx = Math.floor((i / colCount) * dataLen);
-            const freq    = _fftData[freqIdx] || 0;
-            const energy  = freq / 255;
-
-            col.y += col.speed + energy * 4;
-            if (col.y > vizCanvas.height + TRAIL * CHAR_H) {
-                col.y = -CHAR_H;
-                col.egg    = Math.random() < 0.18 ? EASTER_EGGS[Math.floor(Math.random() * EASTER_EGGS.length)] : null;
-                col.eggOff = Math.floor(Math.random() * (TRAIL - 9));
+        const drift = 1 + overallE * 0.8;
+        const glow  = 0.78 + overallE * 0.5;
+        for (let i = 0; i < clouds.length; i++) {
+            const cl = clouds[i];
+            cl.x += cl.speed * drift;
+            if (cl.x > W + cl.w) {
+                cl.x = -cl.w;
+                cl.y = -cl.h * 0.30 + Math.random() * (H - cl.h * 0.6);
             }
-
-            col.charT++;
-            if (col.charT > 2) {
-                col.charT = 0;
-                col.chars[Math.floor(Math.random() * TRAIL)] = RAIN_CHARS[Math.floor(Math.random() * RAIN_CHARS.length)];
-            }
-
-            const x = i * COL_W;
-            for (let t = 0; t < TRAIL; t++) {
-                const cy = col.y - t * CHAR_H;
-                if (cy < -CHAR_H || cy > vizCanvas.height) continue;
-
-                const trailFade = (1 - t / TRAIL);
-                const alpha = trailFade * (0.65 + energy * 0.35);
-
-                if (col.egg) {
-                    const eggIdx = (col.eggOff + col.egg.length - 1) - t;
-                    if (eggIdx >= 0 && eggIdx < col.egg.length) {
-                        ctx.fillStyle = 'rgba(252,238,9,' + alpha.toFixed(2) + ')';
-                        ctx.fillText(col.egg[eggIdx], x, cy);
-                        continue;
-                    }
-                }
-
-                if (t === 0) {
-                    ctx.fillStyle = 'rgba(200,255,255,' + Math.min(1, alpha * 1.6).toFixed(2) + ')';
-                } else {
-                    ctx.fillStyle = 'rgba(0,240,200,' + alpha.toFixed(2) + ')';
-                }
-                ctx.fillText(col.chars[t], x, cy);
-            }
+            ctx.globalAlpha = Math.min(1, cl.alpha * glow);
+            ctx.drawImage(cl.sprite, cl.x, cl.y);
         }
+        ctx.globalAlpha = 1;
 
         requestAnimationFrame(vizLoop);
     };
+    requestAnimationFrame(vizLoop);
 
     const start = () => {
         try {
@@ -313,7 +302,6 @@ function initAudioVisualizer() {
                 _analyser.connect(_audioCtx.destination);
             }
             _vizRunning = true;
-            requestAnimationFrame(vizLoop);
         } catch (e) { console.warn('Viz failed:', e); }
     };
 
@@ -328,3 +316,73 @@ function initAudioVisualizer() {
     });
 }
 
+function initWaterEffect() {
+    const canvas = document.getElementById('waterFx');
+    if (!canvas) return;
+
+    const WATER_H = 150;
+    let ctx = null, W = 0, H = 0;
+
+    function build() {
+        canvas.width  = window.innerWidth;
+        canvas.height = WATER_H;
+        ctx = canvas.getContext('2d');
+        W = canvas.width; H = canvas.height;
+    }
+    build();
+    window.addEventListener('resize', build);
+
+    const layers = [
+        { amp: 3, len: 230, speed: 0.5, yf: 0.16, col: 'rgba(244,212,138,', lw: 1.3, a: 0.30, phase: 0.0 },
+        { amp: 5, len: 330, speed: 0.8, yf: 0.34, col: 'rgba(255,246,222,', lw: 1.6, a: 0.22, phase: 1.4 },
+        { amp: 7, len: 470, speed: 1.2, yf: 0.54, col: 'rgba(212,176,108,', lw: 2.1, a: 0.18, phase: 3.1 },
+        { amp: 9, len: 640, speed: 1.7, yf: 0.74, col: 'rgba(255,250,235,', lw: 2.5, a: 0.13, phase: 0.7 },
+    ];
+
+    let t = 0;
+    const waterLoop = () => {
+        if (document.hidden || !ctx) { requestAnimationFrame(waterLoop); return; }
+        ctx.clearRect(0, 0, W, H);
+
+        const bg = ctx.createLinearGradient(0, 0, 0, H);
+        bg.addColorStop(0.0, 'rgba(10,16,46,0)');
+        bg.addColorStop(0.5, 'rgba(14,22,62,0.30)');
+        bg.addColorStop(1.0, 'rgba(22,34,86,0.58)');
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, W, H);
+
+        ctx.globalCompositeOperation = 'lighter';
+
+        const cols = Math.max(4, Math.round(W / 260));
+        for (let i = 0; i < cols; i++) {
+            const baseX = (((i / cols) * W) + t * 0.6) % (W + 120) - 60;
+            const x = baseX + Math.sin(t * 0.02 + i) * 14;
+            const g = ctx.createLinearGradient(x - 32, 0, x + 32, 0);
+            g.addColorStop(0.0, 'rgba(246,224,170,0)');
+            g.addColorStop(0.5, 'rgba(246,224,170,0.07)');
+            g.addColorStop(1.0, 'rgba(246,224,170,0)');
+            ctx.fillStyle = g;
+            ctx.fillRect(x - 32, H * 0.12, 64, H * 0.88);
+        }
+
+        for (const L of layers) {
+            L.phase += L.speed;
+            const y0 = H * L.yf;
+            ctx.beginPath();
+            for (let x = 0; x <= W; x += 6) {
+                const y = y0
+                    + Math.sin((x - L.phase) / L.len * Math.PI * 2) * L.amp
+                    + Math.sin((x * 0.5 - L.phase * 0.7) / L.len * Math.PI * 2) * L.amp * 0.4;
+                if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.strokeStyle = L.col + L.a + ')';
+            ctx.lineWidth = L.lw;
+            ctx.stroke();
+        }
+
+        ctx.globalCompositeOperation = 'source-over';
+        t += 1;
+        requestAnimationFrame(waterLoop);
+    };
+    requestAnimationFrame(waterLoop);
+}

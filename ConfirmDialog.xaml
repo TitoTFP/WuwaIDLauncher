@@ -21,13 +21,13 @@
             BorderThickness="1"
             CornerRadius="10"
             Padding="28,24,28,22">
-        
+
         <Border.Effect>
             <DropShadowEffect Color="#000000" BlurRadius="32" ShadowDepth="0" Opacity="0.7"/>
         </Border.Effect>
 
         <StackPanel>
-            
+
             <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
                 <Viewbox Width="20" Height="20" Margin="0,1,10,0">
                     <Canvas Width="24" Height="24">

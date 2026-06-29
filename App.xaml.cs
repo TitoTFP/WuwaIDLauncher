@@ -21,7 +21,7 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
-        
+
         if (Debugger.IsAttached || IsDebuggerPresent())
         { Shutdown(); return; }
         CheckRemoteDebuggerPresent(GetCurrentProcess(), out var remote);

@@ -9,8 +9,8 @@
 .fc-panel {
     width: 500px;
     padding: 0;
-    background: rgba(5,5,5,0.88);
-    border: 1px solid rgba(0,240,255,0.3);
+    background: rgba(8, 11, 40,0.88);
+    border: 1px solid rgba(212, 176, 108,0.3);
     border-radius: 0px;
     clip-path: polygon(0 0, 100% 0, 100% calc(100% - 20px), calc(100% - 20px) 100%, 0 100%);
     backdrop-filter: blur(4px);
@@ -24,9 +24,9 @@
 .fc-panel__header {
     display: flex; align-items: center; gap: 10px;
     padding: 22px 28px 18px;
-    background: linear-gradient(90deg, rgba(0,240,255,0.2) 0%, transparent 60%);
+    background: linear-gradient(90deg, rgba(212, 176, 108,0.2) 0%, transparent 60%);
     border-bottom: 2px solid;
-    border-image: linear-gradient(90deg, #00f0ff, #00f0ff, transparent) 1;
+    border-image: linear-gradient(90deg, #d4b06c, #d4b06c, transparent) 1;
     color: var(--accent-gold);
     font-size: 18px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase;
 }
@@ -72,7 +72,7 @@
     flex: 1; min-width: 0;
     padding: 12px 16px;
     background: rgba(255,255,255,0.04);
-    border: 1px solid rgba(0,240,255,0.2);
+    border: 1px solid rgba(212, 176, 108,0.2);
     border-right: none;
     border-radius: 0;
     font-size: 12px; color: rgba(255,255,255,0.50);
@@ -84,7 +84,7 @@
 .fc-current {
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
     padding: 14px 16px;
-    background: rgba(0,240,255,0.06);
+    background: rgba(212, 176, 108,0.06);
     border: none;
     border-left: 3px solid var(--blue);
     border-radius: 0;
@@ -97,7 +97,7 @@
     border-radius: 0px;
     clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
     flex-shrink: 0;
-    box-shadow: 0 0 8px rgba(0,240,255,0.5);
+    box-shadow: 0 0 8px rgba(212, 176, 108,0.5);
 }
 .fc-current__label {
     font-size: 11px; color: rgba(255,255,255,0.35); white-space: nowrap;
@@ -124,8 +124,8 @@
 .fc-name-suffix {
     display: flex; align-items: center;
     padding: 0 14px;
-    background: rgba(0,240,255,0.1);
-    border: 1px solid rgba(0,240,255,0.2); border-left: none;
+    background: rgba(212, 176, 108,0.1);
+    border: 1px solid rgba(212, 176, 108,0.2); border-left: none;
     border-radius: 0;
     font-size: 12px; color: var(--cyan-accent);
     white-space: nowrap;
@@ -137,7 +137,7 @@
     width: 100%; box-sizing: border-box;
     padding: 12px 16px;
     background: rgba(255,255,255,0.04);
-    border: 1px solid rgba(0,240,255,0.2);
+    border: 1px solid rgba(212, 176, 108,0.2);
     border-radius: 0;
     font-size: 13px; color: rgba(255,255,255,0.85);
     font-family: var(--font-ui);
@@ -146,7 +146,7 @@
 }
 .fc-input:focus {
     border-color: var(--blue);
-    background: rgba(0,240,255,0.04);
+    background: rgba(212, 176, 108,0.04);
     box-shadow: none;
 }
 .fc-input::placeholder { color: rgba(255,255,255,0.20); }
@@ -163,12 +163,12 @@
 .fc-status--ok {
     color: var(--green);
     border-left-color: var(--green);
-    background: rgba(0,255,102,0.04);
+    background: rgba(122, 202, 156,0.04);
 }
 .fc-status--err {
     color: var(--red);
     border-left-color: var(--red);
-    background: rgba(255,0,60,0.04);
+    background: rgba(216, 86, 74,0.04);
 }
 
 .fc-actions {
@@ -197,17 +197,17 @@
     background-color: rgba(255,255,255,0.05);
     background-image: radial-gradient(ellipse at 50% 0%, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0) 70%);
     border-top: 1px solid rgba(255,255,255,0.12);
-    color: rgba(0,240,255,0.55);
+    color: rgba(212, 176, 108,0.55);
     text-shadow: none;
     box-shadow: none;
-    border: 1px solid rgba(0,240,255,0.2);
+    border: 1px solid rgba(212, 176, 108,0.2);
     clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
     background-image: none;
 }
 .fc-btn--secondary::after { display: none; }
 .fc-btn--secondary:not(:disabled):hover {
-    background-color: rgba(0,240,255,0.1);
-    border-color: rgba(0,240,255,0.4);
+    background-color: rgba(212, 176, 108,0.1);
+    border-color: rgba(212, 176, 108,0.4);
     color: var(--cyan-accent);
 }
 .fc-btn--secondary:not(:disabled):active {
@@ -218,14 +218,14 @@
 
 .fc-btn--ghost {
     background: transparent;
-    color: rgba(0,240,255,0.30);
+    color: rgba(212, 176, 108,0.30);
     border-color: transparent;
     padding: 5px 8px; font-size: 11px;
     box-shadow: none;
     text-transform: none;
 }
 .fc-btn--ghost:not(:disabled):hover {
-    background: rgba(255,0,60,0.1);
+    background: rgba(216, 86, 74,0.1);
     color: var(--red);
 }
 
@@ -240,7 +240,7 @@
     border-radius: 0px;
     margin: 0 28px 20px;
     clip-path: polygon(15px 0, 100% 0, 100% calc(100% - 15px), calc(100% - 15px) 100%, 0 100%, 0 15px);
-    box-shadow: 0 0 16px rgba(252,238,9,0.2);
+    box-shadow: 0 0 16px rgba(244, 212, 138,0.2);
 }
 .fc-btn--primary::after { display: none; }
 .fc-btn--primary:not(:disabled):hover {
@@ -268,10 +268,10 @@
     align-items: center;
     gap: 10px;
     padding: 6px 12px 6px 8px;
-    background: rgba(10, 10, 10, 0.85);
+    background: rgba(14, 18, 52, 0.85);
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
-    border: 1px solid rgba(0, 240, 255, 0.2);
+    border: 1px solid rgba(212, 176, 108, 0.2);
     animation: fadeUp 500ms var(--ease) both;
 }
 
@@ -303,7 +303,7 @@
     background: var(--accent-gold);
     border: none;
     border-radius: 0px;
-    box-shadow: 0 0 6px rgba(252,238,9,0.80);
+    box-shadow: 0 0 6px rgba(244, 212, 138,0.80);
 }
 .ap-vol__slider {
     position: absolute; inset: -6px 0;
@@ -330,7 +330,7 @@
 }
 .ap-btn:hover {
     color: var(--cyan-accent);
-    background: rgba(0,240,255,0.08);
+    background: rgba(212, 176, 108,0.08);
 }
 .ap-btn--sm  { width: 24px; height: 24px; }
 
@@ -339,12 +339,12 @@
     background: var(--accent-gold);
     border: none;
     color: #000;
-    box-shadow: 0 0 10px rgba(252,238,9,0.3);
+    box-shadow: 0 0 10px rgba(244, 212, 138,0.3);
     clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
 }
 .ap-btn--play:hover {
     transform: translateY(-1px);
-    box-shadow: 0 0 16px rgba(252,238,9,0.5);
+    box-shadow: 0 0 16px rgba(244, 212, 138,0.5);
     background: #fff;
     filter: brightness(1.08);
 }

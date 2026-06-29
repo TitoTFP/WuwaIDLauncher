@@ -77,9 +77,9 @@ function initParticles() {
     })();
 }
 
-let navWaveT = 0;      // global time tick
-let _indCurL = 0, _indCurW = 0;   // currently rendered bounds (px from nav left)
-let _indTgtL = 0, _indTgtW = 0;   // target bounds
+let navWaveT = 0;
+let _indCurL = 0, _indCurW = 0;
+let _indTgtL = 0, _indTgtW = 0;
 let _indReady = false;
 
 function initNavWave() {
@@ -94,8 +94,8 @@ function drawNavWave(canvas) {
 
     ctx.clearRect(0, 0, W, H);
 
-    const cL = _indCurL;        // indicator left edge (lerped)
-    const cW = _indCurW;        // indicator width (lerped)
+    const cL = _indCurL;
+    const cW = _indCurW;
     if (cW <= 1) return;
 
     const t = navWaveT;
@@ -138,8 +138,8 @@ function drawNavWave(canvas) {
         }
     };
 
-    drawArc(-1); // top arcs
-    drawArc(+1); // bottom arcs
+    drawArc(-1);
+    drawArc(+1);
 }
 
 function initTopNav() {
@@ -433,12 +433,12 @@ window.onAdminRequired = () => {
     if (dx11Row) dx11Row.style.display = 'none';
     const oldHandler = handleStart;
     btn.removeEventListener('click', oldHandler);
-    
+
     const adminHandler = () => {
         if (bridge()) bridge().RestartAsAdmin();
     };
     btn.addEventListener('click', adminHandler);
-    
+
     toast('Thư mục game đang bị khóa. Cần quyền Admin!', 'err');
 };
 window.onGamePathDetected = path => {
@@ -691,8 +691,8 @@ const GFX_CATS = [
 let _gfxValues = {};
 let _gfxDefaults = {};
 let _gfxBuilt = false;
-let _gfxCacheHasData = false; // true once cache was successfully loaded from disk
-let _gfxFileValues = null; // values loaded from disk (null = not loaded yet)
+let _gfxCacheHasData = false;
+let _gfxFileValues = null;
 
 async function gfxInit() {
     const hint = document.getElementById('gfxConfigPath');
@@ -928,7 +928,7 @@ function gfxCalcRawPct() {
 
 function gfxUpdatePerf() {
     const raw = gfxCalcRawPct();
-    const pct = raw * 100;           // already 0-1 normalised
+    const pct = raw * 100;
     const display = Math.round(pct);
     const fill = document.getElementById('gfxPerfFill');
     const txt  = document.getElementById('gfxPerfPct');
@@ -972,7 +972,7 @@ async function gfxApply() {
     } else if (result === 'admin_required') {
         const ok = await showConfirm('Không có quyền ghi file Engine.ini.\nKhởi động lại Launcher với quyền Admin?');
         if (ok && bridge()) {
-            await gfxSaveCache(); // ensure latest settings are persisted before restart
+            await gfxSaveCache();
             bridge().RestartAsAdmin();
         }
     } else {
@@ -1377,7 +1377,7 @@ async function fcBrowseFont() {
     if (!path) return;
     FC.fontPath = path;
     const fileName = path.split('\\').pop().split('/').pop();
-    const baseName = fileName.replace(/\.[^.]+$/, ''); // strip extension
+    const baseName = fileName.replace(/\.[^.]+$/, '');
     document.getElementById('fcFontDisplay').textContent = fileName;
     document.getElementById('fcOutputName').value = baseName;
     document.getElementById('fcBuildBtn').disabled = false;
@@ -1459,4 +1459,3 @@ function fcSetStatus(msg, isError, isSuccess = false) {
     el.className = 'fc-status' + (isError ? ' fc-status--err' : isSuccess ? ' fc-status--ok' : '');
     el.textContent = msg;
 }
-

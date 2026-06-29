@@ -192,7 +192,6 @@ async function browseFolder() {
     }
 }
 
-
 function initWaterRipple() {
     document.addEventListener('click', e => {
         const origin = document.createElement('div');
@@ -222,7 +221,6 @@ function initWaterRipple() {
         setTimeout(() => origin.remove(), 2000);
     });
 }
-
 
 function initAudioPlayer() {
     const audio      = document.getElementById('bgMusic');
@@ -352,8 +350,6 @@ function toggleBgm(on) {
     else    { a.pause(); }
 }
 
-
-
 function showConfirm(message) {
     return new Promise(resolve => {
         const modal  = document.getElementById('confirmModal');
@@ -389,7 +385,6 @@ function toast(msg, type='info') {
         setTimeout(() => el.remove(), 400);
     }, 3500);
 }
-
 
 const FC = {
     fontPath: '',
@@ -439,7 +434,7 @@ async function fcBrowseFont() {
     if (!path) return;
     FC.fontPath = path;
     const fileName = path.split('\\').pop().split('/').pop();
-    const baseName = fileName.replace(/\.[^.]+$/, ''); 
+    const baseName = fileName.replace(/\.[^.]+$/, '');
     document.getElementById('fcFontDisplay').textContent = fileName;
     document.getElementById('fcOutputName').value = baseName;
     document.getElementById('fcBuildBtn').disabled = false;
@@ -521,8 +516,3 @@ function fcSetStatus(msg, isError, isSuccess = false) {
     el.className = 'fc-status' + (isError ? ' fc-status--err' : isSuccess ? ' fc-status--ok' : '');
     el.textContent = msg;
 }
-
-
-
-
-

@@ -11,7 +11,6 @@ static class WuwaPakPacker
     const string FontInPakPath   = "Client/Content/Aki/UI/Framework/LGUI/Font/LaguSansBold.ufont";
     const string DefaultMount    = "../../../";
 
-
     static void WriteString(BinaryWriter w, string s)
     {
         byte[] b = System.Text.Encoding.UTF8.GetBytes(s);
@@ -84,7 +83,6 @@ static class WuwaPakPacker
         return ms.ToArray();
     }
 
-
     static void Pack(string dest, string mount, ulong seed, IReadOnlyList<(string Path, byte[] Data)> files)
     {
         using var fs = new FileStream(dest, FileMode.Create, FileAccess.Write, FileShare.None);
@@ -144,9 +142,9 @@ static class WuwaPakPacker
 
         ulong bytesBeforePhi =
               (ulong)StringSize(mount)
-            + 4 + 8                 
-            + 4 + 8 + 8 + 20       
-            + 4 + 8 + 8 + 20       
+            + 4 + 8
+            + 4 + 8 + 8 + 20
+            + 4 + 8 + 8 + 20
             + 4 + (ulong)enc.Length + 4;
 
         ulong phiOffset = indexOffset + bytesBeforePhi;
@@ -169,17 +167,16 @@ static class WuwaPakPacker
         w.Write(phi);
         w.Write(fdi);
 
-        w.Write((ulong)0); w.Write((ulong)0); 
-        w.Write((byte)0);                     
+        w.Write((ulong)0); w.Write((ulong)0);
+        w.Write((byte)0);
         w.Write(Magic);
         w.Write(VersionMajorWuwa);
         w.Write(indexOffset);
         w.Write((ulong)indexBuf.Length);
         w.Write(Sha1(indexBuf));
-        w.Write(new byte[32 * 5]);            
+        w.Write(new byte[32 * 5]);
         w.Flush();
     }
-
 
     public static string PackFont(string modDir, string pakName, byte[] fontData)
     {

@@ -190,12 +190,12 @@ window.onAdminRequired = () => {
 
     const oldHandler = handleStart;
     btn.removeEventListener('click', oldHandler);
-    
+
     const adminHandler = () => {
         if (bridge()) bridge().RestartAsAdmin();
     };
     btn.addEventListener('click', adminHandler);
-    
+
     toast('Thư mục game đang bị khóa. Cần quyền Admin!', 'err');
 };
 window.onGamePathDetected = path => {
@@ -207,7 +207,6 @@ window.onGamePathDetected = path => {
         setTimeout(() => { if (!S.installing) startInstall(); }, 800);
     }
 };
-
 
 (function() {
     let _targetDate = null;
@@ -224,7 +223,7 @@ window.onGamePathDetected = path => {
         const diff = _targetDate - now;
 
         if (diff <= 0) {
-            
+
             ['ucDays','ucHours','ucMins','ucSecs'].forEach(id => {
                 const e = document.getElementById(id);
                 if (e) e.textContent = '00';
@@ -268,7 +267,7 @@ window.onGamePathDetected = path => {
         if (isNaN(target.getTime())) return;
 
         _targetDate = target.getTime();
-        
+
         _totalMs = 6 * 7 * 24 * 3600 * 1000;
 
         el.style.display = '';
@@ -316,7 +315,7 @@ window.onMediaProgress = (pct, text, speed, size) => {
 };
 
 window.onMediaReady = (bgmUrl, videoUrl) => {
-    
+
     if (videoUrl) {
         const vid = document.getElementById('bgVideo');
         if (vid) {
@@ -330,13 +329,13 @@ window.onMediaReady = (bgmUrl, videoUrl) => {
             vid.addEventListener('canplay', onReady);
         }
     }
-    
+
     if (bgmUrl && window.apSetAudioSource) window.apSetAudioSource(bgmUrl);
     window.onMediaStatus('ready');
 };
 
 function initModal() {
-    
+
 }
 
 function openModal() {}
@@ -361,4 +360,3 @@ async function loadVersions() {
 }
 
 let _launcherUpdateUrl = '';
-

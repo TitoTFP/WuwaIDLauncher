@@ -4,30 +4,30 @@
     --cursor-custom: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAQhSURBVEhLtZYNTFNXFMdR8VtEUUARpgvq4oxuqMWJxkRJMNMlGmNM1OgS3AZmExOWaGI2jR9RMbYuavADJ4YZDDo6KRYhWFQsUihFQVE+OxAstS1Yawm0QM/O/42XELOlrZZ/8gt97917/u/ee855+P2Hhr3HkAoGIxj/QQxnhswYwUcHBgZO4r/jmQnMOAYvMSSmCDwmduWyqB1bNiXw70+ZUCZg4JnPTbHCCUFBQfPycrI1V3+/mM7Xi5kZTCAzkvGpKQwReHZhvjKfWNk3ryv5OpaZyQQxoxmM84lEw8irV9LSYQgV5uWURM4K28z3YRrMjGV8ssUIgPP6ZP++PSkDfoLqamtexsREJfKzOUwI4zNTZGX49m2bkru67P0w63N2C6ZNjfUd8fFbD/LzL5jpDLJYLJ0P1hgmTCL5/Fuj0WCD0Tubibq6rILpW/vbPtnJY5d5jIRBMqGERjEfvFJMDg0IGLW25e8mA0xsVgN1mvRk7XgpmDqdTrqWflHO49YwEczkgXlYqdfGSP2pzDJt+aMqGFjNejIZ6uhVcxW1t1RRb49dMNaUqnUzpgVv5LGo1ykMztXr7UUiIP2j8m7fUiGw5VUttekrqblBS/Uv7lPdkztks/y72seVuqavJBIxmaYxXncmsTRmX0m7kIGgpranpH/+kBpqHtCLqnyqLpdTRfEf1FSjFkzb242dyUkJR3jOAmZwMnkksTRmnjkt/Q0BzYZnVPNESdWVuVRdJiedOpNKVWlUrDhFz8oUgmmHxew89OveczxvCQPTiYzHnQmNOzwx8bt9DofTZTbWk1Z9nSrAgwxSF6RS4V/HqeDGAVJk/EzqO+e5dOzk6u8nRY78Ns9dzuBYsFJsr1uhNKZHRy/caTZbemxv2qjk7iV6pLpE95Qy0hZfo4bqu2Rs1vFZ6sn5ziysUlSu4s/KmOjoOI6BF8cq3UoojZCQKRtaW1tNvT1Wup8rowL5ESp/iGN1CYG7u3scr42vzY21jY2lJSXarKxM5ekzp85LpSlHv46L+4ZjiF8Zt8JbBfv7+6+ob6h9Ti4H5WX9QkW5UnL1OeiNpdO+J+n7c7Grlu6aGxmKHruaWcTMZ8QmDzMxY91KLI3FKlWhkIoqxQmyWlrI6ejtTzl6OJWfRTGoPyQIeiuaOhoAMhxbiWPxuDxQGmhZc29kZWbDsLNDaDqUelaWyfdhhraGTMTnCjuCMoCB2G08rkMIgxEsUiY9lio4sYqKCsr53komjEEGet1V/k8wRMCw5KTE/TDTaDR1ERER6/keeie2DSvyahXuhAOfnPRTwk5dRVnblws+28rX4bjHeFzQ3gilMX7z+nVrfvwhfjf/xj9TSCTxU+RzQyQAuj9MsIXYYmSez87tfWEFMBURs3BIJW7dYD5Cfn7/ACZAD46075syAAAAAElFTkSuQmCC') 3 3, auto;
     --cursor-select: url('data:image/png;base64,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') 3 3, var(--cursor-custom);
 
-    --bg-deep: #050505;
-    --bg-panel: rgba(10, 10, 10, 0.82);
-    --bg-panel-solid: #0a0a0a;
-    --bg-hover: rgba(0, 240, 255, 0.10);
+    --bg-deep: #080b28;
+    --bg-panel: rgba(14, 18, 52, 0.82);
+    --bg-panel-solid: #0e1234;
+    --bg-hover: rgba(212, 176, 108, 0.10);
 
-    --glass-border: rgba(0, 240, 255, 0.3);
-    --glass-border-hover: rgba(0, 240, 255, 0.6);
+    --glass-border: rgba(212, 176, 108, 0.3);
+    --glass-border-hover: rgba(212, 176, 108, 0.6);
 
-    --accent-gold: #fcee09;
-    --accent-warm: #fcee09;
-    --accent-glow: rgba(252, 238, 9, 0.25);
-    --accent-peach: #ff003c;
-    --accent-orange: #ff003c;
+    --accent-gold: #f4d48a;
+    --accent-warm: #f4d48a;
+    --accent-glow: rgba(244, 212, 138, 0.25);
+    --accent-peach: #d8564a;
+    --accent-orange: #d8564a;
 
     --text-1: #ffffff;
     --text-2: rgba(255, 255, 255, 0.7);
-    --text-3: rgba(0, 240, 255, 0.5);
+    --text-3: rgba(212, 176, 108, 0.5);
 
-    --green: #00ff66;
-    --red: #ff003c;
-    --blue: #00f0ff;
+    --green: #7acaa0;
+    --red: #d8564a;
+    --blue: #d4b06c;
 
-    --cream: #fcee09;
-    --cyan-accent: #00f0ff;
+    --cream: #f4d48a;
+    --cyan-accent: #d4b06c;
 
     --font-ui: 'JetBrains Mono', 'Segoe UI', monospace;
 
@@ -35,8 +35,8 @@
     --sidebar-w: 340px;
     --rp-w: 280px;
     --edge-gap: 20px;
-    --radius: 0px;
-    --radius-sm: 0px;
+    --radius: 10px;
+    --radius-sm: 6px;
 
     --ease: cubic-bezier(0.32, 0.72, 0, 1);
     --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -60,8 +60,8 @@ button { border: none; background: none; cursor: var(--cursor-select); font-fami
 input { font-family: inherit; }
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(0,240,255,0.25); border-radius: 0px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(0,240,255,0.45); }
+::-webkit-scrollbar-thumb { background: rgba(212, 176, 108,0.25); border-radius: 0px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(212, 176, 108,0.45); }
 
 .bg-layer {
     position: fixed; inset: 0; z-index: 0;
@@ -80,10 +80,10 @@ input { font-family: inherit; }
 .bg-vignette {
     position: absolute; inset: 0;
     background:
-        radial-gradient(ellipse 120% 80% at 90% 85%, rgba(5,5,5,0.78) 0%, transparent 55%),
-        linear-gradient(270deg, rgba(5,5,5,0.72) 0%, rgba(5,5,5,0.22) 22%, transparent 42%),
-        linear-gradient(0deg, rgba(5,5,5,0.60) 0%, transparent 20%),
-        linear-gradient(180deg, rgba(5,5,5,0.55) 0%, transparent 14%);
+        radial-gradient(ellipse 120% 80% at 90% 85%, rgba(8, 11, 40,0.78) 0%, transparent 55%),
+        linear-gradient(270deg, rgba(8, 11, 40,0.72) 0%, rgba(8, 11, 40,0.22) 22%, transparent 42%),
+        linear-gradient(0deg, rgba(8, 11, 40,0.60) 0%, transparent 20%),
+        linear-gradient(180deg, rgba(8, 11, 40,0.55) 0%, transparent 14%);
     pointer-events: none;
 }
 
@@ -104,7 +104,7 @@ input { font-family: inherit; }
 .scanlines::after {
     content: "";
     position: absolute; inset: 0;
-    background: rgba(18, 16, 16, 0.05);
+    background: rgba(10, 13, 40, 0.05);
     opacity: 0;
     animation: crtFlicker 0.15s infinite;
     pointer-events: none;
@@ -118,10 +118,10 @@ input { font-family: inherit; }
 
 body.sidebar-open .bg-vignette {
     background:
-        radial-gradient(ellipse 120% 80% at 10% 85%, rgba(5,5,5,0.82) 0%, transparent 50%),
-        linear-gradient(90deg, rgba(5,5,5,0.90) 0%, rgba(5,5,5,0.55) 22%, transparent 42%),
-        linear-gradient(0deg, rgba(5,5,5,0.85) 0%, transparent 25%),
-        linear-gradient(180deg, rgba(5,5,5,0.50) 0%, transparent 12%);
+        radial-gradient(ellipse 120% 80% at 10% 85%, rgba(8, 11, 40,0.82) 0%, transparent 50%),
+        linear-gradient(90deg, rgba(8, 11, 40,0.90) 0%, rgba(8, 11, 40,0.55) 22%, transparent 42%),
+        linear-gradient(0deg, rgba(8, 11, 40,0.85) 0%, transparent 25%),
+        linear-gradient(180deg, rgba(8, 11, 40,0.50) 0%, transparent 12%);
 }
 
 #particleCanvas { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
@@ -132,8 +132,8 @@ body.sidebar-open .bg-vignette {
     display: flex; align-items: center; justify-content: space-between;
     padding: 0 var(--edge-gap);
     background: linear-gradient(180deg,
-        rgba(5, 5, 5, 0.65) 0%,
-        rgba(5, 5, 5, 0.20) 80%,
+        rgba(8, 11, 40, 0.65) 0%,
+        rgba(8, 11, 40, 0.20) 80%,
         transparent 100%);
     -webkit-app-region: drag;
 }
@@ -162,18 +162,18 @@ body.sidebar-open .bg-vignette {
 }
 .top-bar__btn:hover {
     color: var(--text-1);
-    background: rgba(0,240,255,0.15);
-    box-shadow: 0 0 12px rgba(0,240,255,0.20);
+    background: rgba(212, 176, 108,0.15);
+    box-shadow: 0 0 12px rgba(212, 176, 108,0.20);
     transform: scale(1.08);
 }
 .top-bar__btn--close:hover {
     color: #fff;
-    background: #ff003c;
-    box-shadow: 0 0 16px rgba(255,0,60,0.40);
+    background: #d8564a;
+    box-shadow: 0 0 16px rgba(216, 86, 74,0.40);
 }
 .top-bar__sep {
     width: 1px; height: 16px;
-    background: linear-gradient(180deg, transparent, rgba(0,240,255,0.3), transparent);
+    background: linear-gradient(180deg, transparent, rgba(212, 176, 108,0.3), transparent);
     margin: 0 4px;
 }
 
@@ -193,7 +193,7 @@ body.sidebar-open .bg-vignette {
     font-size: 11px; font-weight: 800;
     letter-spacing: 2.5px;
     text-transform: uppercase;
-    color: rgba(0, 240, 255, 0.55);
+    color: rgba(212, 176, 108, 0.55);
     border-radius: 0px;
     clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
     border: 1.5px solid transparent;
@@ -202,8 +202,8 @@ body.sidebar-open .bg-vignette {
 }
 .top-nav__item:hover {
     color: #fff;
-    background: rgba(0, 240, 255, 0.1);
-    border-color: rgba(0, 240, 255, 0.2);
+    background: rgba(212, 176, 108, 0.1);
+    border-color: rgba(212, 176, 108, 0.2);
 }
 
 .top-nav__item.active {
@@ -211,7 +211,7 @@ body.sidebar-open .bg-vignette {
     background: var(--accent-gold);
     border-color: var(--accent-gold);
     box-shadow:
-        0 4px 12px rgba(252,238,9,0.30);
+        0 4px 12px rgba(244, 212, 138,0.30);
     text-shadow: none;
 }
 
@@ -227,7 +227,7 @@ body.sidebar-open .bg-vignette {
 .top-nav__item.active::after { display: none; }
 
 .top-nav__item.active:hover {
-    box-shadow: 0 0 16px rgba(252,238,9,0.4);
+    box-shadow: 0 0 16px rgba(244, 212, 138,0.4);
     transform: translateY(-1px);
     background: #fff;
     color: #000;
@@ -252,4 +252,3 @@ body.sidebar-open .bg-vignette {
     width: 100%; height: 100%;
     background: transparent;
 }
-

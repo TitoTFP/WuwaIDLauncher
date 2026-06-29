@@ -1,46 +1,27 @@
 
-
-const PM_TOGGLES = [
-    { id: 'pmShadows',         key: 'shadows'         },
-    { id: 'pmSsr',             key: 'ssr'             },
-    { id: 'pmAo',              key: 'ao'              },
-    { id: 'pmBloom',           key: 'bloom'           },
-    { id: 'pmLensFlare',       key: 'lensFlare'       },
-    { id: 'pmDof',             key: 'dof'             },
-    { id: 'pmMaterials',       key: 'materials'       },
-    { id: 'pmSss',             key: 'sss'             },
-    { id: 'pmViewDist',        key: 'viewDist'        },
-    { id: 'pmFoliage',         key: 'foliage'         },
-    { id: 'pmFoliageInteract', key: 'foliageInteract' },
-    { id: 'pmParticles',       key: 'particles'       },
-    { id: 'pmClouds',          key: 'clouds'          },
-    { id: 'pmVolumetric',      key: 'volumetric'      },
-];
-
 function initPerformanceMode() {
-    document.getElementById('pmApplyBtn')?.addEventListener('click', pmApply);
-    document.getElementById('pmClearBtn')?.addEventListener('click', pmClear);
-}
-
-function pmLoadToggles() {
-    const perf = S.cfg.perf || {};
-    PM_TOGGLES.forEach(({ id, key }) => {
-        const el = document.getElementById(id);
-        if (el) el.checked = !!perf[key];
-    });
+    document.getElementById('pmEnabled')?.addEventListener('change', pmOnToggle);
+    document.getElementById('pmShadow')?.addEventListener('change', pmOnShadowChange);
 }
 
 async function pmRefreshStatus() {
-    pmLoadToggles();
+    const perf = S.cfg.perf || {};
+    const elEnabled = document.getElementById('pmEnabled');
+    const elShadow  = document.getElementById('pmShadow');
+    if (elEnabled) elEnabled.checked = !!perf.enabled;
+    if (elShadow)  elShadow.checked  = !!perf.shadow;
+
     if (!S.gamePath || !bridge()) {
-        pmSetStatus('inactive', 'Chưa chọn thư mục game');
+        pmSetStatus('inactive', 'Chưa bật');
         return;
     }
     try {
-        const active = await bridge().GetPerformanceConfigActive(S.gamePath);
-        pmSetStatus(active ? 'active' : 'inactive', active ? 'Đang hoạt động' : 'Chưa áp dụng');
-    } catch(e) {
-        pmSetStatus('inactive', 'Chưa áp dụng');
+        const active = await bridge().GetPerformanceModeActive(S.gamePath);
+        pmSetStatus(active ? 'active' : 'inactive', active ? 'Đang hoạt động' : 'Chưa bật');
+        if (elEnabled) elEnabled.checked = active;
+        S.cfg.perf = { ...perf, enabled: active };
+    } catch (e) {
+        pmSetStatus('inactive', 'Chưa bật');
     }
 }
 
@@ -51,66 +32,60 @@ function pmSetStatus(state, text) {
     if (txt) txt.textContent = text;
 }
 
-async function pmApply() {
-    if (!S.gamePath) { toast('Chưa chọn thư mục game!', 'err'); return; }
-
-    const settings = {};
-    PM_TOGGLES.forEach(({ id, key }) => {
-        const el = document.getElementById(id);
-        settings[key] = el ? el.checked : false;
-    });
-
-    const anyEnabled = Object.values(settings).some(Boolean);
-    if (!anyEnabled) { toast('Chưa bật hiệu ứng nào để tối ưu.', 'info'); return; }
-
-    S.cfg.perf = settings;
-    saveSettings();
-
-    if (!bridge()) { toast('Demo: Đã lưu cấu hình hiệu năng', 'ok'); return; }
-
-    const btn = document.getElementById('pmApplyBtn');
-    if (btn) { btn.disabled = true; btn.textContent = 'Đang ghi...'; }
-
-    try {
-        const result = await bridge().ApplyPerformanceConfig(S.gamePath, JSON.stringify(settings));
-        if (result === 'ok') {
-            toast('Đã áp dụng! Khởi động lại game để có hiệu lực.', 'ok');
-            pmSetStatus('active', 'Đang hoạt động');
-        } else {
-            toast('Lỗi: ' + result, 'err');
-        }
-    } catch(e) {
-        toast('Lỗi khi ghi config: ' + e, 'err');
-    } finally {
-        if (btn) { btn.disabled = false; btn.textContent = 'Áp dụng & Lưu'; }
+async function pmOnToggle() {
+    const shadow = document.getElementById('pmShadow')?.checked ?? false;
+    if (document.getElementById('pmEnabled')?.checked) {
+        await pmDoApply(shadow);
+    } else {
+        await pmDoClear();
     }
 }
 
-async function pmClear() {
+async function pmOnShadowChange() {
+    const enabled = document.getElementById('pmEnabled')?.checked ?? false;
+    const shadow  = document.getElementById('pmShadow')?.checked  ?? false;
+    S.cfg.perf = { enabled, shadow };
+    saveSettings();
+    if (enabled && S.gamePath && bridge()) await pmDoApply(shadow);
+}
+
+async function pmDoApply(shadow) {
     if (!S.gamePath) { toast('Chưa chọn thư mục game!', 'err'); return; }
-
-    if (!bridge()) { toast('Demo: Đã xoá cấu hình hiệu năng', 'info'); return; }
-
-    const btn = document.getElementById('pmClearBtn');
-    if (btn) { btn.disabled = true; btn.textContent = 'Đang xoá...'; }
-
+    S.cfg.perf = { enabled: true, shadow };
+    saveSettings();
+    if (!bridge()) { pmSetStatus('active', 'Đang hoạt động'); return; }
     try {
-        const result = await bridge().ClearPerformanceConfig(S.gamePath);
+        const result = await bridge().ApplyPerformanceMode(S.gamePath, shadow);
         if (result === 'ok') {
-            toast('Đã xoá config. Game sẽ dùng setting mặc định.', 'ok');
-            pmSetStatus('inactive', 'Chưa áp dụng');
-            S.cfg.perf = {};
-            saveSettings();
-            PM_TOGGLES.forEach(({ id }) => {
-                const el = document.getElementById(id);
-                if (el) el.checked = false;
-            });
+            pmSetStatus('active', 'Đang hoạt động');
+            toast('Đã bật. Khởi động lại game để có hiệu lực.', 'ok');
         } else {
             toast('Lỗi: ' + result, 'err');
+            const el = document.getElementById('pmEnabled');
+            if (el) el.checked = false;
+            S.cfg.perf = { enabled: false, shadow };
+            saveSettings();
         }
-    } catch(e) {
-        toast('Lỗi: ' + e, 'err');
-    } finally {
-        if (btn) { btn.disabled = false; btn.textContent = 'Xoá config'; }
-    }
+    } catch (e) { toast('Lỗi: ' + e, 'err'); }
+}
+
+async function pmDoClear() {
+    if (!S.gamePath) { toast('Chưa chọn thư mục game!', 'err'); return; }
+    const shadow = document.getElementById('pmShadow')?.checked ?? false;
+    S.cfg.perf = { enabled: false, shadow };
+    saveSettings();
+    if (!bridge()) { pmSetStatus('inactive', 'Chưa bật'); return; }
+    try {
+        const result = await bridge().ClearPerformanceMode(S.gamePath);
+        if (result === 'ok') {
+            pmSetStatus('inactive', 'Chưa bật');
+            toast('Đã tắt.', 'ok');
+        } else {
+            toast('Lỗi: ' + result, 'err');
+            const el = document.getElementById('pmEnabled');
+            if (el) el.checked = true;
+            S.cfg.perf = { enabled: true, shadow };
+            saveSettings();
+        }
+    } catch (e) { toast('Lỗi: ' + e, 'err'); }
 }

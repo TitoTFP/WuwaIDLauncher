@@ -8,12 +8,13 @@
     <link rel="stylesheet" href="styles-panel.css">
     <link rel="stylesheet" href="styles-effects.css">
     <link rel="stylesheet" href="styles-font.css">
+    <link rel="stylesheet" href="styles-bilibili.css">
 </head>
 <body>
-    
+
     <div class="bg-layer">
         <video id="bgVideo" muted loop playsinline preload="auto">
-            
+
         </video>
         <div class="bg-vignette"></div>
         <div class="scanlines"></div>
@@ -22,6 +23,8 @@
 
     <canvas id="audioViz" class="audio-viz"></canvas>
 
+    <canvas id="waterFx" class="water-fx"></canvas>
+
     <canvas id="particleCanvas"></canvas>
 
     <div class="side-panel" id="sidePanel" style="display:none;">
@@ -29,7 +32,7 @@
             <div class="rn-head">
                 <div class="rn-head__left">
                     <span class="rn-tag" id="rnTag">VH</span>
-                    <span class="rn-head__title">VIỆT HOÁ - THÔNG BÁO</span>
+                    <span class="rn-head__title">THÔNG BÁO</span>
                 </div>
                 <span class="rn-date" id="rnDate"></span>
             </div>
@@ -78,7 +81,7 @@
             <h3 class="lu-modal__title">Có phiên bản mới!</h3>
             <p class="lu-modal__ver" id="luModalVer"></p>
             <p class="lu-modal__desc">Bạn có muốn cập nhật Launcher ngay bây giờ không?</p>
-            
+
             <div class="lu-pbar" id="luPbar" style="display:none;">
                 <div class="lu-pbar__text" id="luPbarText">0%</div>
                 <div class="lu-pbar__track">
@@ -182,12 +185,12 @@
             </button>
             <button class="start-btn" id="btnStart">
                 <span class="start-btn__shine"></span>
-                
+
                 <svg class="start-btn__star" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <path d="M40 0 L46 28 L58 8 L48 30 L72 18 L50 34 L80 40 L50 46 L72 62 L48 50 L58 72 L46 52 L40 80 L34 52 L22 72 L32 50 L8 62 L30 46 L0 40 L30 34 L8 18 L32 30 L22 8 L34 28 Z" fill="url(#starGrad)"/>
                     <defs><linearGradient id="starGrad" x1="0" y1="0" x2="80" y2="80"><stop offset="0%" stop-color="#ff4060"/><stop offset="50%" stop-color="#ff6080"/><stop offset="100%" stop-color="#ffb040"/></linearGradient></defs>
                 </svg>
-                
+
                 <svg class="start-btn__deco start-btn__deco--tl" viewBox="0 0 12 12"><polygon points="6,0 12,6 6,12 0,6" fill="#ffd040"/></svg>
                 <svg class="start-btn__deco start-btn__deco--tr" viewBox="0 0 12 12"><polygon points="6,0 12,6 6,12 0,6" fill="#ffd040"/></svg>
                 <svg class="start-btn__deco start-btn__deco--bl" viewBox="0 0 12 12"><polygon points="6,0 12,6 6,12 0,6" fill="#ffd040"/></svg>
@@ -212,171 +215,35 @@
                 </div>
                 <div class="pm-header__text">
                     <span class="pm-header__title">High Performance Mode</span>
-                    <span class="pm-header__sub">Tắt các hiệu ứng nặng để tăng FPS</span>
                 </div>
                 <div class="pm-status">
                     <span class="pm-status__dot" id="pmStatusDot"></span>
-                    <span id="pmStatusText">Chưa áp dụng</span>
+                    <span id="pmStatusText">Chưa bật</span>
                 </div>
             </div>
 
             <div class="pm-body">
 
-                <div class="pm-group-label">Bóng tối</div>
                 <div class="pm-row">
-                    <label class="pm-card" for="pmShadows">
+                    <label class="pm-card" for="pmEnabled">
                         <div class="pm-card__info">
-                            <span class="pm-card__title">Giảm chất lượng bóng</span>
-                            <span class="pm-card__code">Shadow res 2048 → 256, cull distance giảm</span>
+                            <span class="pm-card__title">Performance Mode</span>
                         </div>
                         <div class="pm-switch">
-                            <input type="checkbox" id="pmShadows" class="pm-switch__input">
+                            <input type="checkbox" id="pmEnabled" class="pm-switch__input">
                             <span class="pm-switch__track"></span>
                         </div>
                     </label>
                 </div>
 
-                <div class="pm-group-label">Hiệu ứng màn hình</div>
-                <div class="pm-row pm-row--2col">
-                    <label class="pm-card" for="pmSsr">
+                <div class="pm-group-label">Cấu hình</div>
+                <div class="pm-row">
+                    <label class="pm-card" for="pmShadow">
                         <div class="pm-card__info">
-                            <span class="pm-card__title">Phản chiếu (SSR)</span>
-                            <span class="pm-card__code">MaxRoughness=0.1, HalfRes=1</span>
+                            <span class="pm-card__title">Bóng đổ</span>
                         </div>
                         <div class="pm-switch">
-                            <input type="checkbox" id="pmSsr" class="pm-switch__input">
-                            <span class="pm-switch__track"></span>
-                        </div>
-                    </label>
-                    <label class="pm-card" for="pmAo">
-                        <div class="pm-card__info">
-                            <span class="pm-card__title">Ambient Occlusion</span>
-                            <span class="pm-card__code">r.AmbientOcclusionMaxQuality=0</span>
-                        </div>
-                        <div class="pm-switch">
-                            <input type="checkbox" id="pmAo" class="pm-switch__input">
-                            <span class="pm-switch__track"></span>
-                        </div>
-                    </label>
-                    <label class="pm-card" for="pmBloom">
-                        <div class="pm-card__info">
-                            <span class="pm-card__title">Bloom (FFT)</span>
-                            <span class="pm-card__code">r.Kuro.KuroEnableFFTBloom=0</span>
-                        </div>
-                        <div class="pm-switch">
-                            <input type="checkbox" id="pmBloom" class="pm-switch__input">
-                            <span class="pm-switch__track"></span>
-                        </div>
-                    </label>
-                    <label class="pm-card" for="pmLensFlare">
-                        <div class="pm-card__info">
-                            <span class="pm-card__title">Lens Flare &amp; Screen Leak</span>
-                            <span class="pm-card__code">r.DrawKuroPPLensflare=0</span>
-                        </div>
-                        <div class="pm-switch">
-                            <input type="checkbox" id="pmLensFlare" class="pm-switch__input">
-                            <span class="pm-switch__track"></span>
-                        </div>
-                    </label>
-                    <label class="pm-card" for="pmDof">
-                        <div class="pm-card__info">
-                            <span class="pm-card__title">Depth of Field</span>
-                            <span class="pm-card__code">r.DepthOfFieldQuality=0</span>
-                        </div>
-                        <div class="pm-switch">
-                            <input type="checkbox" id="pmDof" class="pm-switch__input">
-                            <span class="pm-switch__track"></span>
-                        </div>
-                    </label>
-                </div>
-
-                <div class="pm-group-label">Vật liệu</div>
-                <div class="pm-row pm-row--2col">
-                    <label class="pm-card" for="pmMaterials">
-                        <div class="pm-card__info">
-                            <span class="pm-card__title">Material thấp (tắt POM)</span>
-                            <span class="pm-card__code">r.KuroMaterialQualityLevel=2</span>
-                        </div>
-                        <div class="pm-switch">
-                            <input type="checkbox" id="pmMaterials" class="pm-switch__input">
-                            <span class="pm-switch__track"></span>
-                        </div>
-                    </label>
-                    <label class="pm-card" for="pmSss">
-                        <div class="pm-card__info">
-                            <span class="pm-card__title">Subsurface Scattering</span>
-                            <span class="pm-card__code">r.SSS.Scale=0</span>
-                        </div>
-                        <div class="pm-switch">
-                            <input type="checkbox" id="pmSss" class="pm-switch__input">
-                            <span class="pm-switch__track"></span>
-                        </div>
-                    </label>
-                </div>
-
-                <div class="pm-group-label">Tầm nhìn &amp; Thực vật</div>
-                <div class="pm-row pm-row--2col">
-                    <label class="pm-card" for="pmViewDist">
-                        <div class="pm-card__info">
-                            <span class="pm-card__title">Giảm tầm nhìn</span>
-                            <span class="pm-card__code">r.ViewDistanceScale=0.8, LOD aggressive</span>
-                        </div>
-                        <div class="pm-switch">
-                            <input type="checkbox" id="pmViewDist" class="pm-switch__input">
-                            <span class="pm-switch__track"></span>
-                        </div>
-                    </label>
-                    <label class="pm-card" for="pmFoliage">
-                        <div class="pm-card__info">
-                            <span class="pm-card__title">Ẩn toàn bộ cỏ/cây</span>
-                            <span class="pm-card__code">foliage.CullAll=1</span>
-                        </div>
-                        <div class="pm-switch">
-                            <input type="checkbox" id="pmFoliage" class="pm-switch__input">
-                            <span class="pm-switch__track"></span>
-                        </div>
-                    </label>
-                    <label class="pm-card" for="pmFoliageInteract">
-                        <div class="pm-card__info">
-                            <span class="pm-card__title">Tắt tương tác thực vật</span>
-                            <span class="pm-card__code">r.Kuro.InteractionEffect.*=0</span>
-                        </div>
-                        <div class="pm-switch">
-                            <input type="checkbox" id="pmFoliageInteract" class="pm-switch__input">
-                            <span class="pm-switch__track"></span>
-                        </div>
-                    </label>
-                </div>
-
-                <div class="pm-group-label">Hạt, mây &amp; Ánh sáng thể tích</div>
-                <div class="pm-row pm-row--2col">
-                    <label class="pm-card" for="pmParticles">
-                        <div class="pm-card__info">
-                            <span class="pm-card__title">Giảm hạt (Particles)</span>
-                            <span class="pm-card__code">r.EmitterSpawnRateScale=0.125</span>
-                        </div>
-                        <div class="pm-switch">
-                            <input type="checkbox" id="pmParticles" class="pm-switch__input">
-                            <span class="pm-switch__track"></span>
-                        </div>
-                    </label>
-                    <label class="pm-card" for="pmClouds">
-                        <div class="pm-card__info">
-                            <span class="pm-card__title">Tắt mây thể tích</span>
-                            <span class="pm-card__code">r.KuroVolumeCloudEnable=0</span>
-                        </div>
-                        <div class="pm-switch">
-                            <input type="checkbox" id="pmClouds" class="pm-switch__input">
-                            <span class="pm-switch__track"></span>
-                        </div>
-                    </label>
-                    <label class="pm-card" for="pmVolumetric">
-                        <div class="pm-card__info">
-                            <span class="pm-card__title">Giảm ánh sáng thể tích</span>
-                            <span class="pm-card__code">r.KuroVolumetricLight.*=4</span>
-                        </div>
-                        <div class="pm-switch">
-                            <input type="checkbox" id="pmVolumetric" class="pm-switch__input">
+                            <input type="checkbox" id="pmShadow" class="pm-switch__input">
                             <span class="pm-switch__track"></span>
                         </div>
                     </label>
@@ -387,12 +254,14 @@
             <div class="pm-footer">
                 <p class="pm-note">
                     <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
-                    Game đang chạy sẽ không bị ảnh hưởng — cần khởi động lại game để áp dụng.
+                    Khởi động lại game để có hiệu lực.
                 </p>
-                <div class="pm-actions">
-                    <button class="pm-btn pm-btn--ghost" id="pmClearBtn">Khôi phục file gốc</button>
-                    <button class="pm-btn pm-btn--primary" id="pmApplyBtn">Áp dụng &amp; Lưu</button>
-                </div>
+                <p class="pm-note">
+                    <kbd class="pm-kbd">F9</kbd> Hiện overlay thông số (FPS, VRAM, …)
+                </p>
+                <p class="pm-note">
+                    <kbd class="pm-kbd">F10</kbd> Làm nét texture
+                </p>
             </div>
 
         </div>
@@ -520,7 +389,7 @@
         </div>
     </div>
     <audio id="bgMusic" loop preload="auto">
-        
+
     </audio>
     <script src="script-core.js"></script>
     <script src="script-fx.js"></script>

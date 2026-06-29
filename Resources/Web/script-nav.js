@@ -2,7 +2,7 @@
     document.querySelectorAll('.top-nav__item').forEach(btn => {
         btn.addEventListener('click', () => switchPage(btn.dataset.page));
     });
-    
+
     requestAnimationFrame(() => {
         updateNavIndicator();
         initNavWave();
@@ -55,7 +55,7 @@ function switchPage(page) {
     document.getElementById('rightPanel').style.display        = isHome                  ? '' : 'none';
     document.getElementById('pagePerformance').style.display   = page === 'performance'  ? '' : 'none';
     document.getElementById('pageFontCreator').style.display   = page === 'font-creator' ? '' : 'none';
-    
+
     const ap = document.getElementById('audioPlayer');
     const sp = document.getElementById('sidePanel');
     if (ap) ap.style.display = isHome ? '' : 'none';
@@ -77,7 +77,7 @@ function updateNavIndicator() {
     _indTgtW = actRect.width;
 
     if (!_indReady) {
-        
+
         _indCurL = _indTgtL;
         _indCurW = _indTgtW;
         _indReady = true;
@@ -97,11 +97,10 @@ function updateNavIndicator() {
 function initTopBar() {
     document.getElementById('btnMinimize')?.addEventListener('click', () => bridge()?.MinimizeWindow());
     document.getElementById('btnClose')?.addEventListener('click', () => bridge()?.CloseWindow());
-    
+
     document.addEventListener('mousedown', e => {
         if (e.button !== 0) return;
         if (e.target.closest('button, a, input, select, label, .sidebar__inner, .right-panel')) return;
         window.chrome?.webview?.postMessage('drag');
     });
 }
-
