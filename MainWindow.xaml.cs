@@ -72,6 +72,8 @@ public partial class MainWindow : Window
             await webView.EnsureCoreWebView2Async(env);
             App.WebView2BrowserPid = webView.CoreWebView2.BrowserProcessId;
 
+            try { webView.CoreWebView2.MemoryUsageTargetLevel = CoreWebView2MemoryUsageTargetLevel.Low; } catch { }
+
             webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
             webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
 #if DEBUG
@@ -101,6 +103,8 @@ public partial class MainWindow : Window
 
             _ = Task.Run(CheckAndDownloadMedia);
             _ = Task.Run(CheckLauncherVersion);
+
+            StateChanged += OnWindowStateChanged;
         }
         catch (Exception ex)
         {
@@ -156,6 +160,26 @@ public partial class MainWindow : Window
     static extern bool ReleaseCapture();
     const int WM_NCLBUTTONDOWN = 0x00A1;
     const int HT_CAPTION = 0x0002;
+
+    async void OnWindowStateChanged(object? sender, EventArgs e)
+    {
+        var core = webView.CoreWebView2;
+        if (core == null) return;
+        try
+        {
+            if (WindowState == WindowState.Minimized)
+            {
+                webView.Visibility = Visibility.Collapsed;
+                await core.TrySuspendAsync();
+            }
+            else
+            {
+                core.Resume();
+                webView.Visibility = Visibility.Visible;
+            }
+        }
+        catch { }
+    }
 
     void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
