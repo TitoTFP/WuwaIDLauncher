@@ -311,7 +311,7 @@ public partial class MainWindow : Window
 
             Directory.CreateDirectory(modDir);
 
-            var releaseUrl = "https://api.github.com/repos/CallMeDangDev/WuwaVH/releases/latest";
+            var releaseUrl = "https://callmedangdev.github.io/WuwaVH/";
 
             using var http = new HttpClient();
             http.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0");
@@ -532,7 +532,7 @@ public partial class MainWindow : Window
         catch { }
     }
 
-    const string VHReleasesApiUrl = "https://api.github.com/repos/CallMeDangDev/WuwaVH/releases/latest";
+    const string VHReleasesApiUrl = "https://callmedangdev.github.io/WuwaVH/";
 
     internal async Task FetchVHReleaseNotes()
     {
