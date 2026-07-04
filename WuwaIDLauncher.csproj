@@ -82,6 +82,8 @@
     <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\styles-base.css"     LogicalName="WuwaIDLauncher.Resources.Web.styles-base.css" />
     <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\styles-panel.css"    LogicalName="WuwaIDLauncher.Resources.Web.styles-panel.css" />
     <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\styles-effects.css"  LogicalName="WuwaIDLauncher.Resources.Web.styles-effects.css" />
+    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\styles-font.css"     LogicalName="WuwaIDLauncher.Resources.Web.styles-font.css" />
+    <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\styles-bilibili.css" LogicalName="WuwaIDLauncher.Resources.Web.styles-bilibili.css" />
 
     
     <EmbeddedResource Include="$(IntermediateOutputPath)EncryptedWeb\script-core.js"      LogicalName="WuwaIDLauncher.Resources.Web.script-core.js" />

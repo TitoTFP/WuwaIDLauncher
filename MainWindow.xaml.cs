@@ -30,6 +30,7 @@ public partial class MainWindow : Window
     internal const string SigBackupFileName = Helpers.SigBackupFileName;
     const string GameExeName = "Client-Win64-Shipping.exe";
     const string GameProcessName = "Client-Win64-Shipping";
+    const string WuwaIDLatestDownloadBaseUrl = "https://github.com/TitoTFP/WuwaID/releases/latest/download/";
     static readonly TimeSpan SigRestoreDelay = Helpers.SigRestoreDelay;
 
     volatile bool _pageReady;
@@ -446,45 +447,23 @@ public partial class MainWindow : Window
                 AppLogger.Info("Legacy loader cleanup completed");
             }
 
-            var releaseUrl = "https://api.github.com/repos/TitoTFP/WuwaID/releases/latest";
-
-            using var http = new HttpClient();
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0");
-            var json = await http.GetStringAsync(releaseUrl);
-
-            using var doc = JsonDocument.Parse(json);
-
-            var tagName = doc.RootElement.TryGetProperty("tag_name", out var tagProp)
-                ? tagProp.GetString() ?? "" : "";
-
             var expectedAssets = UsesManualLoaderMethod(method)
                 ? new[] { Helpers.ManualPakFileName, Helpers.WinHttpLoaderFileName }
                 : new[] { PakFileName };
-            var toDownload = new List<(string Name, string Url, long Size, string Hash, string DestPath)>();
+            var toDownload = new List<(string Name, string Url, long Size, string Fingerprint, string DestPath)>();
 
-            foreach (var item in doc.RootElement.GetProperty("assets").EnumerateArray())
+            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaIDLauncher/1.0");
+            var tagName = "latest";
+
+            foreach (var name in expectedAssets)
             {
-                var name = item.GetProperty("name").GetString() ?? "";
-                if (expectedAssets.Contains(name, StringComparer.OrdinalIgnoreCase))
-                {
-                    var url = item.GetProperty("browser_download_url").GetString() ?? "";
-                    var size = item.GetProperty("size").GetInt64();
-                    
-                    var digest = "";
-                    if (item.TryGetProperty("digest", out var digestProp) && digestProp.ValueKind == JsonValueKind.String)
-                        digest = digestProp.GetString()?.Replace("sha256:", "") ?? "";
-
-                    var destPath = name.Equals(Helpers.WinHttpLoaderFileName, StringComparison.OrdinalIgnoreCase)
-                        ? Helpers.Method2LoaderPath(gamePath)
-                        : Path.Combine(pakDir, name);
-                    toDownload.Add((name, url, size, digest, destPath));
-                }
-            }
-
-            if (expectedAssets.Any(asset => !toDownload.Any(download => download.Name.Equals(asset, StringComparison.OrdinalIgnoreCase))))
-            {
-                AppLogger.Warn("Installation release has no matching assets for " + method);
-                throw new Exception("File instalasi tidak ditemukan di server.");
+                var url = WuwaIDLatestDownloadBaseUrl + Uri.EscapeDataString(name);
+                var metadata = await GetReleaseAssetMetadata(http, url);
+                var destPath = name.Equals(Helpers.WinHttpLoaderFileName, StringComparison.OrdinalIgnoreCase)
+                    ? Helpers.Method2LoaderPath(gamePath)
+                    : Path.Combine(pakDir, name);
+                toDownload.Add((name, url, metadata.Size, metadata.Fingerprint, destPath));
             }
 
             var versionCachePath = Path.Combine(AppDataFolder, "versions.json");
@@ -509,7 +488,7 @@ public partial class MainWindow : Window
             }
 
             bool allFilesUpToDate = true;
-            foreach (var (name, _, _, hash, destPath) in toDownload)
+            foreach (var (name, _, _, fingerprint, destPath) in toDownload)
             {
 
                 if (!File.Exists(destPath))
@@ -518,19 +497,17 @@ public partial class MainWindow : Window
                     break;
                 }
                 
-                if (!string.IsNullOrEmpty(hash))
+                if (!string.IsNullOrEmpty(fingerprint))
                 {
-                    if (!Helpers.VerifySha256(destPath, hash))
+                    if (!localCache.TryGetValue(name, out var cachedFingerprint) || cachedFingerprint != fingerprint)
                     {
                         allFilesUpToDate = false;
                         break;
                     }
 
-                    localCache[name] = hash;
+                    localCache[name] = fingerprint;
                 }
-                else if (!string.IsNullOrEmpty(tagName) &&
-                         (!localCache.TryGetValue("_vhVersion", out var cachedTag) || cachedTag != tagName ||
-                          !localCache.TryGetValue("_installMethod", out var cachedMethod) || cachedMethod != method))
+                else if (!localCache.TryGetValue("_installMethod", out var cachedMethod) || cachedMethod != method)
                 {
                     allFilesUpToDate = false;
                     break;
@@ -556,14 +533,13 @@ public partial class MainWindow : Window
             
             var needsUpdateSet = new HashSet<string>();
             long totalBytes = 0;
-            foreach (var (name, _, size, hash, destPath) in toDownload)
+            foreach (var (name, _, size, fingerprint, destPath) in toDownload)
             {
 
                 bool needsUpdate = !File.Exists(destPath) ||
-                                   (!string.IsNullOrEmpty(hash)
-                                       ? !Helpers.VerifySha256(destPath, hash)
-                                       : !localCache.TryGetValue("_vhVersion", out var cachedTag) || cachedTag != tagName ||
-                                         !localCache.TryGetValue("_installMethod", out var cachedMethod) || cachedMethod != method);
+                                   (!string.IsNullOrEmpty(fingerprint)
+                                       ? !localCache.TryGetValue(name, out var cachedFingerprint) || cachedFingerprint != fingerprint
+                                       : !localCache.TryGetValue("_installMethod", out var cachedMethod) || cachedMethod != method);
                 if (needsUpdate)
                 {
                     needsUpdateSet.Add(name);
@@ -575,7 +551,7 @@ public partial class MainWindow : Window
             var sw = Stopwatch.StartNew();
             long lastDownloaded = 0;
 
-            foreach (var (name, url, size, hash, destPath) in toDownload)
+            foreach (var (name, url, size, fingerprint, destPath) in toDownload)
             {
 
                 if (!needsUpdateSet.Contains(name))
@@ -584,12 +560,11 @@ public partial class MainWindow : Window
                 if (IsPakAsset(name))
                 {
                     var alternatePakPath = Helpers.AlternatePakPathForMethod(gamePath, method);
-                    if (TryCopyReusablePak(alternatePakPath, destPath, hash))
+                    if (IsSha256(fingerprint) && TryCopyReusablePak(alternatePakPath, destPath, fingerprint))
                     {
                         AppLogger.Info("Reused existing pak for installer asset: " + name);
                         needsUpdateSet.Remove(name);
-                        if (!string.IsNullOrEmpty(hash))
-                            localCache[name] = hash;
+                        localCache[name] = fingerprint;
                         RunScript($"window.onProgressUpdate(100, " +
                                   $"{JsStr("Menggunakan file patch yang sudah ada...")}, '', '')");
                         continue;
@@ -630,15 +605,15 @@ public partial class MainWindow : Window
                 }
                 
                 fileStream.Close(); File.Move(tmpPath, destPath, true);
-                if (!string.IsNullOrEmpty(hash) && !Helpers.VerifySha256(destPath, hash))
+                if (IsSha256(fingerprint) && !Helpers.VerifySha256(destPath, fingerprint))
                 {
                     AppLogger.Error("Downloaded asset hash mismatch: " + name);
                     try { File.Delete(destPath); } catch (Exception ex) { AppLogger.Exception(ex, "Failed to delete hash-mismatched asset"); }
                     throw new Exception($"Hash file {name} tidak cocok. Unduhan dibatalkan.");
                 }
 
-                if (!string.IsNullOrEmpty(hash))
-                    localCache[name] = hash;
+                if (!string.IsNullOrEmpty(fingerprint))
+                    localCache[name] = fingerprint;
             }
 
             if (!string.IsNullOrEmpty(tagName))
@@ -659,6 +634,33 @@ public partial class MainWindow : Window
             RunScript($"window.onInstallError({JsStr(ex.Message)})");
         }
     }
+
+    static async Task<(long Size, string Fingerprint)> GetReleaseAssetMetadata(HttpClient http, string url)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Head, url);
+        using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+        resp.EnsureSuccessStatusCode();
+
+        var size = resp.Content.Headers.ContentLength ?? 0;
+        var etag = resp.Headers.ETag?.Tag?.Trim('"') ?? "";
+        var lastModified = resp.Content.Headers.LastModified?.UtcDateTime.ToString("O") ?? "";
+        var fingerprint = string.Join("|", new[] { etag, lastModified, size.ToString() });
+        return (size, fingerprint);
+    }
+
+    static async Task<string> GetLatestReleaseTag(HttpClient http, string latestReleaseUrl)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Head, latestReleaseUrl);
+        using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+        resp.EnsureSuccessStatusCode();
+
+        var uri = resp.RequestMessage?.RequestUri;
+        var tag = uri?.Segments.LastOrDefault()?.Trim('/') ?? "";
+        return tag == "latest" ? "" : tag;
+    }
+
+    static bool IsSha256(string value) =>
+        value.Length == 64 && value.All(Uri.IsHexDigit);
 
     static bool IsPakAsset(string name) =>
         name.Equals(Helpers.PakFileName, StringComparison.OrdinalIgnoreCase) ||
@@ -849,7 +851,7 @@ public partial class MainWindow : Window
     }
 
 
-    const string LauncherReleasesApiUrl = "https://api.github.com/repos/TitoTFP/WuwaIDLauncher/releases/latest";
+    const string LauncherLatestReleaseUrl = "https://github.com/TitoTFP/WuwaIDLauncher/releases/latest";
     const string LauncherReleasesPageUrl = "https://github.com/TitoTFP/WuwaIDLauncher/releases";
 
     internal async Task CheckLauncherVersion()
@@ -859,11 +861,7 @@ public partial class MainWindow : Window
             AppLogger.Info("Checking launcher version");
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
             http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaIDLauncher/1.0");
-            var json = await http.GetStringAsync(LauncherReleasesApiUrl);
-            using var doc = JsonDocument.Parse(json);
-
-            if (!doc.RootElement.TryGetProperty("tag_name", out var tagProp)) return;
-            var tag = tagProp.GetString()?.TrimStart('v', 'V') ?? "";
+            var tag = (await GetLatestReleaseTag(http, LauncherLatestReleaseUrl)).TrimStart('v', 'V');
             if (string.IsNullOrEmpty(tag)) return;
 
             var current = Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0, 0);
@@ -884,7 +882,7 @@ public partial class MainWindow : Window
     }
 
 
-    const string VHReleasesApiUrl = "https://api.github.com/repos/TitoTFP/WuwaID/releases/latest";
+    const string VHLatestReleaseUrl = "https://github.com/TitoTFP/WuwaID/releases/latest";
 
     internal async Task FetchVHReleaseNotes()
     {
@@ -893,13 +891,10 @@ public partial class MainWindow : Window
             AppLogger.Info("Fetching WuwaID release notes");
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
             http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaIDLauncher/1.0");
-            var json = await http.GetStringAsync(VHReleasesApiUrl);
-            using var doc = JsonDocument.Parse(json);
-
-            var tag  = doc.RootElement.TryGetProperty("tag_name",     out var tp) ? tp.GetString() ?? "" : "";
-            var date = doc.RootElement.TryGetProperty("published_at", out var dp) ? dp.GetString() ?? "" : "";
-            var body = doc.RootElement.TryGetProperty("body",         out var bp) ? bp.GetString() ?? "" : "";
-            var name = doc.RootElement.TryGetProperty("name",         out var np) ? np.GetString() ?? "" : "";
+            var tag = await GetLatestReleaseTag(http, VHLatestReleaseUrl);
+            var date = "";
+            var body = "";
+            var name = tag;
 
             while (!_pageReady) await Task.Delay(100);
             RunScript($"window.onVHReleaseNotes({JsStr(tag)}, {JsStr(date)}, {JsStr(body)}, {JsStr(name)})");

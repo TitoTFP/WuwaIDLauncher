@@ -153,7 +153,7 @@ function getPeak(d, a, b) {
 
 let _audioCtx, _analyser, _srcNode;
 function initAudioVisualizer() {
-    const audio = document.getElementById('apAudio');
+    const audio = document.getElementById('bgMusic');
     const vizCanvas = document.getElementById('audioViz');
     const stageContainer = document.getElementById('stageLights');
     if (!audio || !vizCanvas) return;
