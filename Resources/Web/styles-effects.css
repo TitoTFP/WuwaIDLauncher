@@ -29,7 +29,6 @@
 
 .start-btn::after { display: none; }
 
-/* shine only plays on hover */
 .start-btn__shine {
     position: absolute; top: -15%; left: -130%;
     width: 55%; height: 130%;
@@ -65,7 +64,7 @@
     transform: translateY(-50%);
     width: 42px; height: 42px;
     z-index: 5;
-    filter: drop-shadow(0 2px 4px rgba(252, 238, 9, 0.45));
+    filter: drop-shadow(0 2px 4px rgba(244, 212, 138, 0.45));
     pointer-events: none;
 }
 .start-btn__star path { fill: #000; }
@@ -98,7 +97,7 @@
     box-shadow: none;
 }
 .start-btn.installing:hover {
-    background: #00ff66;
+    background: #7acaa0;
     outline-color: #d5f0c0;
 }
 .start-btn.installing .start-btn__label {
@@ -135,8 +134,8 @@
     gap: 10px;
     width: 100%;
     padding: 9px 14px;
-    background: rgba(0, 240, 255, 0.07);
-    border: 1px solid rgba(0, 240, 255, 0.28);
+    background: rgba(212, 176, 108, 0.07);
+    border: 1px solid rgba(212, 176, 108, 0.28);
     border-radius: 0px;
     clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
     cursor: var(--cursor-select);
@@ -146,9 +145,9 @@
     -webkit-backdrop-filter: blur(2px);
 }
 .dx11-label:hover {
-    background: rgba(0, 240, 255, 0.13);
-    border-color: rgba(0, 240, 255, 0.55);
-    box-shadow: 0 0 14px rgba(0, 240, 255, 0.18);
+    background: rgba(212, 176, 108, 0.13);
+    border-color: rgba(212, 176, 108, 0.55);
+    box-shadow: 0 0 14px rgba(212, 176, 108, 0.18);
 }
 .dx11-input {
     position: absolute;
@@ -161,8 +160,8 @@
     flex-shrink: 0;
     width: 32px; height: 16px;
     border-radius: 0px;
-    background: rgba(0, 240, 255, 0.12);
-    border: 1px solid rgba(0, 240, 255, 0.40);
+    background: rgba(212, 176, 108, 0.12);
+    border: 1px solid rgba(212, 176, 108, 0.40);
     position: relative;
     transition: background var(--dur), border-color var(--dur), box-shadow var(--dur);
 }
@@ -172,22 +171,22 @@
     top: 2px; left: 2px;
     width: 12px; height: 12px;
     border-radius: 0px;
-    background: rgba(0, 240, 255, 0.55);
+    background: rgba(212, 176, 108, 0.55);
     transition: transform 200ms var(--ease), background 200ms var(--ease), box-shadow 200ms var(--ease);
 }
 .dx11-label:hover .dx11-checkmark {
-    border-color: rgba(0, 240, 255, 0.70);
-    background: rgba(0, 240, 255, 0.18);
+    border-color: rgba(212, 176, 108, 0.70);
+    background: rgba(212, 176, 108, 0.18);
 }
 .dx11-input:checked + .dx11-checkmark {
-    background: rgba(0, 240, 255, 0.30);
-    border-color: rgba(0, 240, 255, 1);
-    box-shadow: 0 0 10px rgba(0, 240, 255, 0.45);
+    background: rgba(212, 176, 108, 0.30);
+    border-color: rgba(212, 176, 108, 1);
+    box-shadow: 0 0 10px rgba(212, 176, 108, 0.45);
 }
 .dx11-input:checked + .dx11-checkmark::after {
     transform: translateX(14px);
     background: var(--blue);
-    box-shadow: 0 0 8px rgba(0, 240, 255, 0.80);
+    box-shadow: 0 0 8px rgba(212, 176, 108, 0.80);
 }
 .dx11-text {
     flex: 1;
@@ -224,7 +223,7 @@
     left: -70px; top: -70px;
     border-radius: 0px;
     border: 1.5px solid var(--cyan-accent);
-    box-shadow: 0 0 10px rgba(0,240,255,0.4);
+    box-shadow: 0 0 10px rgba(212, 176, 108,0.4);
     transform: scaleY(0.42) scale(0);
     opacity: 0;
     clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
@@ -276,8 +275,8 @@
 }
 .modal-box {
     width: 380px;
-    background: rgba(10,10,10,0.92);
-    border: 1px solid rgba(0,240,255,0.3);
+    background: rgba(14, 18, 52,0.92);
+    border: 1px solid rgba(212, 176, 108,0.3);
     border-radius: 0px;
     padding: 26px 28px 22px;
     clip-path: polygon(0 0, 100% 0, 100% calc(100% - 15px), calc(100% - 15px) 100%, 0 100%);
@@ -312,9 +311,9 @@
     clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
 }
 .modal-btn--cancel {
-    background: transparent; border: 1px solid rgba(0,240,255,0.3); color: rgba(0,240,255,0.7);
+    background: transparent; border: 1px solid rgba(212, 176, 108,0.3); color: rgba(212, 176, 108,0.7);
 }
-.modal-btn--cancel:hover { background: rgba(0,240,255,0.1); color: var(--cyan-accent); }
+.modal-btn--cancel:hover { background: rgba(212, 176, 108,0.1); color: var(--cyan-accent); }
 .modal-btn--ok {
     background: var(--accent-gold); color: #000; font-weight: 600;
 }
@@ -328,15 +327,15 @@
 .admin-modal__shield {
     width: 52px; height: 52px; border-radius: 0px; flex-shrink: 0;
     clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
-    background: rgba(0,240,255,0.05);
+    background: rgba(212, 176, 108,0.05);
     border: 1px solid var(--cyan-accent);
     display: flex; align-items: center; justify-content: center;
     color: var(--cyan-accent);
-    box-shadow: inset 0 0 18px rgba(0,240,255,0.15);
+    box-shadow: inset 0 0 18px rgba(212, 176, 108,0.15);
 }
 .admin-modal__titles { display: flex; flex-direction: column; gap: 2px; }
 .admin-modal__label { font-size: 10px; font-weight: 700; letter-spacing: 1.4px; color: var(--cyan-accent); text-transform: uppercase; }
-.admin-modal__title { font-size: 18px; font-weight: 700; color: #fff; text-shadow: 0 0 8px rgba(0,240,255,0.5); }
+.admin-modal__title { font-size: 18px; font-weight: 700; color: #fff; text-shadow: 0 0 8px rgba(212, 176, 108,0.5); }
 .admin-modal__sep { height: 1px; background: var(--cyan-accent); opacity: 0.3; margin-bottom: 16px; }
 .admin-modal__reason {
     font-size: 13px; color: #ccc; line-height: 1.65;
@@ -344,7 +343,7 @@
 }
 .admin-modal__path {
     display: inline-block;
-    background: rgba(0,240,255,0.1); border: 1px solid rgba(0,240,255,0.3);
+    background: rgba(212, 176, 108,0.1); border: 1px solid rgba(212, 176, 108,0.3);
     border-radius: 0px; padding: 1px 7px; margin: 0 3px;
     font-size: 11px; font-family: monospace; color: var(--cyan-accent);
 }
@@ -370,7 +369,6 @@
 .admin-modal__actions { display: flex; justify-content: flex-end; gap: 10px; }
 .admin-modal__ok { display: flex; align-items: center; gap: 7px; padding: 0 16px; }
 
-/* --- Background Audio Visualizer (Matrix Rain Canvas) --- */
 .audio-viz {
     position: fixed;
     top: 0; left: 0; right: 0;
@@ -378,12 +376,23 @@
     height: 180px;
     pointer-events: none;
     z-index: 1;
-    opacity: 0.7;
+    opacity: 0.8;
     mask-image: linear-gradient(to bottom, black 20%, transparent 95%);
     display: block;
 }
 
-/* --- Stage Lights System --- */
+.water-fx {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    width: 100%;
+    height: 150px;
+    pointer-events: none;
+    z-index: 1;
+    opacity: 0.9;
+    mask-image: linear-gradient(to top, black 35%, transparent 100%);
+    display: block;
+}
+
 .stage-lights {
     position: absolute;
     inset: 0;
@@ -402,9 +411,9 @@
     background: conic-gradient(
         from 165deg at 50% 0%,
         transparent 0%,
-        rgba(0, 240, 255, 0.08) 10%,
-        rgba(0, 240, 255, 0.18) 50%,
-        rgba(0, 240, 255, 0.08) 90%,
+        rgba(212, 176, 108, 0.08) 10%,
+        rgba(212, 176, 108, 0.18) 50%,
+        rgba(212, 176, 108, 0.08) 90%,
         transparent 100%
     );
     transform-origin: top center;
@@ -420,7 +429,6 @@
     to   { transform: translateX(-50%) rotate(15deg); }
 }
 
-/* --- Glitch Effect (Subtle) --- */
 .glitch-active {
     animation: wuwaGlitch 0.4s step-end;
     position: relative;

@@ -1,152 +1,163 @@
-using System.Collections.ObjectModel;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Shapes;
 using System.Windows.Threading;
 
 namespace WuwaIDLauncher
 {
     public partial class SplashWindow : Window
     {
-        private ObservableCollection<string> _logs = new();
-        private static readonly char[] _glitchChars = "!@#$%^&*<>/?\\|[]{}01234567ABCDEF¥§Ω≠∆∇".ToCharArray();
 
-        private static readonly string[] _easterEggs = { "LUCY", "REBECCA", "DAVID", "JOHNNY", "ROVER", "AEMEATH", "SHOREKEEPER" };
-        private static readonly char[] _rainChars = "ｦｧｨｩｪｫｬｭｮｯｰｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789ABCDEF".ToCharArray();
-        private DispatcherTimer? _rainTimer;
-        private struct RainColumn { public double X; public double Y; public double Speed; public string? EggWord; public int EggPos; }
-        private RainColumn[] _cols = Array.Empty<RainColumn>();
-        private TextBlock[] _colBlocks = Array.Empty<TextBlock>();
-        private const int ColCharSize = 9;
-        private const int MaxRows = 24;
+        private sealed class Branch
+        {
+            public Branch? Parent;
+            public readonly List<Branch> Children = new();
+            public Point P0, P1;
+            public int Level;
+            public int Life = 20;
+            public double Vx, Vy;
+            public Branch(Branch? parent, int level, double x, double y)
+            {
+                Parent = parent;
+                Level = level;
+                P0 = parent != null ? parent.P1 : new Point(x, y);
+                P1 = new Point(x, y);
+            }
+        }
 
-        private string[] _sequences = {
-            "Good morning, Night City.",
-            "Synchronizing resonance with Solaris-3...",
-            "I will take you to the moon. I promise.",
-            "Echo frequency locked — Rover signal detected.",
-            "Wake up, Samurai. We have a city to burn.",
-            "Tacet Field anomaly suppressed... [STABLE]",
-            "Never fade away.",
-            "Waveform identity confirmed: ROVER_01",
-            "You are the only one who can hear the Waves.",
-            "WUTHERING WAVES INTERFACE — READY"
+        private const int MaxLevels = 7;
+        private const int MaxBranches = 200;
+        private static readonly Brush InkBrush;
+        private static readonly Brush LeafBrush;
+
+        static SplashWindow()
+        {
+            InkBrush = new SolidColorBrush(Color.FromRgb(0x1B, 0x13, 0x0C)); InkBrush.Freeze();
+            LeafBrush = new SolidColorBrush(Color.FromRgb(0xBE, 0x3A, 0x34)); LeafBrush.Freeze();
+        }
+
+        private Branch _root = null!;
+        private Branch _curBranch = null!;
+        private int _nBranches;
+        private DispatcherTimer? _growTimer;
+        private readonly Random _rng = Random.Shared;
+
+        private readonly string[] _sequences =
+        {
+            "淵上有城名玄方",
+            "樞旋字移玄機藏",
+            "機巧自轉鳶鳥翔…",
+            "耳畔蒼翎響遠音",
+            "扇間朝暉道謎情",
+            "故鎖舊契囚執念",
+            "幽境今人亦獨行",
+            "仙音寒芒鎮雲關",
+            "朝月清輝照孤城",
+            "峰巒疊嶂間",
+            "此城何處尋？",
+            "有緣人至，山門自開",
         };
 
         public SplashWindow()
         {
             InitializeComponent();
-            logItems.ItemsSource = _logs;
-            matrixCanvas.SizeChanged += (_, _) =>
+            treeCanvas.SizeChanged += (_, _) =>
             {
-                if (_cols.Length == 0 && matrixCanvas.ActualWidth > 0)
-                    StartMatrixRain();
+                if (_growTimer == null && treeCanvas.ActualWidth > 0)
+                    StartTree();
             };
             RunSequence();
         }
 
-        private void StartMatrixRain()
+        private const double TrunkAngle = -Math.PI / 4;
+
+        private void StartTree()
         {
-            double w = matrixCanvas.ActualWidth;
-            int count = Math.Max(1, (int)(w / (ColCharSize + 4)));
-            _cols = new RainColumn[count];
-            _colBlocks = new TextBlock[count];
-            var rng = Random.Shared;
-
-            for (int i = 0; i < count; i++)
-            {
-                bool hasEgg = rng.Next(4) == 0;
-                string? egg = hasEgg ? _easterEggs[rng.Next(_easterEggs.Length)] : null;
-                _cols[i] = new RainColumn
-                {
-                    X = i * (ColCharSize + 4),
-                    Y = -rng.Next(MaxRows) * ColCharSize,
-                    Speed = 0.6 + rng.NextDouble() * 1.2,
-                    EggWord = egg,
-                    EggPos = egg != null ? rng.Next(Math.Max(1, MaxRows - egg.Length)) : 0
-                };
-                var tb = new TextBlock
-                {
-                    FontFamily = new FontFamily("Consolas"),
-                    FontSize = ColCharSize - 1,
-                    Foreground = new SolidColorBrush(Color.FromRgb(0, 200, 180)),
-                    Text = "",
-                    Width = ColCharSize + 4,
-                    TextWrapping = TextWrapping.NoWrap,
-                };
-                Canvas.SetLeft(tb, _cols[i].X);
-                Canvas.SetTop(tb, 0);
-                matrixCanvas.Children.Add(tb);
-                _colBlocks[i] = tb;
-            }
-
-            _rainTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(60) };
-            _rainTimer.Tick += RainTick;
-            _rainTimer.Start();
+            _root = new Branch(null, MaxLevels, -8, treeCanvas.ActualHeight + 8);
+            _curBranch = _root;
+            _growTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(45) };
+            _growTimer.Tick += (_, _) => Grow();
+            _growTimer.Start();
         }
 
-        private void RainTick(object? sender, EventArgs e)
+        private void Grow()
         {
-            var rng = Random.Shared;
-            double h = matrixCanvas.ActualHeight;
-            for (int i = 0; i < _cols.Length; i++)
-            {
-                ref var col = ref _cols[i];
-                col.Y += col.Speed * ColCharSize;
-                if (col.Y > h + MaxRows * ColCharSize)
-                {
-                    col.Y = -rng.Next(6) * ColCharSize;
-                    bool hasEgg = rng.Next(4) == 0;
-                    col.EggWord = hasEgg ? _easterEggs[rng.Next(_easterEggs.Length)] : null;
-                    col.EggPos = col.EggWord != null ? rng.Next(Math.Max(1, MaxRows - col.EggWord.Length)) : 0;
-                }
+            if (IsClosed) return;
+            GrowBranch(_root);
 
-                var sb = new System.Text.StringBuilder(MaxRows);
-                int headRow = (int)(col.Y / ColCharSize);
-                for (int r = 0; r < MaxRows; r++)
+            if (_rng.NextDouble() > 0.55)
+            {
+                var b = new Branch(_curBranch, _curBranch.Level, _curBranch.P1.X, _curBranch.P1.Y);
+                double a = TrunkAngle + (_rng.NextDouble() * 1.4 - 0.7);
+                b.Vx = Math.Cos(a) * 7; b.Vy = Math.Sin(a) * 7;
+                b.Life = _rng.Next(MaxLevels) + 2;
+                _curBranch.Children.Add(b);
+                if (_rng.NextDouble() > 0.8) _curBranch.Children.Add(NewBranch(_curBranch));
+                _curBranch = b;
+                _nBranches++;
+            }
+            if (_nBranches > MaxBranches && _root.Children.Count > 0)
+            {
+                _root = _root.Children[0];
+                _nBranches--;
+            }
+        }
+
+        private void GrowBranch(Branch br)
+        {
+            for (int i = 0; i < br.Children.Count; i++) GrowBranch(br.Children[i]);
+            if (br.Life > 1)
+            {
+                br.P1 = new Point(br.P1.X + br.Vx, br.P1.Y + br.Vy);
+                if (br.Level > 0)
                 {
-                    int absRow = headRow - (MaxRows - 1 - r);
-                    if (absRow < 0) { sb.Append(' '); continue; }
-                    if (col.EggWord != null)
+                    if (br.Parent != null)
                     {
-                        int eggOff = absRow - col.EggPos;
-                        if (eggOff >= 0 && eggOff < col.EggWord.Length)
+                        var fig = new PathFigure { StartPoint = br.Parent.P0 };
+                        fig.Segments.Add(new QuadraticBezierSegment(br.P0, br.P1, true));
+                        var geo = new PathGeometry(); geo.Figures.Add(fig);
+                        treeCanvas.Children.Add(new Path
                         {
-                            sb.Append(col.EggWord[eggOff]);
-                            continue;
-                        }
+                            Data = geo,
+                            Stroke = InkBrush,
+                            StrokeThickness = br.Level * 2.0 - 1.4,
+                            StrokeStartLineCap = PenLineCap.Round,
+                            StrokeEndLineCap = PenLineCap.Round,
+                            Opacity = 0.82,
+                        });
                     }
-                    sb.Append(r == MaxRows - 1 ? (char)0x2588 : _rainChars[rng.Next(_rainChars.Length)]);
                 }
-
-                _colBlocks[i].Text = string.Join("\n", sb.ToString().ToCharArray());
-                Canvas.SetTop(_colBlocks[i], Math.Max(0, col.Y - MaxRows * ColCharSize));
+                else
+                {
+                    treeCanvas.Children.Add(new Line
+                    {
+                        X1 = br.P0.X, Y1 = br.P0.Y, X2 = br.P1.X, Y2 = br.P1.Y,
+                        Stroke = LeafBrush, StrokeThickness = 3.2,
+                        StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round,
+                        Opacity = 0.85,
+                    });
+                }
             }
+            if (br.Life == 1 && br.Level > 0 && br.Level < MaxLevels)
+            {
+                br.Children.Add(NewBranch(br));
+                br.Children.Add(NewBranch(br));
+            }
+            br.Life--;
         }
 
-        private async Task GlitchReveal(string text, int durationMs = 480)
+        private Branch NewBranch(Branch parent)
         {
-            const int steps = 14;
-            int stepDelay = durationMs / steps;
-            var rng = Random.Shared;
-
-            for (int step = 0; step <= steps; step++)
-            {
-                if (IsClosed) return;
-                int resolved = (int)(text.Length * ((float)step / steps));
-                var sb = new System.Text.StringBuilder(text.Length);
-                for (int i = 0; i < text.Length; i++)
-                {
-                    if (i < resolved || text[i] == ' ')
-                        sb.Append(text[i]);
-                    else
-                        sb.Append(_glitchChars[rng.Next(_glitchChars.Length)]);
-                }
-                currentLine.Text = "> " + sb;
-                await Task.Delay(stepDelay);
-            }
-            currentLine.Text = "> " + text;
+            var b = new Branch(parent, parent.Level - 1, parent.P1.X, parent.P1.Y);
+            double baseAngle = parent.Level == MaxLevels
+                ? TrunkAngle
+                : Math.Atan2(parent.P1.Y - parent.P0.Y, parent.P1.X - parent.P0.X);
+            double angle = baseAngle + (_rng.NextDouble() * 1.4 - 0.7);
+            b.Vx = Math.Cos(angle) * 7;
+            b.Vy = Math.Sin(angle) * 7;
+            b.Life = b.Level <= 1 ? 5 : _rng.Next(b.Level * 2) + 2;
+            return b;
         }
 
         private async void RunSequence()
@@ -154,23 +165,18 @@ namespace WuwaIDLauncher
             foreach (var line in _sequences)
             {
                 if (IsClosed) return;
-                currentLine.Text = "";
-                await GlitchReveal(line);
-                if (IsClosed) return;
-                _logs.Add("> " + line);
-                if (_logs.Count > 5) _logs.RemoveAt(0);
-                currentLine.Text = "";
-                await Task.Delay(120 + Random.Shared.Next(220));
+                currentLine.Text = line;
+                await Task.Delay(420 + _rng.Next(260));
             }
-            currentLine.Text = "> SYSTEM READY [OK]";
+            currentLine.Text = "山門自開";
         }
 
-        private bool IsClosed = false;
+        private bool IsClosed;
 
         public void FadeOutAndClose()
         {
             IsClosed = true;
-            _rainTimer?.Stop();
+            _growTimer?.Stop();
             var fade = new DoubleAnimation(1, 0, new Duration(TimeSpan.FromMilliseconds(300)));
             fade.Completed += (_, _) => Close();
             BeginAnimation(OpacityProperty, fade);
