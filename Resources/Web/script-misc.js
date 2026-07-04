@@ -243,6 +243,7 @@ async function loadSettings() {
                 S.gamePath = S.cfg.gamePath || '';
                 S.cfg.installMethod = normalizeInstallMethod(S.cfg.installMethod);
                 updateMethodMenu();
+                window.apApplySavedState?.();
             }
         } catch(e) {}
     }
@@ -317,18 +318,34 @@ function initAudioPlayer() {
     const volLabel  = document.getElementById('apVolLabel');
     if (!audio || !player) return;
 
-    const savedVol  = parseInt(localStorage.getItem('apVolume') ?? localStorage.getItem('apVol') ?? '35', 10);
-    const savedMute = localStorage.getItem('apMuted') === '1';
-    const savedPlaybackState = localStorage.getItem('apPlaybackState');
-    let userWantsPlayback = savedPlaybackState !== 'paused';
-    const initVol   = Math.max(0, Math.min(100, isNaN(savedVol) ? 35 : savedVol));
+    function readSavedState() {
+        const cfg = S.cfg.audioPlayer || {};
+        const volume = cfg.volume ?? localStorage.getItem('apVolume') ?? localStorage.getItem('apVol') ?? '35';
+        const parsedVolume = parseInt(volume, 10);
+        const muted = cfg.muted ?? (localStorage.getItem('apMuted') === '1');
+        const playbackState = cfg.playbackState ?? localStorage.getItem('apPlaybackState');
+        return {
+            volume: Math.max(0, Math.min(100, isNaN(parsedVolume) ? 35 : parsedVolume)),
+            muted: muted === true || muted === '1',
+            playbackState
+        };
+    }
+
+    function persistAudioState(patch) {
+        S.cfg.audioPlayer = Object.assign({}, S.cfg.audioPlayer || {}, patch);
+        if (bridge()) bridge().SaveSettings(JSON.stringify(S.cfg));
+    }
+
+    const savedState = readSavedState();
+    let userWantsPlayback = savedState.playbackState !== 'paused';
+    const initVol   = savedState.volume;
     audio.volume   = initVol / 100;
-    audio.muted    = savedMute;
+    audio.muted    = savedState.muted;
     audio.loop     = true;
     if (volSlider) volSlider.value      = initVol;
-    if (volFill)   volFill.style.width  = (savedMute ? 0 : initVol) + '%';
-    if (volLabel)  volLabel.textContent = savedMute ? '0' : initVol;
-    updateVolIcon(savedMute ? 0 : initVol);
+    if (volFill)   volFill.style.width  = (savedState.muted ? 0 : initVol) + '%';
+    if (volLabel)  volLabel.textContent = savedState.muted ? '0' : initVol;
+    updateVolIcon(savedState.muted ? 0 : initVol);
 
     function setPlaying(on) {
         const iconPlay = document.getElementById('apIconPlay');
@@ -365,6 +382,7 @@ function initAudioPlayer() {
         if (persist) {
             localStorage.setItem('apVolume', v);
             localStorage.setItem('apVol', v);
+            persistAudioState({ volume: v });
         }
     }
 
@@ -372,6 +390,7 @@ function initAudioPlayer() {
         if (audio.muted && v > 0) {
             audio.muted = false;
             localStorage.setItem('apMuted', '0');
+            persistAudioState({ muted: false });
         }
         setVolume(v, true);
     }
@@ -380,10 +399,12 @@ function initAudioPlayer() {
         if (audio.paused) {
             userWantsPlayback = true;
             localStorage.setItem('apPlaybackState', 'playing');
+            persistAudioState({ playbackState: 'playing' });
             audio.play().then(() => setPlaying(true)).catch(() => {});
         } else {
             userWantsPlayback = false;
             localStorage.setItem('apPlaybackState', 'paused');
+            persistAudioState({ playbackState: 'paused' });
             audio.pause();
             setPlaying(false);
         }
@@ -392,6 +413,7 @@ function initAudioPlayer() {
     btnVolBtn?.addEventListener('click', () => {
         audio.muted = !audio.muted;
         localStorage.setItem('apMuted', audio.muted ? '1' : '0');
+        persistAudioState({ muted: audio.muted });
         setVolume(parseInt(volSlider?.value ?? '35', 10) || 0, false);
     });
 
@@ -423,6 +445,19 @@ function initAudioPlayer() {
         audio.addEventListener('canplaythrough', _canplayHandler, { once: true });
         audio.src = url;
         audio.load();
+    };
+
+    window.apApplySavedState = () => {
+        const state = readSavedState();
+        userWantsPlayback = state.playbackState !== 'paused';
+        audio.muted = state.muted;
+        setVolume(state.volume, false);
+        if (userWantsPlayback && audio.paused && audio.src) {
+            audio.play().then(() => setPlaying(true)).catch(() => {});
+        } else if (!userWantsPlayback && !audio.paused) {
+            audio.pause();
+            setPlaying(false);
+        }
     };
 }
 
