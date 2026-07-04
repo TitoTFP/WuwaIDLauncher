@@ -132,8 +132,9 @@ window.onVHReleaseNotes = (tag, dateStr, body, name) => {
 
     if (bodyEl) {
         const content = (body || '').trim();
+        const isHtml = /^<\w+[\s>]/.test(content);
         bodyEl.innerHTML = content
-            ? _rnMd(content)
+            ? (isHtml ? content : _rnMd(content))
             : '<p style="opacity:0.4">Tidak ada informasi.</p>';
     }
 
@@ -318,6 +319,8 @@ function initAudioPlayer() {
 
     const savedVol  = parseInt(localStorage.getItem('apVolume') ?? localStorage.getItem('apVol') ?? '35', 10);
     const savedMute = localStorage.getItem('apMuted') === '1';
+    const savedPlaybackState = localStorage.getItem('apPlaybackState');
+    let userWantsPlayback = savedPlaybackState !== 'paused';
     const initVol   = Math.max(0, Math.min(100, isNaN(savedVol) ? 35 : savedVol));
     audio.volume   = initVol / 100;
     audio.muted    = savedMute;
@@ -374,8 +377,16 @@ function initAudioPlayer() {
     }
 
     btnPlay?.addEventListener('click', () => {
-        if (audio.paused) audio.play().then(() => setPlaying(true)).catch(() => {});
-        else             { audio.pause(); setPlaying(false); }
+        if (audio.paused) {
+            userWantsPlayback = true;
+            localStorage.setItem('apPlaybackState', 'playing');
+            audio.play().then(() => setPlaying(true)).catch(() => {});
+        } else {
+            userWantsPlayback = false;
+            localStorage.setItem('apPlaybackState', 'paused');
+            audio.pause();
+            setPlaying(false);
+        }
     });
 
     btnVolBtn?.addEventListener('click', () => {
@@ -393,14 +404,22 @@ function initAudioPlayer() {
     audio.addEventListener('error', () => { console.error('[audio] error', audio.error); setPlaying(false); });
 
     document.addEventListener('click', function onFirstClick() {
-        if (audio.paused && audio.src) audio.play().catch(() => {});
+        if (userWantsPlayback && audio.paused && audio.src) {
+            audio.play().then(() => setPlaying(true)).catch(() => {});
+        }
     }, { once: true });
 
     let _canplayHandler = null;
     window.apSetAudioSource = (url) => {
         if (!url) return;
         if (_canplayHandler) audio.removeEventListener('canplaythrough', _canplayHandler);
-        _canplayHandler = () => audio.play().then(() => setPlaying(true)).catch(() => {});
+        _canplayHandler = () => {
+            if (userWantsPlayback) {
+                audio.play().then(() => setPlaying(true)).catch(() => {});
+            } else {
+                setPlaying(false);
+            }
+        };
         audio.addEventListener('canplaythrough', _canplayHandler, { once: true });
         audio.src = url;
         audio.load();

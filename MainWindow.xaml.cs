@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Xml.Linq;
 using System.Windows;
 using System.ComponentModel;
 using System.Windows.Interop;
@@ -659,6 +660,25 @@ public partial class MainWindow : Window
         return tag == "latest" ? "" : tag;
     }
 
+    static async Task<(string Tag, string Date, string Body, string Name)> FetchLatestReleaseNotesFromAtom(HttpClient http, string atomUrl)
+    {
+        var xml = await http.GetStringAsync(atomUrl);
+        var doc = XDocument.Parse(xml);
+        XNamespace atom = "http://www.w3.org/2005/Atom";
+        var entry = doc.Root?.Element(atom + "entry")
+            ?? throw new Exception("Release notes tidak ditemukan.");
+
+        var title = entry.Element(atom + "title")?.Value ?? "";
+        var body = entry.Element(atom + "content")?.Value ?? "";
+        var date = entry.Element(atom + "updated")?.Value ?? "";
+        var href = entry.Elements(atom + "link")
+            .FirstOrDefault(e => string.Equals((string?)e.Attribute("rel"), "alternate", StringComparison.OrdinalIgnoreCase))
+            ?.Attribute("href")?.Value ?? "";
+        var tag = href.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? "";
+
+        return (tag, date, body, title);
+    }
+
     static bool IsSha256(string value) =>
         value.Length == 64 && value.All(Uri.IsHexDigit);
 
@@ -883,6 +903,7 @@ public partial class MainWindow : Window
 
 
     const string VHLatestReleaseUrl = "https://github.com/TitoTFP/WuwaID/releases/latest";
+    const string VHReleasesAtomUrl = "https://github.com/TitoTFP/WuwaID/releases.atom";
 
     internal async Task FetchVHReleaseNotes()
     {
@@ -891,10 +912,7 @@ public partial class MainWindow : Window
             AppLogger.Info("Fetching WuwaID release notes");
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
             http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaIDLauncher/1.0");
-            var tag = await GetLatestReleaseTag(http, VHLatestReleaseUrl);
-            var date = "";
-            var body = "";
-            var name = tag;
+            var (tag, date, body, name) = await FetchLatestReleaseNotesFromAtom(http, VHReleasesAtomUrl);
 
             while (!_pageReady) await Task.Delay(100);
             RunScript($"window.onVHReleaseNotes({JsStr(tag)}, {JsStr(date)}, {JsStr(body)}, {JsStr(name)})");
