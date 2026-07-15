@@ -65,7 +65,7 @@ input { font-family: inherit; }
 
 .bg-layer {
     position: fixed; inset: 0; z-index: 0;
-    background: url('https://app.local/Images/bg-default.jpg') center/cover no-repeat;
+    background: url('Images/bg-default.jpg') center/cover no-repeat;
     will-change: transform;
     isolation: isolate;
     transform-origin: center center;
@@ -76,6 +76,22 @@ input { font-family: inherit; }
     transition: opacity 400ms ease;
 }
 .bg-layer video.visible { opacity: 1; }
+
+body[data-visual-mode="light"] #audioViz,
+body[data-visual-mode="light"] #waterFx,
+body[data-visual-mode="light"] #stageLights,
+body[data-visual-mode="off"] #audioViz,
+body[data-visual-mode="off"] #waterFx,
+body[data-visual-mode="off"] #particleCanvas,
+body[data-visual-mode="off"] #stageLights { display: none !important; }
+
+.launcher-reduced-motion *,
+.launcher-reduced-motion *::before,
+.launcher-reduced-motion *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+}
 
 .bg-vignette {
     position: absolute; inset: 0;
@@ -549,6 +565,11 @@ body.sidebar-open .bg-vignette {
 }
 
 @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+    }
     .ap,
     .ap--playing .ap__dot {
         animation: none;

@@ -31,10 +31,9 @@ internal static class ActivePlayerService
 
             var clientId = GetOrCreateClientId();
             var json = BuildHeartbeatJson(clientId, GetAppVersion(), NormalizeInstallMethod(installMethod), eventName);
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaIDLauncher/1.0");
+            using var timeout = LauncherHttp.TimeoutAfter(TimeSpan.FromSeconds(8), cancellationToken);
             using var content = new StringContent(json, Encoding.UTF8, "application/json");
-            using var response = await http.PostAsync(ActiveHeartbeatEndpoint, content, cancellationToken);
+            using var response = await LauncherHttp.Client.PostAsync(ActiveHeartbeatEndpoint, content, timeout.Token);
             if (response.IsSuccessStatusCode)
                 AppLogger.Info("Active heartbeat sent: " + eventName);
             else

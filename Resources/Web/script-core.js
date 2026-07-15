@@ -4,25 +4,26 @@ const S = {
     page: 'home',
     installing: false, installed: false, launching: false,
     gamePath: '',
-    cfg: { gamePath:'', installMethod:'method1' },
+    patchState: 'unchecked',
+    cfg: { gamePath:'', installMethod:'method1', launcherVisualMode:'full' },
     autoCheckDone: false
 };
 
 const bridge = () => window.chrome?.webview?.hostObjects?.launcher;
 
-document.addEventListener('DOMContentLoaded', () => {
-    initParticles();
+document.addEventListener('DOMContentLoaded', async () => {
     initTopBar();
     initTopNav();
     initBottomBar();
     initAudioPlayer();
-    initWaterRipple();
-    initCyberEffects();
-    // initFontCreator();
     initPerformanceMode();
     initSidePanel();
     initLogUpload();
-    loadSettings();
+    await loadSettings();
+    applyLauncherVisualMode(S.cfg.launcherVisualMode);
+    initParticles();
+    initWaterRipple();
+    initCyberEffects();
     loadVersions();
-    loadReleaseNotes();
+    bridge()?.NotifyUiInteractive();
 });

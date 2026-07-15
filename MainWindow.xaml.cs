@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Xml.Linq;
 using System.Windows;
 using System.ComponentModel;
+using System.Collections.Concurrent;
 using System.Windows.Interop;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Win32;
@@ -21,6 +22,7 @@ public partial class MainWindow : Window
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WuwaIDLauncher");
     internal static readonly string CacheFolder = Path.Combine(AppDataFolder, "Cache");
     internal static readonly string SettingsPath = Path.Combine(AppDataFolder, "settings.json");
+    internal static readonly string MediaCachePath = Path.Combine(AppDataFolder, "media-cache.json");
     const string AssetsUrl = "https://raw.githubusercontent.com/TitoTFP/WuwaID/refs/heads/main/Web/assets.json";
     internal const string ModFolderName = Helpers.ModFolderName;
     internal const string LegacyModFolderName = Helpers.LegacyModFolderName;
@@ -42,16 +44,28 @@ public partial class MainWindow : Window
     string? _launchGamePath;
     string? _pendingBgm, _pendingVideo, _pendingUpdateDate;
     SplashWindow? _splash;
+    readonly CancellationTokenSource _shutdown = new();
+    readonly SemaphoreSlim _webViewLifecycleLock = new(1, 1);
+    static readonly ConcurrentDictionary<string, byte[]> WebResourceCache = new(StringComparer.OrdinalIgnoreCase);
+    bool _webViewSuspended;
+    int _startupTasksStarted;
 
     public MainWindow()
     {
         InitializeComponent();
+#if OPAQUE_WINDOW_BENCHMARK
+        AllowsTransparency = false;
+        Background = System.Windows.Media.Brushes.Black;
+        webView.DefaultBackgroundColor = System.Drawing.Color.FromArgb(255, 6, 10, 20);
+#endif
         Directory.CreateDirectory(CacheFolder);
-        AppLogger.Info("Main window initialized");
-        ActivePlayerService.Start();
+        LogStartupMilestone("main_window_initialized");
         Loaded += OnLoaded;
         Closing += OnClosing;
     }
+
+    static void LogStartupMilestone(string name) =>
+        AppLogger.Info($"Startup milestone: {name} elapsed_ms={App.StartupClock.ElapsedMilliseconds}");
 
     void OnClosing(object? sender, CancelEventArgs e)
     {
@@ -80,9 +94,9 @@ public partial class MainWindow : Window
             }
         }
 
+        _shutdown.Cancel();
         try
         {
-            webView.CoreWebView2?.Profile.ClearBrowsingDataAsync();
             webView.Dispose();
         }
         catch (Exception ex)
@@ -90,16 +104,6 @@ public partial class MainWindow : Window
             AppLogger.Exception(ex, "Failed to dispose WebView2");
         }
 
-        try
-        {
-            var wv2Dir = Path.Combine(AppDataFolder, "WebView2");
-            if (Directory.Exists(wv2Dir))
-                Directory.Delete(wv2Dir, true);
-        }
-        catch (Exception ex)
-        {
-            AppLogger.Exception(ex, "Failed to delete WebView2 user data");
-        }
         AppLogger.Info("Main window closing");
         Environment.Exit(0);
     }
@@ -118,7 +122,7 @@ public partial class MainWindow : Window
 
     async void OnLoaded(object sender, RoutedEventArgs e)
     {
-        AppLogger.Info("Main window loaded");
+        LogStartupMilestone("main_window_loaded");
         _splash = new SplashWindow();
         _splash.Show();
 
@@ -131,13 +135,13 @@ public partial class MainWindow : Window
                 "--disable-extensions " +
                 "--renderer-process-limit=1");
 
-            var env = await CoreWebView2Environment.CreateAsync(
-                browserExecutableFolder: null,
-                userDataFolder: Path.Combine(AppDataFolder, "WebView2"),
-                options: opts);
-            await webView.EnsureCoreWebView2Async(env);
+            await EnsureWebViewInitializedAsync(opts);
             App.WebView2BrowserPid = webView.CoreWebView2.BrowserProcessId;
+            LogStartupMilestone("webview_ready");
             AppLogger.Info("WebView2 initialized with browser process id " + App.WebView2BrowserPid);
+
+            try { webView.CoreWebView2.MemoryUsageTargetLevel = CoreWebView2MemoryUsageTargetLevel.Low; }
+            catch (Exception ex) { AppLogger.Exception(ex, "Failed to set WebView2 low memory target"); }
 
             webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
             webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
@@ -161,14 +165,13 @@ public partial class MainWindow : Window
             webView.CoreWebView2.DOMContentLoaded += OnDOMContentLoaded;
             webView.CoreWebView2.NavigationStarting += OnNavigationStarting;
             webView.CoreWebView2.NewWindowRequested += OnNewWindowRequested;
-            webView.CoreWebView2.Navigate("https://app.local/index.html");
+            webView.CoreWebView2.Navigate($"https://app.local/v{GetAppVersion()}/index.html");
+            StateChanged += OnWindowStateChanged;
 
 #if DEBUG
             webView.CoreWebView2.OpenDevToolsWindow();
 #endif
             
-            _ = Task.Run(CheckAndDownloadMedia);
-            _ = Task.Run(CheckLauncherVersion);
         }
         catch (Exception ex)
         {
@@ -177,6 +180,30 @@ public partial class MainWindow : Window
             _splash?.FadeOutAndClose();
             _splash = null;
             Application.Current.Shutdown(1);
+        }
+    }
+
+    static string GetAppVersion() =>
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "1.0.0";
+
+    async Task EnsureWebViewInitializedAsync(CoreWebView2EnvironmentOptions options)
+    {
+        var profilePath = Path.Combine(AppDataFolder, "WebView2");
+        try
+        {
+            var environment = await CoreWebView2Environment.CreateAsync(null, profilePath, options);
+            await webView.EnsureCoreWebView2Async(environment);
+        }
+        catch (Exception firstError)
+        {
+            AppLogger.Exception(firstError, "WebView2 profile initialization failed; attempting one recovery");
+            App.KillWebView2Tree();
+            if (Directory.Exists(profilePath))
+                Directory.Delete(profilePath, true);
+
+            var environment = await CoreWebView2Environment.CreateAsync(null, profilePath, options);
+            await webView.EnsureCoreWebView2Async(environment);
+            AppLogger.Info("WebView2 profile recovery succeeded");
         }
     }
 
@@ -200,7 +227,7 @@ public partial class MainWindow : Window
     void OnDOMContentLoaded(object? sender, CoreWebView2DOMContentLoadedEventArgs e)
     {
         _pageReady = true;
-        AppLogger.Info("Web UI DOM loaded");
+        LogStartupMilestone("dom_content_loaded");
         Dispatcher.Invoke(() =>
         {
             Opacity = 1;
@@ -226,7 +253,6 @@ public partial class MainWindow : Window
         ");
 
         DetectGamePath();
-        RestoreStaleSignatureFromSettings();
         FlushPendingMedia();
     }
 
@@ -247,6 +273,158 @@ public partial class MainWindow : Window
     static extern bool ReleaseCapture();
     const int WM_NCLBUTTONDOWN = 0x00A1;
     const int HT_CAPTION = 0x0002;
+
+    async void OnWindowStateChanged(object? sender, EventArgs e)
+    {
+        await _webViewLifecycleLock.WaitAsync();
+        try
+        {
+            var core = webView.CoreWebView2;
+            if (core == null) return;
+
+            if (WindowState == WindowState.Minimized)
+            {
+                await core.ExecuteScriptAsync("window.onLauncherSuspending?.()");
+                webView.Visibility = Visibility.Collapsed;
+                _webViewSuspended = await core.TrySuspendAsync();
+                AppLogger.Info("WebView2 suspend result: " + _webViewSuspended);
+            }
+            else
+            {
+                if (_webViewSuspended)
+                    core.Resume();
+                _webViewSuspended = false;
+                webView.Visibility = Visibility.Visible;
+                await core.ExecuteScriptAsync("window.onLauncherResumed?.()");
+                AppLogger.Info("WebView2 resumed");
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Exception(ex, "WebView2 window-state transition failed");
+        }
+        finally
+        {
+            _webViewLifecycleLock.Release();
+        }
+    }
+
+    internal void NotifyUiInteractive()
+    {
+        LogStartupMilestone("settings_loaded");
+        LogStartupMilestone("ui_interactive");
+        SignalMediaReady();
+        if (Interlocked.Exchange(ref _startupTasksStarted, 1) == 0)
+            _ = RunDeferredStartupTasksAsync();
+    }
+
+    async Task RunDeferredStartupTasksAsync()
+    {
+        try
+        {
+            await Task.Delay(250, _shutdown.Token);
+            var mediaTask = CheckAndDownloadMedia();
+            var versionTask = CheckLauncherVersion();
+            await Task.Delay(750, _shutdown.Token);
+            ActivePlayerService.Start();
+            var notesTask = FetchVHReleaseNotes();
+            await Task.WhenAll(mediaTask, versionTask, notesTask);
+            var remaining = TimeSpan.FromSeconds(5) - App.StartupClock.Elapsed;
+            if (remaining > TimeSpan.Zero)
+                await Task.Delay(remaining, _shutdown.Token);
+            AppLogger.Info("Startup metric: network_requests_first_5s=" + LauncherHttp.StartupRequestCount);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            AppLogger.Exception(ex, "Deferred startup tasks failed");
+        }
+    }
+
+    internal async Task CheckPatchStatus(string gamePath, string installMethod)
+    {
+        AppLogger.SetGamePath(gamePath);
+        var method = NormalizeInstallMethod(installMethod);
+        var versionCachePath = Path.Combine(AppDataFolder, "versions.json");
+        var localCache = PatchStatusEvaluator.ReadVersionCache(versionCachePath);
+        var assets = ExpectedPatchAssets(gamePath, method, localCache, useCachedFingerprint: true);
+
+        PatchStatusResult result;
+        var localResult = PatchStatusEvaluator.Evaluate(
+            gamePath, method, localCache, assets, remoteAvailable: false);
+        if (localResult.State is "invalid_path" or "not_installed")
+        {
+            result = localResult;
+        }
+        else
+        {
+            try
+            {
+                using var timeout = LauncherHttp.TimeoutAfter(TimeSpan.FromSeconds(15), _shutdown.Token);
+                var remoteAssets = new List<PatchAssetStatus>();
+                foreach (var asset in assets)
+                {
+                    var url = WuwaIDLatestDownloadBaseUrl + Uri.EscapeDataString(asset.Name);
+                    var metadata = await GetReleaseAssetMetadata(LauncherHttp.Client, url, timeout.Token);
+                    remoteAssets.Add(asset with { Fingerprint = metadata.Fingerprint });
+                }
+                result = PatchStatusEvaluator.Evaluate(gamePath, method, localCache, remoteAssets, remoteAvailable: true);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
+            {
+                AppLogger.Exception(ex, "Patch status remote check failed");
+                result = PatchStatusEvaluator.Evaluate(gamePath, method, localCache, assets, remoteAvailable: false);
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Exception(ex, "Patch status check failed");
+                result = PatchStatusResult.From(PatchState.Error, false, "Gagal memeriksa status patch.");
+            }
+        }
+
+        result = result with { InstallMethod = method };
+        var json = JsonSerializer.Serialize(result, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        RunScript($"window.onPatchStatus({json})");
+    }
+
+    static List<PatchAssetStatus> ExpectedPatchAssets(
+        string gamePath,
+        string method,
+        IReadOnlyDictionary<string, string> localCache,
+        bool useCachedFingerprint)
+    {
+        var names = UsesManualLoaderMethod(method)
+            ? new[] { Helpers.ManualPakFileName, Helpers.WinHttpLoaderFileName }
+            : new[] { PakFileName };
+
+        return names.Select(name => new PatchAssetStatus(
+            name,
+            name.Equals(Helpers.WinHttpLoaderFileName, StringComparison.OrdinalIgnoreCase)
+                ? Helpers.Method2LoaderPath(gamePath)
+                : UsesManualLoaderMethod(method)
+                    ? Helpers.Method2PakPath(gamePath)
+                    : Helpers.Method1PakPath(gamePath),
+            useCachedFingerprint && localCache.TryGetValue(name, out var fingerprint) ? fingerprint : ""
+        )).ToList();
+    }
+
+    internal async Task ResetWebViewCache()
+    {
+        try
+        {
+            var core = webView.CoreWebView2;
+            if (core == null) return;
+            await core.Profile.ClearBrowsingDataAsync(CoreWebView2BrowsingDataKinds.AllProfile);
+            WebResourceCache.Clear();
+            await core.ExecuteScriptAsync("location.reload()");
+            AppLogger.Info("WebView2 display cache reset");
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Exception(ex, "Failed to reset WebView2 display cache");
+            RunScript($"toast({JsStr("Gagal mereset cache tampilan: " + ex.Message)}, 'err')");
+        }
+    }
 
     void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
@@ -277,10 +455,40 @@ public partial class MainWindow : Window
     {
         var uri = new Uri(e.Request.Uri);
         var path = uri.AbsolutePath.TrimStart('/');
+        var slash = path.IndexOf('/');
+        if (slash > 0 && path.StartsWith("v", StringComparison.OrdinalIgnoreCase))
+            path = path[(slash + 1)..];
         var resName = ResPrefix + path.Replace('/', '.');
 
-        var encStream = Asm.GetManifestResourceStream(resName);
-        if (encStream == null)
+        byte[]? resource = null;
+        try
+        {
+            resource = WebResourceCache.GetOrAdd(resName, static name =>
+            {
+                using var encStream = Asm.GetManifestResourceStream(name);
+                if (encStream == null)
+                {
+                    const string imagePrefix = ResPrefix + "Images.";
+                    if (!name.StartsWith(imagePrefix, StringComparison.OrdinalIgnoreCase))
+                        throw new FileNotFoundException("Embedded web resource not found", name);
+                    var imageName = name[imagePrefix.Length..];
+                    var resourceInfo = Application.GetResourceStream(
+                        new Uri("Resources/Images/" + imageName, UriKind.Relative));
+                    if (resourceInfo == null)
+                        throw new FileNotFoundException("WPF image resource not found", imageName);
+                    using var imageStream = resourceInfo.Stream;
+                    var imageBytes = new byte[imageStream.Length];
+                    imageStream.ReadExactly(imageBytes);
+                    return imageBytes;
+                }
+                var bytes = new byte[encStream.Length];
+                encStream.ReadExactly(bytes);
+                for (int i = 0; i < bytes.Length; i++)
+                    bytes[i] ^= XorKey[i % XorKey.Length];
+                return bytes;
+            });
+        }
+        catch (FileNotFoundException)
         {
             AppLogger.Warn("Web resource not found: " + path);
             e.Response = webView.CoreWebView2.Environment.CreateWebResourceResponse(
@@ -288,18 +496,12 @@ public partial class MainWindow : Window
             return;
         }
 
-        var enc = new byte[encStream.Length];
-        encStream.ReadExactly(enc);
-        encStream.Dispose();
-        for (int i = 0; i < enc.Length; i++)
-            enc[i] ^= XorKey[i % XorKey.Length];
-
         var mime = Helpers.GetMimeType(path);
-        var ms = new MemoryStream(enc);
+        var ms = new MemoryStream(resource, writable: false);
         e.Response = webView.CoreWebView2.Environment.CreateWebResourceResponse(
             ms, 200, "OK",
             $"Content-Type: {mime}\r\n" +
-            "Cache-Control: no-store\r\n" +
+            "Cache-Control: public, max-age=31536000, immutable\r\n" +
             "Content-Security-Policy: default-src 'self' https://app.local https://cache.local; " +
             "script-src 'self' https://app.local 'unsafe-inline'; " +
             "style-src 'self' https://app.local 'unsafe-inline'; " +
@@ -453,14 +655,14 @@ public partial class MainWindow : Window
                 : new[] { PakFileName };
             var toDownload = new List<(string Name, string Url, long Size, string Fingerprint, string DestPath)>();
 
-            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaIDLauncher/1.0");
+            var http = LauncherHttp.Client;
+            using var installTimeout = LauncherHttp.TimeoutAfter(TimeSpan.FromMinutes(10), _shutdown.Token);
             var tagName = "latest";
 
             foreach (var name in expectedAssets)
             {
                 var url = WuwaIDLatestDownloadBaseUrl + Uri.EscapeDataString(name);
-                var metadata = await GetReleaseAssetMetadata(http, url);
+                var metadata = await GetReleaseAssetMetadata(http, url, installTimeout.Token);
                 var destPath = name.Equals(Helpers.WinHttpLoaderFileName, StringComparison.OrdinalIgnoreCase)
                     ? Helpers.Method2LoaderPath(gamePath)
                     : Path.Combine(pakDir, name);
@@ -575,19 +777,19 @@ public partial class MainWindow : Window
                 var tmpPath = destPath + ".tmp";
                 Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
 
-                using var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+                using var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, installTimeout.Token);
                 resp.EnsureSuccessStatusCode();
                 AppLogger.Info("Downloading installer asset: " + name);
 
-                await using var netStream = await resp.Content.ReadAsStreamAsync();
+                await using var netStream = await resp.Content.ReadAsStreamAsync(installTimeout.Token);
                 await using var fileStream = new FileStream(tmpPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true);
 
                 var buffer = new byte[65536];
                 int bytesRead;
 
-                while ((bytesRead = await netStream.ReadAsync(buffer)) > 0)
+                while ((bytesRead = await netStream.ReadAsync(buffer, installTimeout.Token)) > 0)
                 {
-                    await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead));
+                    await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), installTimeout.Token);
                     totalDownloaded += bytesRead;
 
                     if (sw.ElapsedMilliseconds >= 350)
@@ -636,10 +838,11 @@ public partial class MainWindow : Window
         }
     }
 
-    static async Task<(long Size, string Fingerprint)> GetReleaseAssetMetadata(HttpClient http, string url)
+    static async Task<(long Size, string Fingerprint)> GetReleaseAssetMetadata(
+        HttpClient http, string url, CancellationToken cancellationToken = default)
     {
         using var req = new HttpRequestMessage(HttpMethod.Head, url);
-        using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+        using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         resp.EnsureSuccessStatusCode();
 
         var size = resp.Content.Headers.ContentLength ?? 0;
@@ -649,10 +852,11 @@ public partial class MainWindow : Window
         return (size, fingerprint);
     }
 
-    static async Task<string> GetLatestReleaseTag(HttpClient http, string latestReleaseUrl)
+    static async Task<string> GetLatestReleaseTag(
+        HttpClient http, string latestReleaseUrl, CancellationToken cancellationToken = default)
     {
         using var req = new HttpRequestMessage(HttpMethod.Head, latestReleaseUrl);
-        using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+        using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         resp.EnsureSuccessStatusCode();
 
         var uri = resp.RequestMessage?.RequestUri;
@@ -660,9 +864,10 @@ public partial class MainWindow : Window
         return tag == "latest" ? "" : tag;
     }
 
-    static async Task<(string Tag, string Date, string Body, string Name)> FetchLatestReleaseNotesFromAtom(HttpClient http, string atomUrl)
+    static async Task<(string Tag, string Date, string Body, string Name)> FetchLatestReleaseNotesFromAtom(
+        HttpClient http, string atomUrl, CancellationToken cancellationToken = default)
     {
-        var xml = await http.GetStringAsync(atomUrl);
+        var xml = await http.GetStringAsync(atomUrl, cancellationToken);
         var doc = XDocument.Parse(xml);
         XNamespace atom = "http://www.w3.org/2005/Atom";
         var entry = doc.Root?.Element(atom + "entry")
@@ -879,9 +1084,8 @@ public partial class MainWindow : Window
         try
         {
             AppLogger.Info("Checking launcher version");
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaIDLauncher/1.0");
-            var tag = (await GetLatestReleaseTag(http, LauncherLatestReleaseUrl)).TrimStart('v', 'V');
+            using var timeout = LauncherHttp.TimeoutAfter(TimeSpan.FromSeconds(15), _shutdown.Token);
+            var tag = (await GetLatestReleaseTag(LauncherHttp.Client, LauncherLatestReleaseUrl, timeout.Token)).TrimStart('v', 'V');
             if (string.IsNullOrEmpty(tag)) return;
 
             var current = Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0, 0);
@@ -910,9 +1114,9 @@ public partial class MainWindow : Window
         try
         {
             AppLogger.Info("Fetching WuwaID release notes");
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaIDLauncher/1.0");
-            var (tag, date, body, name) = await FetchLatestReleaseNotesFromAtom(http, VHReleasesAtomUrl);
+            using var timeout = LauncherHttp.TimeoutAfter(TimeSpan.FromSeconds(15), _shutdown.Token);
+            var (tag, date, body, name) = await FetchLatestReleaseNotesFromAtom(
+                LauncherHttp.Client, VHReleasesAtomUrl, timeout.Token);
 
             while (!_pageReady) await Task.Delay(100);
             RunScript($"window.onVHReleaseNotes({JsStr(tag)}, {JsStr(date)}, {JsStr(body)}, {JsStr(name)})");
@@ -958,15 +1162,15 @@ public partial class MainWindow : Window
             var zipPath = Path.Combine(updateDir, "update.zip");
 
             RunScript("window.onLauncherUpdateProgress(0, 'Mengunduh...')");
-            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaIDLauncher/1.0");
+            using var timeout = LauncherHttp.TimeoutAfter(TimeSpan.FromMinutes(10), _shutdown.Token);
+            var http = LauncherHttp.Client;
 
-            using var resp = await http.GetAsync(zipUrl, HttpCompletionOption.ResponseHeadersRead);
+            using var resp = await http.GetAsync(zipUrl, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
             resp.EnsureSuccessStatusCode();
             long total = resp.Content.Headers.ContentLength ?? -1;
             AppLogger.Info("Launcher update download started; bytes=" + total);
 
-            await using (var net = await resp.Content.ReadAsStreamAsync())
+            await using (var net = await resp.Content.ReadAsStreamAsync(timeout.Token))
             {
                 await using (var fs = new FileStream(zipPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, true))
                 {
@@ -974,9 +1178,9 @@ public partial class MainWindow : Window
                     long got = 0;
                     var sw = Stopwatch.StartNew();
                     int read;
-                    while ((read = await net.ReadAsync(buf)) > 0)
+                    while ((read = await net.ReadAsync(buf, timeout.Token)) > 0)
                     {
-                        await fs.WriteAsync(buf.AsMemory(0, read));
+                        await fs.WriteAsync(buf.AsMemory(0, read), timeout.Token);
                         got += read;
                         if (sw.ElapsedMilliseconds >= 300)
                         {
@@ -1074,16 +1278,14 @@ public partial class MainWindow : Window
     async Task CheckAndDownloadMedia()
     {
         AppLogger.Info("Media check started");
-        SignalMediaReady();
-
         RunScript("window.onMediaStatus('checking', '')");
         var toDownload = new List<(string Name, string Url, string Hash)>();
+        var mediaCache = MediaCacheState.Load(MediaCachePath);
 
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaIDLauncher/1.0");
-            var json = await http.GetStringAsync(AssetsUrl);
+            using var timeout = LauncherHttp.TimeoutAfter(TimeSpan.FromSeconds(20), _shutdown.Token);
+            var json = await LauncherHttp.Client.GetStringAsync(AssetsUrl, timeout.Token);
             using var doc = JsonDocument.Parse(json);
 
             if (doc.RootElement.TryGetProperty("update_date", out var updateDateProp))
@@ -1106,10 +1308,19 @@ public partial class MainWindow : Window
                     var url = item.GetProperty("url").GetString() ?? "";
                     var hash = item.GetProperty("sha256").GetString() ?? "";
                     var dest = Path.Combine(CacheFolder, name);
-                    if (!File.Exists(dest) || !Helpers.VerifySha256(dest, hash))
+                    var valid = File.Exists(dest) && string.IsNullOrEmpty(hash);
+                    if (!valid)
+                        valid = mediaCache.CanSkipHash(name, dest, hash);
+                    if (!valid && File.Exists(dest) && IsSha256(hash) && Helpers.VerifySha256(dest, hash))
+                    {
+                        mediaCache.Record(name, dest, hash);
+                        valid = true;
+                    }
+                    if (!valid)
                         toDownload.Add((name, url, hash));
                 }
             }
+            mediaCache.Save(MediaCachePath);
         }
         catch (Exception ex)
         {
@@ -1119,13 +1330,20 @@ public partial class MainWindow : Window
         if (toDownload.Count > 0)
         {
             AppLogger.Info("Media download queue count: " + toDownload.Count);
-            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaIDLauncher/1.0");
-            foreach (var (name, url, _) in toDownload)
+            using var timeout = LauncherHttp.TimeoutAfter(TimeSpan.FromMinutes(30), _shutdown.Token);
+            foreach (var (name, url, hash) in toDownload)
             {
                 try
                 {
-                    await DownloadWithProgress(http, url, Path.Combine(CacheFolder, name), name);
+                    var dest = Path.Combine(CacheFolder, name);
+                    await DownloadWithProgress(LauncherHttp.Client, url, dest, name, timeout.Token);
+                    if (IsSha256(hash) && !Helpers.VerifySha256(dest, hash))
+                    {
+                        File.Delete(dest);
+                        throw new InvalidDataException("Hash media tidak cocok: " + name);
+                    }
+                    mediaCache.Record(name, dest, hash);
+                    mediaCache.Save(MediaCachePath);
                 }
                 catch (Exception ex)
                 {
@@ -1141,15 +1359,16 @@ public partial class MainWindow : Window
         RunScript("window.onMediaStatus('ready', '')");
     }
 
-    async Task DownloadWithProgress(HttpClient http, string url, string dest, string name)
+    async Task DownloadWithProgress(
+        HttpClient http, string url, string dest, string name, CancellationToken cancellationToken = default)
     {
         AppLogger.Info("Downloading media asset: " + name);
-        using var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+        using var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         resp.EnsureSuccessStatusCode();
         long total = resp.Content.Headers.ContentLength ?? -1;
         var tmp = dest + ".tmp";
 
-        await using (var net = await resp.Content.ReadAsStreamAsync())
+        await using (var net = await resp.Content.ReadAsStreamAsync(cancellationToken))
         await using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write,
                                              FileShare.None, 65536, useAsync: true))
         {
@@ -1157,9 +1376,9 @@ public partial class MainWindow : Window
             long got = 0, lastGot = 0;
             var sw = Stopwatch.StartNew();
             int read;
-            while ((read = await net.ReadAsync(buf)) > 0)
+            while ((read = await net.ReadAsync(buf, cancellationToken)) > 0)
             {
-                await fs.WriteAsync(buf.AsMemory(0, read));
+                await fs.WriteAsync(buf.AsMemory(0, read), cancellationToken);
                 got += read;
                 if (sw.ElapsedMilliseconds >= 350)
                 {
@@ -1313,12 +1532,19 @@ public class LauncherBridge
         catch { return ""; }
     }
 
-    public void CheckLauncherUpdate() => Task.Run(() => _w.CheckLauncherVersion());
+    public void CheckLauncherUpdate() => _ = _w.CheckLauncherVersion();
 
-    public void GetVHReleaseNotes() => Task.Run(() => _w.FetchVHReleaseNotes());
+    public void GetVHReleaseNotes() => _ = _w.FetchVHReleaseNotes();
 
     public void PerformLauncherUpdate(string version, string zipUrl) =>
-        Task.Run(() => _w.PerformLauncherUpdate(version, zipUrl));
+        _ = _w.PerformLauncherUpdate(version, zipUrl);
+
+    public void CheckPatchStatus(string gamePath, string installMethod) =>
+        _ = _w.CheckPatchStatus(gamePath, installMethod);
+
+    public void NotifyUiInteractive() => _w.NotifyUiInteractive();
+
+    public void ResetWebViewCache() => _ = _w.ResetWebViewCache();
 
     public bool GetLogUploadEnabled() => LogUploadService.IsEnabled();
 

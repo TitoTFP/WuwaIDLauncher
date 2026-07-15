@@ -117,6 +117,34 @@ if ! rg -n 'WindowState = WindowState\.Minimized' MainWindow.xaml.cs >/dev/null;
   fail "launcher must minimize during launch flow"
 fi
 
+if rg -n 'setTimeout\(.*startInstall|autoCheckDone.*startInstall' Resources/Web >/dev/null; then
+  fail "startup must never invoke installation automatically"
+fi
+
+if rg -n 'RestoreStaleSignatureFromSettings\(\);' MainWindow.xaml.cs >/dev/null; then
+  fail "startup must not mutate game signature files"
+fi
+
+if ! rg -n 'CheckPatchStatus\(string gamePath, string installMethod\)' MainWindow.xaml.cs >/dev/null; then
+  fail "launcher bridge must expose read-only patch status checks"
+fi
+
+if ! rg -n 'TrySuspendAsync|MemoryUsageTargetLevel\.Low|onLauncherSuspending|onLauncherResumed' MainWindow.xaml.cs Resources/Web/script-fx.js >/dev/null; then
+  fail "launcher must suspend and resume WebView2 when minimized"
+fi
+
+if rg -n 'Directory\.Delete\(wv2Dir|ClearBrowsingDataAsync\(\);' MainWindow.xaml.cs >/dev/null; then
+  fail "normal shutdown must preserve the WebView2 profile"
+fi
+
+if ! rg -n "launcherVisualMode.*full|\['full', 'light', 'off'\]" Resources/Web/script-core.js Resources/Web/script-fx.js >/dev/null; then
+  fail "launcher visual profile must default safely and support full/light/off"
+fi
+
+if ! rg -n 'Cache-Control: public, max-age=31536000, immutable' MainWindow.xaml.cs >/dev/null; then
+  fail "versioned embedded resources must use immutable caching"
+fi
+
 if ! rg -n 'Signature file tidak terdeteksi, jalankan Wuthering Waves dulu tanpa mod atau launcher ini\.' MainWindow.xaml.cs >/dev/null; then
   fail "launcher must block launch when signature and backup are missing"
 fi

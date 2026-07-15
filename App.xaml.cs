@@ -10,6 +10,7 @@ namespace WuwaIDLauncher;
 public partial class App : Application
 {
     internal static uint WebView2BrowserPid;
+    internal static readonly Stopwatch StartupClock = Stopwatch.StartNew();
     static Mutex? _mutex;
 
     [DllImport("kernel32.dll")]
@@ -22,7 +23,7 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         AppLogger.Initialize(WuwaIDLauncher.MainWindow.AppDataFolder);
-        AppLogger.Info("Application startup");
+        AppLogger.Info("Startup milestone: process_start elapsed_ms=0");
         
         if (Debugger.IsAttached || IsDebuggerPresent())
         {

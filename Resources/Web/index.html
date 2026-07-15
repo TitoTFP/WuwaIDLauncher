@@ -13,7 +13,7 @@
 <body>
     
     <div class="bg-layer">
-        <video id="bgVideo" muted loop playsinline preload="auto">
+        <video id="bgVideo" muted loop playsinline preload="none">
             
         </video>
         <div class="bg-vignette"></div>
@@ -183,6 +183,10 @@
                 <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg>
                 Kirim log diagnostik
             </button>
+            <button class="rp-dropdown__item" id="menuResetCache">
+                <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M12 4V1L8 5l4 4V6a6 6 0 1 1-5.65 4H4.26A8 8 0 1 0 12 4z"/></svg>
+                Reset cache tampilan
+            </button>
             <a class="rp-dropdown__item rp-dropdown__item--trakteer" id="menuDukung" href="https://trakteer.id/TitoTFP" target="_blank" rel="noopener noreferrer" title="Dukung Kami di Trakteer">
                 <svg viewBox="0 0 24 24" width="14" height="14">
                     <path fill="currentColor" d="M7 3h8.5a4.5 4.5 0 0 1 .5 8.97V13a5 5 0 0 1-5 5H7a5 5 0 0 1-5-5V8a5 5 0 0 1 5-5Zm9 2.1v4.8A2.5 2.5 0 0 0 16 5.1ZM7.1 8.2c-1.1 0-1.9.83-1.9 1.88 0 2.18 3.52 4.1 3.8 4.1s3.8-1.92 3.8-4.1c0-1.05-.8-1.88-1.9-1.88-.74 0-1.45.43-1.9 1.08-.45-.65-1.16-1.08-1.9-1.08ZM5 20h12v2H5v-2Z"/>
@@ -250,6 +254,13 @@
             </div>
 
             <div class="pm-body">
+
+                <div class="pm-group-label">Performa Launcher</div>
+                <div class="launcher-visual-options" role="radiogroup" aria-label="Kualitas visual launcher">
+                    <label><input type="radio" name="launcherVisualMode" value="full"><span>Penuh</span><small>Video dan semua efek</small></label>
+                    <label><input type="radio" name="launcherVisualMode" value="light"><span>Ringan</span><small>Background statis dan partikel ringan</small></label>
+                    <label><input type="radio" name="launcherVisualMode" value="off"><span>Mati</span><small>Tanpa efek bergerak</small></label>
+                </div>
 
                 <div class="pm-group-label">Bayangan</div>
                 <div class="pm-row">
@@ -500,7 +511,7 @@
         </div>
     </div>
 
-    <audio id="bgMusic" loop preload="auto"></audio>
+    <audio id="bgMusic" loop preload="none"></audio>
 
     <script src="script-core.js"></script>
     <script src="script-fx.js"></script>

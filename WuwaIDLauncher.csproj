@@ -12,13 +12,18 @@
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <EnableCompressionInSingleFile Condition="'$(EnableCompressionInSingleFile)' == ''">true</EnableCompressionInSingleFile>
+    <UseOpaqueWindowBenchmark Condition="'$(UseOpaqueWindowBenchmark)' == ''">false</UseOpaqueWindowBenchmark>
     <PublishReadyToRun>true</PublishReadyToRun>
     <PublishTrimmed>false</PublishTrimmed>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ApplicationIcon>Resources\Images\app.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(UseOpaqueWindowBenchmark)' == 'true'">
+    <DefineConstants>$(DefineConstants);OPAQUE_WINDOW_BENCHMARK</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>

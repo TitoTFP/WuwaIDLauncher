@@ -24,7 +24,13 @@ function initBottomBar() {
         document.getElementById('btnMenu')?.classList.remove('active');
         if (!S.gamePath) { toast('Direktori game belum dipilih!', 'err'); return; }
         if (S.installing) return;
-        startInstall();
+        checkPatchStatus(false);
+    });
+
+    document.getElementById('menuResetCache')?.addEventListener('click', async () => {
+        dropdown?.classList.remove('open');
+        if (!await showConfirm('Reset cache tampilan launcher? Settings dan media tidak akan dihapus.')) return;
+        bridge()?.ResetWebViewCache();
     });
 
     document.getElementById('menuCheckUpdate')?.addEventListener('click', () => {
@@ -64,6 +70,7 @@ function initBottomBar() {
             const result = await bridge().Uninstall(S.gamePath);
             if (result === 'ok') {
                 S.installed = false;
+                S.patchState = 'not_installed';
                 const btn = document.getElementById('btnStart');
                 const txt = document.getElementById('startBtnText');
                 btn.classList.remove('installed');
@@ -82,10 +89,14 @@ function initBottomBar() {
 
 async function handleStart() {
     if (S.installing || S.launching) return;
-    if (!S.gamePath) {
+    if (!S.gamePath || S.patchState === 'invalid_path') {
         if (!await browseFolder()) return;
     }
     if (S.installed) { launchGame(); return; }
+    if (S.patchState === 'offline' || S.patchState === 'error') {
+        checkPatchStatus(false);
+        return;
+    }
     startInstall();
 }
 
@@ -106,6 +117,17 @@ function startInstall() {
     } else {
         simulateInstall();
     }
+}
+
+function checkPatchStatus(silent = true) {
+    if (!S.gamePath || !bridge()) return;
+    const btn = document.getElementById('btnStart');
+    const txt = document.getElementById('startBtnText');
+    S.patchState = 'checking';
+    if (btn) btn.classList.add('disabled');
+    if (txt) txt.textContent = 'Memeriksa patch...';
+    if (!silent) toast('Memeriksa Patch ID...', 'info');
+    bridge().CheckPatchStatus(S.gamePath, S.cfg.installMethod || 'method1');
 }
 
 function simulateInstall() {
@@ -143,6 +165,7 @@ function setProgress(pct, text, speed, size) {
 function installDone() {
     S.installing = false;
     S.installed = true;
+    S.patchState = 'current';
     loadVersions();
     const btn = document.getElementById('btnStart');
     const txt = document.getElementById('startBtnText');
@@ -182,11 +205,34 @@ function clearLaunchLock() {
         btn.classList.remove('disabled');
         if (S.installed) btn.classList.add('installed');
     }
-    if (txt) txt.textContent = S.installed ? 'Mainkan Game' : 'Instal Patch ID';
+    if (txt) txt.textContent = S.installed ? 'Mainkan Game'
+        : S.patchState === 'update_available' ? 'Perbarui Patch ID'
+        : 'Instal Patch ID';
 }
 
 window.onProgressUpdate  = (p,t,sp,sz) => setProgress(p,t,sp,sz);
 window.onInstallComplete = () => installDone();
+window.onPatchStatus = result => {
+    if (!result) return;
+    if (result.installMethod && result.installMethod !== (S.cfg.installMethod || 'method1')) return;
+    S.patchState = result.state || 'error';
+    S.installed = !!result.canLaunch;
+    const btn = document.getElementById('btnStart');
+    const txt = document.getElementById('startBtnText');
+    const dx11Row = document.getElementById('dx11Row');
+    btn?.classList.remove('disabled', 'installed');
+    if (S.installed) btn?.classList.add('installed');
+
+    const label = S.installed ? 'Mainkan Game'
+        : S.patchState === 'update_available' ? 'Perbarui Patch ID'
+        : S.patchState === 'invalid_path' ? 'Pilih Folder Game'
+        : S.patchState === 'offline' ? 'Coba Periksa Lagi'
+        : 'Instal Patch ID';
+    if (txt) txt.textContent = label;
+    if (dx11Row) dx11Row.style.display = S.installed ? '' : 'none';
+    if (result.message && ['offline', 'invalid_path', 'error'].includes(S.patchState))
+        toast(result.message, S.patchState === 'offline' ? 'info' : 'err');
+};
 window.onGameLaunchStarted = () => setLaunchLock('Game sedang berjalan');
 window.onGameLaunchWaitingRestore = () => setLaunchLock('Memulihkan signature...');
 window.onGameLaunchFinished = () => clearLaunchLock();
@@ -231,7 +277,7 @@ window.onGamePathDetected = path => {
     saveSettings();
     if (!S.autoCheckDone && !S.installing) {
         S.autoCheckDone = true;
-        setTimeout(() => { if (!S.installing) startInstall(); }, 800);
+        checkPatchStatus();
     }
 };
 
@@ -343,21 +389,7 @@ window.onMediaProgress = (pct, text, speed, size) => {
 };
 
 window.onMediaReady = (bgmUrl, videoUrl) => {
-    
-    if (videoUrl) {
-        const vid = document.getElementById('bgVideo');
-        if (vid) {
-            vid.src = videoUrl;
-            vid.load();
-            const onReady = () => {
-                vid.play().catch(()=>{});
-                vid.classList.add('visible');
-                vid.removeEventListener('canplay', onReady);
-            };
-            vid.addEventListener('canplay', onReady);
-        }
-    }
-    
+    if (videoUrl && window.setLauncherVideoSource) window.setLauncherVideoSource(videoUrl);
     if (bgmUrl && window.apSetAudioSource) window.apSetAudioSource(bgmUrl);
     window.onMediaStatus('ready');
 };

@@ -1,4 +1,75 @@
-﻿
+﻿const LauncherAnimationScheduler = (() => {
+    const jobs = new Map();
+    let frame = 0;
+    let paused = document.hidden;
+
+    function tick(ts) {
+        frame = 0;
+        if (paused) return;
+        jobs.forEach(job => {
+            if (!job.enabled() || ts - job.last < job.interval) return;
+            job.last = ts;
+            job.draw(ts);
+        });
+        if (jobs.size) frame = requestAnimationFrame(tick);
+    }
+    function start() {
+        if (!paused && !frame && jobs.size) frame = requestAnimationFrame(tick);
+    }
+    document.addEventListener('visibilitychange', () => {
+        paused = document.hidden;
+        if (paused && frame) { cancelAnimationFrame(frame); frame = 0; }
+        else start();
+    });
+    return {
+        add(name, fps, draw, enabled = () => true) {
+            jobs.set(name, { interval: 1000 / fps, last: 0, draw, enabled });
+            start();
+        },
+        pause() { paused = true; if (frame) cancelAnimationFrame(frame); frame = 0; },
+        resume() { paused = document.hidden; start(); }
+    };
+})();
+
+function normalizeLauncherVisualMode(mode) {
+    return ['full', 'light', 'off'].includes(mode) ? mode : 'full';
+}
+
+function applyLauncherVisualMode(mode) {
+    mode = normalizeLauncherVisualMode(mode);
+    S.cfg.launcherVisualMode = mode;
+    document.body.dataset.visualMode = mode;
+    document.documentElement.classList.toggle('launcher-reduced-motion', mode === 'off');
+    document.querySelectorAll('[name="launcherVisualMode"]').forEach(input => {
+        input.checked = input.value === mode;
+    });
+    if (mode === 'full') loadLauncherVideo();
+    else unloadLauncherVideo();
+    if (mode === 'full' && document.readyState !== 'loading') initCyberEffects();
+}
+
+function launcherVisualMode() { return normalizeLauncherVisualMode(S.cfg.launcherVisualMode); }
+
+let _launcherVideoUrl = '';
+function loadLauncherVideo() {
+    const video = document.getElementById('bgVideo');
+    if (!video || !_launcherVideoUrl || launcherVisualMode() !== 'full') return;
+    if (video.src !== _launcherVideoUrl) {
+        video.src = _launcherVideoUrl;
+        video.load();
+    }
+    video.play().then(() => video.classList.add('visible')).catch(() => {});
+}
+function unloadLauncherVideo() {
+    const video = document.getElementById('bgVideo');
+    if (!video) return;
+    video.pause();
+    video.classList.remove('visible');
+    video.removeAttribute('src');
+    video.load();
+}
+window.setLauncherVideoSource = url => { _launcherVideoUrl = url || ''; loadLauncherVideo(); };
+
 function initParticles() {
     const c = document.getElementById('particleCanvas');
     if (!c) return;
@@ -6,8 +77,6 @@ function initParticles() {
     let W, H;
     const P = [];
     const N = 20;
-    const INTERVAL = 1000 / 24;
-    let lastT = 0;
 
     function resize() { W = c.width = innerWidth; H = c.height = innerHeight; }
     resize();
@@ -43,16 +112,12 @@ function initParticles() {
         }
     }
     for (let i=0; i<N; i++) P.push(new Dot());
-    (function loop(ts) {
-        if (!document.hidden) {
-            if (ts - lastT >= INTERVAL) {
-                lastT = ts;
-                ctx.clearRect(0,0,W,H);
-                P.forEach(p => { p.tick(); p.draw(ctx); });
-            }
-        }
-        requestAnimationFrame(loop);
-    })(0);
+    let lightFrame = false;
+    LauncherAnimationScheduler.add('particles', 24, () => {
+        if (launcherVisualMode() === 'light' && (lightFrame = !lightFrame)) return;
+        ctx.clearRect(0,0,W,H);
+        P.forEach(p => { p.tick(); p.draw(ctx); });
+    }, () => launcherVisualMode() !== 'off');
 }
 
 let navWaveT = 0;
@@ -120,7 +185,10 @@ function drawNavWave(canvas) {
     drawArc(+1);
 }
 
+let _cyberEffectsInitialized = false;
 function initCyberEffects() {
+    if (_cyberEffectsInitialized || launcherVisualMode() !== 'full') return;
+    _cyberEffectsInitialized = true;
     initGlitchEffect();
     initAudioVisualizer();
     initWaterEffect();
@@ -130,7 +198,7 @@ function initGlitchEffect() {
     const btn = document.getElementById('btnStart');
     if (!btn) return;
     setInterval(() => {
-        if (Math.random() < 0.05) {
+        if (launcherVisualMode() === 'full' && !document.hidden && Math.random() < 0.05) {
             btn.classList.add('glitch-active');
             setTimeout(() => btn.classList.remove('glitch-active'), 400);
         }
@@ -230,19 +298,13 @@ function initAudioVisualizer() {
     }
 
     let _vizRunning = false;
-    const VIZ_INTERVAL = 1000 / 30;
-    let _vizLastT = 0;
     const bgLayer = document.querySelector('.bg-layer');
     let _bgScale = 1.0;
     let _bgVelocity = 0;
     let _fftData = null;
     let bassE = 0, midE = 0, hiE = 0, overallE = 0;
 
-    const vizLoop = (ts) => {
-        if (document.hidden) { requestAnimationFrame(vizLoop); return; }
-        if (ts - _vizLastT < VIZ_INTERVAL) { requestAnimationFrame(vizLoop); return; }
-        _vizLastT = ts;
-
+    const drawVisualizer = () => {
         const hasAudio = _vizRunning && _analyser;
         if (hasAudio) {
             if (!_fftData) _fftData = new Uint8Array(_analyser.frequencyBinCount);
@@ -268,7 +330,7 @@ function initAudioVisualizer() {
             lights.forEach(l => { l.style.opacity = (0.1 + bassE * 0.70).toFixed(2); });
         }
 
-        if (!ctx) { requestAnimationFrame(vizLoop); return; }
+        if (!ctx) return;
         const W = vizCanvas.width, H = vizCanvas.height;
         ctx.clearRect(0, 0, W, H);
 
@@ -286,9 +348,9 @@ function initAudioVisualizer() {
         }
         ctx.globalAlpha = 1;
 
-        requestAnimationFrame(vizLoop);
     };
-    requestAnimationFrame(vizLoop);
+    LauncherAnimationScheduler.add('audio-visualizer', 30, drawVisualizer,
+        () => launcherVisualMode() === 'full' && _vizRunning && !audio.muted && !audio.paused);
 
     const start = () => {
         try {
@@ -340,8 +402,8 @@ function initWaterEffect() {
     ];
 
     let t = 0;
-    const waterLoop = () => {
-        if (document.hidden || !ctx) { requestAnimationFrame(waterLoop); return; }
+    const drawWater = () => {
+        if (!ctx) return;
         ctx.clearRect(0, 0, W, H);
 
         const bg = ctx.createLinearGradient(0, 0, 0, H);
@@ -382,7 +444,24 @@ function initWaterEffect() {
 
         ctx.globalCompositeOperation = 'source-over';
         t += 1;
-        requestAnimationFrame(waterLoop);
     };
-    requestAnimationFrame(waterLoop);
+    LauncherAnimationScheduler.add('water', 24, drawWater,
+        () => launcherVisualMode() === 'full');
 }
+
+let _resumeVideoAfterSuspend = false;
+window.onLauncherSuspending = () => {
+    const video = document.getElementById('bgVideo');
+    _resumeVideoAfterSuspend = !!video && !video.paused;
+    video?.pause();
+    window.apSuspend?.();
+    _audioCtx?.suspend?.();
+    LauncherAnimationScheduler.pause();
+};
+
+window.onLauncherResumed = () => {
+    LauncherAnimationScheduler.resume();
+    window.apResume?.();
+    if (_resumeVideoAfterSuspend && launcherVisualMode() === 'full') loadLauncherVideo();
+    _resumeVideoAfterSuspend = false;
+};

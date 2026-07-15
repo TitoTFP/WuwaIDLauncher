@@ -20,6 +20,14 @@ const PM_TOGGLES = [
 function initPerformanceMode() {
     document.getElementById('pmApplyBtn')?.addEventListener('click', pmApply);
     document.getElementById('pmClearBtn')?.addEventListener('click', pmClear);
+    document.querySelectorAll('[name="launcherVisualMode"]').forEach(input => {
+        input.addEventListener('change', () => {
+            if (!input.checked) return;
+            applyLauncherVisualMode(input.value);
+            saveSettings();
+            toast('Mode visual launcher: ' + input.parentElement.querySelector('span')?.textContent, 'ok');
+        });
+    });
 }
 
 function pmLoadToggles() {
@@ -32,6 +40,7 @@ function pmLoadToggles() {
 
 async function pmRefreshStatus() {
     pmLoadToggles();
+    applyLauncherVisualMode(S.cfg.launcherVisualMode);
     if (!S.gamePath || !bridge()) {
         pmSetStatus('inactive', 'Belum memilih folder game');
         return;

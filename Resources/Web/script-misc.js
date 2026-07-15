@@ -242,6 +242,7 @@ async function loadSettings() {
                 Object.assign(S.cfg, JSON.parse(j));
                 S.gamePath = S.cfg.gamePath || '';
                 S.cfg.installMethod = normalizeInstallMethod(S.cfg.installMethod);
+                S.cfg.launcherVisualMode = normalizeLauncherVisualMode(S.cfg.launcherVisualMode);
                 updateMethodMenu();
                 window.apApplySavedState?.();
             }
@@ -249,7 +250,7 @@ async function loadSettings() {
     }
     if (S.gamePath && !S.autoCheckDone && !S.installing) {
         S.autoCheckDone = true;
-        setTimeout(() => { if (!S.installing) startInstall(); }, 800);
+        checkPatchStatus();
     }
 }
 
@@ -265,6 +266,7 @@ async function browseFolder() {
             S.gamePath = p;
             saveSettings();
             toast('Folder dipilih: ' + p.split('\\').pop(), 'ok');
+            checkPatchStatus();
             return true;
         }
         return false;
@@ -280,6 +282,7 @@ async function browseFolder() {
 
 function initWaterRipple() {
     document.addEventListener('click', e => {
+        if (launcherVisualMode() === 'off') return;
         const origin = document.createElement('div');
         origin.className = 'ripple-origin';
         origin.style.left = e.clientX + 'px';
@@ -338,6 +341,8 @@ function initAudioPlayer() {
 
     const savedState = readSavedState();
     let userWantsPlayback = savedState.playbackState !== 'paused';
+    let pendingAudioUrl = '';
+    let resumeAfterSuspend = false;
     const initVol   = savedState.volume;
     audio.volume   = initVol / 100;
     audio.muted    = savedState.muted;
@@ -400,6 +405,7 @@ function initAudioPlayer() {
             userWantsPlayback = true;
             localStorage.setItem('apPlaybackState', 'playing');
             persistAudioState({ playbackState: 'playing' });
+            ensureAudioLoaded();
             audio.play().then(() => setPlaying(true)).catch(() => {});
         } else {
             userWantsPlayback = false;
@@ -426,14 +432,21 @@ function initAudioPlayer() {
     audio.addEventListener('error', () => { console.error('[audio] error', audio.error); setPlaying(false); });
 
     document.addEventListener('click', function onFirstClick() {
+        if (userWantsPlayback) ensureAudioLoaded();
         if (userWantsPlayback && audio.paused && audio.src) {
             audio.play().then(() => setPlaying(true)).catch(() => {});
         }
     }, { once: true });
 
     let _canplayHandler = null;
+    function ensureAudioLoaded() {
+        if (!pendingAudioUrl || audio.src) return;
+        audio.src = pendingAudioUrl;
+        audio.load();
+    }
     window.apSetAudioSource = (url) => {
         if (!url) return;
+        pendingAudioUrl = url;
         if (_canplayHandler) audio.removeEventListener('canplaythrough', _canplayHandler);
         _canplayHandler = () => {
             if (userWantsPlayback) {
@@ -443,8 +456,7 @@ function initAudioPlayer() {
             }
         };
         audio.addEventListener('canplaythrough', _canplayHandler, { once: true });
-        audio.src = url;
-        audio.load();
+        if (userWantsPlayback) ensureAudioLoaded();
     };
 
     window.apApplySavedState = () => {
@@ -452,12 +464,23 @@ function initAudioPlayer() {
         userWantsPlayback = state.playbackState !== 'paused';
         audio.muted = state.muted;
         setVolume(state.volume, false);
+        if (userWantsPlayback) ensureAudioLoaded();
         if (userWantsPlayback && audio.paused && audio.src) {
             audio.play().then(() => setPlaying(true)).catch(() => {});
         } else if (!userWantsPlayback && !audio.paused) {
             audio.pause();
             setPlaying(false);
         }
+    };
+    window.apSuspend = () => {
+        resumeAfterSuspend = userWantsPlayback && !audio.paused;
+        audio.pause();
+    };
+    window.apResume = () => {
+        if (!resumeAfterSuspend || !userWantsPlayback) return;
+        ensureAudioLoaded();
+        audio.play().then(() => setPlaying(true)).catch(() => {});
+        resumeAfterSuspend = false;
     };
 }
 

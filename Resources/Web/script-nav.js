@@ -37,6 +37,7 @@ function initMethodMenu() {
             S.installed = false;
             clearLaunchLock();
             toast(S.cfg.installMethod === 'method2' ? 'Metode 2 dipilih.' : 'Metode 1 dipilih.', 'ok');
+            checkPatchStatus();
         });
     });
 

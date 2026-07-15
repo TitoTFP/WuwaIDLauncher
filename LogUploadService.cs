@@ -30,8 +30,7 @@ internal static class LogUploadService
             if (archive.Length == 0)
                 return "Belum ada log untuk dikirim.";
 
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("WuwaIDLauncher/1.0");
+            using var timeout = LauncherHttp.TimeoutAfter(TimeSpan.FromSeconds(30), cancellationToken);
 
             using var content = new MultipartFormDataContent();
             var zipContent = new ByteArrayContent(archive);
@@ -41,7 +40,7 @@ internal static class LogUploadService
             content.Add(new StringContent(DateTimeOffset.UtcNow.ToString("O"), Encoding.UTF8), "timestamp");
             content.Add(new StringContent(RuntimeInformation.OSDescription, Encoding.UTF8), "os");
 
-            using var response = await http.PostAsync(LogUploadEndpoint, content, cancellationToken);
+            using var response = await LauncherHttp.Client.PostAsync(LogUploadEndpoint, content, timeout.Token);
             response.EnsureSuccessStatusCode();
 
             AppLogger.Info("Manual log upload completed");
