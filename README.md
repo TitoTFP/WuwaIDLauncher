@@ -19,7 +19,7 @@ Launcher mempermudah instalasi patch Bahasa Indonesia untuk Wuthering Waves.
 
 ## Mode Tray
 
-Game yang dijalankan melalui launcher otomatis memindahkan launcher ke system tray. Klik dua kali ikon tray atau pilih **Buka Launcher** untuk menampilkan UI read-only mode `Mati`. Setelah game keluar, launcher tampil kembali dan memulihkan profil tersimpan. Pilihan **Keluar** menghentikan launcher dan heartbeat, tetapi diblokir selama pemulihan signature masih wajib diselesaikan.
+Game yang dijalankan melalui launcher otomatis memindahkan launcher ke system tray dan menampilkan satu notifikasi. Klik dua kali ikon tray atau pilih **Buka Launcher** untuk menampilkan UI read-only mode `Mati`. Minimize berikutnya kembali ke tray tanpa notifikasi. Close atau **Keluar** menghentikan launcher dan heartbeat; pada Method 1 sebelum signature aman, shutdown ditunda sampai pemulihan selesai.
 
 Heartbeat anonim tetap dikirim setiap 5 menit selama launcher hidup, termasuk ketika visible, tray, atau mendeteksi game eksternal. Media, animasi, patch check, release notes, dan network latar belakang lain tetap dihentikan selama game aktif.
 

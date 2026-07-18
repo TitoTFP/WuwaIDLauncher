@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -43,6 +44,131 @@ internal sealed record PatchStatusResult(
 
 internal sealed record PatchAssetStatus(string Name, string Path, string Fingerprint);
 
+internal static class ReleaseChecksumManifest
+{
+    internal static Dictionary<string, string> Parse(string content)
+    {
+        var checksums = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var rawLine in content.Replace("\r", "").Split('\n'))
+        {
+            var parts = rawLine.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0)
+                continue;
+            if (parts.Length != 2 || !Helpers.IsSha256(parts[0]))
+                throw new InvalidDataException("Format SHA256sums.txt tidak valid.");
+
+            var name = parts[1].TrimStart('*');
+            if (string.IsNullOrWhiteSpace(name) || name.Contains('/') || name.Contains('\\') ||
+                !checksums.TryAdd(name, parts[0].ToLowerInvariant()))
+                throw new InvalidDataException("Nama asset pada SHA256sums.txt tidak valid atau duplikat.");
+        }
+
+        return checksums;
+    }
+}
+
+internal static class PatchAssetCache
+{
+    internal static bool PromoteVerified(
+        IDictionary<string, string> cache,
+        IReadOnlyList<PatchAssetStatus> assets,
+        bool verifyCanonicalPak = false)
+    {
+        var changed = false;
+        var legacyPakCache = cache.ContainsKey(Helpers.ManualPakFileName);
+        var canonicalPakCurrent = false;
+        foreach (var asset in assets)
+        {
+            if (!File.Exists(asset.Path) || !Helpers.IsSha256(asset.Fingerprint))
+                continue;
+
+            var isCanonicalPak = asset.Name.Equals(Helpers.PakFileName, StringComparison.OrdinalIgnoreCase);
+            var cacheMatches = cache.TryGetValue(asset.Name, out var cachedFingerprint) &&
+                               string.Equals(cachedFingerprint, asset.Fingerprint, StringComparison.OrdinalIgnoreCase);
+            var mustVerify = !cacheMatches || !MetadataMatches(cache, asset) ||
+                             (isCanonicalPak && (legacyPakCache || verifyCanonicalPak));
+            if (mustVerify)
+            {
+                if (!Helpers.VerifySha256(asset.Path, asset.Fingerprint))
+                {
+                    if (cacheMatches)
+                    {
+                        cache.Remove(asset.Name);
+                        RemoveMetadata(cache, asset.Name);
+                        changed = true;
+                    }
+                    continue;
+                }
+
+                changed |= RecordVerified(cache, asset);
+            }
+
+            canonicalPakCurrent |= isCanonicalPak;
+        }
+
+        if (canonicalPakCurrent && cache.Remove(Helpers.ManualPakFileName))
+            changed = true;
+
+        return changed;
+    }
+
+    internal static bool RecordVerified(IDictionary<string, string> cache, PatchAssetStatus asset)
+    {
+        var info = new FileInfo(asset.Path);
+        var changed = Set(cache, asset.Name, asset.Fingerprint) |
+                      Set(cache, SizeKey(asset.Name), info.Length.ToString(CultureInfo.InvariantCulture)) |
+                      Set(cache, MtimeKey(asset.Name), info.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture));
+        if (asset.Name.Equals(Helpers.PakFileName, StringComparison.OrdinalIgnoreCase))
+        {
+            changed |= cache.Remove(Helpers.ManualPakFileName);
+            changed |= RemoveMetadata(cache, Helpers.ManualPakFileName);
+        }
+
+        return changed;
+    }
+
+    internal static bool TryCopyVerified(string sourcePath, string destPath, string sha256)
+    {
+        if (!File.Exists(sourcePath) || !Helpers.VerifySha256(sourcePath, sha256))
+            return false;
+
+        Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+        var tempPath = destPath + ".reuse.tmp";
+        File.Copy(sourcePath, tempPath, overwrite: true);
+        if (!Helpers.VerifySha256(tempPath, sha256))
+        {
+            File.Delete(tempPath);
+            return false;
+        }
+
+        File.Move(tempPath, destPath, overwrite: true);
+        return true;
+    }
+
+    static bool MetadataMatches(IDictionary<string, string> cache, PatchAssetStatus asset)
+    {
+        var info = new FileInfo(asset.Path);
+        return cache.TryGetValue(SizeKey(asset.Name), out var size) &&
+               size == info.Length.ToString(CultureInfo.InvariantCulture) &&
+               cache.TryGetValue(MtimeKey(asset.Name), out var mtime) &&
+               mtime == info.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture);
+    }
+
+    static bool Set(IDictionary<string, string> cache, string key, string value)
+    {
+        if (cache.TryGetValue(key, out var current) && current == value)
+            return false;
+        cache[key] = value;
+        return true;
+    }
+
+    static bool RemoveMetadata(IDictionary<string, string> cache, string name) =>
+        cache.Remove(SizeKey(name)) | cache.Remove(MtimeKey(name));
+
+    static string SizeKey(string name) => name + "#size";
+    static string MtimeKey(string name) => name + "#mtime";
+}
+
 internal static class PatchStatusEvaluator
 {
     internal static PatchStatusResult EvaluateCached(
@@ -83,7 +209,8 @@ internal static class PatchStatusEvaluator
         var cachedAssetsMatch = assets.All(asset =>
             localCache.TryGetValue(asset.Name, out var cachedFingerprint) &&
             !string.IsNullOrWhiteSpace(cachedFingerprint) &&
-            (string.IsNullOrEmpty(asset.Fingerprint) || cachedFingerprint == asset.Fingerprint));
+            (string.IsNullOrEmpty(asset.Fingerprint) ||
+             string.Equals(cachedFingerprint, asset.Fingerprint, StringComparison.OrdinalIgnoreCase)));
 
         if (!remoteAvailable)
         {
@@ -104,9 +231,15 @@ internal static class PatchStatusEvaluator
     {
         try
         {
-            return File.Exists(path)
+            var cache = File.Exists(path)
                 ? JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path)) ?? new()
                 : new();
+
+            if (!cache.ContainsKey(Helpers.PakFileName) &&
+                cache.TryGetValue(Helpers.ManualPakFileName, out var legacyFingerprint))
+                cache[Helpers.PakFileName] = legacyFingerprint;
+
+            return cache;
         }
         catch
         {
@@ -130,6 +263,9 @@ internal static class LaunchLifecyclePolicy
         gameRunningAtDeadline ? Method1Completion.RestoreAndTray : Method1Completion.RestoreAndShow;
 
     internal static bool MayCloseAfterSignatureRestore(bool restoreSucceeded) => restoreSucceeded;
+
+    internal static bool ShouldDeferClose(bool signatureRestorePending, bool gameRunning) =>
+        signatureRestorePending && gameRunning;
 
     internal static async Task<bool> WaitForStableGameStartAsync(
         Func<bool> isGameRunning,

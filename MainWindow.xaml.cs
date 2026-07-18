@@ -35,6 +35,7 @@ public partial class MainWindow : Window
     internal const string SigBackupFileName = Helpers.SigBackupFileName;
     const string GameExeName = "Client-Win64-Shipping.exe";
     const string WuwaIDLatestDownloadBaseUrl = "https://github.com/TitoTFP/WuwaID/releases/latest/download/";
+    const string WuwaIDLatestChecksumsUrl = WuwaIDLatestDownloadBaseUrl + "SHA256sums.txt";
     static readonly TimeSpan SigRestoreDelay = Helpers.SigRestoreDelay;
 
     volatile bool _pageReady;
@@ -54,7 +55,7 @@ public partial class MainWindow : Window
     CancellationTokenSource? _runtimeWork;
     System.Windows.Forms.NotifyIcon? _trayIcon;
     bool _webViewSuspended;
-    bool _trayExitRequested;
+    volatile bool _closeWhenSafe;
     int _deferredStartupState;
     int _patchRequestId;
     int _patchReadyLogged;
@@ -64,6 +65,9 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        Width = 460;
+        Height = 215;
+        ShowInTaskbar = false;
         InitializeTrayIcon();
         webView.DefaultBackgroundColor = System.Drawing.Color.FromArgb(255, 6, 10, 20);
         Directory.CreateDirectory(CacheFolder);
@@ -89,23 +93,12 @@ public partial class MainWindow : Window
 
     void OnClosing(object? sender, CancelEventArgs e)
     {
-        if (IsGameRuntimeActive && !_trayExitRequested)
-        {
-            AppLogger.Info("Close requested while game is running; hiding launcher to tray");
-            e.Cancel = true;
-            HideLauncherToTray();
-            return;
-        }
-
         if (_signatureRestorePending)
         {
             if (_gameProcessRunning)
             {
-                AppLogger.Info("Close canceled while game is running and signature restore is pending");
                 e.Cancel = true;
-                _trayExitRequested = false;
-                HideLauncherToTray();
-                ShowTrayWarning("Launcher belum dapat ditutup sebelum signature game dipulihkan.");
+                DeferCloseUntilSignatureRestore();
                 return;
             }
 
@@ -115,7 +108,6 @@ public partial class MainWindow : Window
                 if (!TryRestoreSignature(_launchGamePath))
                 {
                     e.Cancel = true;
-                    _trayExitRequested = false;
                     RestoreLauncherWindow();
                     return;
                 }
@@ -140,12 +132,8 @@ public partial class MainWindow : Window
 
     internal void RequestCloseWindow()
     {
-        if (IsGameRuntimeActive)
-        {
-            AppLogger.Info("Close requested while game is running; hiding launcher to tray");
-            HideLauncherToTray();
+        if (DeferCloseUntilSignatureRestore())
             return;
-        }
 
         Application.Current.Shutdown();
     }
@@ -153,7 +141,7 @@ public partial class MainWindow : Window
     internal void RequestMinimizeWindow()
     {
         if (IsGameRuntimeActive)
-            HideLauncherToTray();
+            HideLauncherToTray(notify: false);
         else
             WindowState = WindowState.Minimized;
     }
@@ -178,29 +166,48 @@ public partial class MainWindow : Window
         _trayIcon.DoubleClick += (_, _) => RestoreLauncherWindow();
     }
 
-    void HideLauncherToTray() => Dispatcher.Invoke(() =>
+    void HideLauncherToTray(bool notify) => Dispatcher.Invoke(() =>
     {
         WindowState = WindowState.Minimized;
         Hide();
         if (_trayIcon != null)
+        {
             _trayIcon.Visible = true;
+            if (notify)
+                _trayIcon.ShowBalloonTip(
+                    3000,
+                    "WuwaID Launcher",
+                    "Launcher tetap berjalan di tray untuk mengirim heartbeat pemain aktif.",
+                    System.Windows.Forms.ToolTipIcon.Info);
+        }
     });
 
     void RequestExitFromTray()
     {
-        if (_signatureRestorePending && _gameProcessRunning)
-        {
-            AppLogger.Info("Tray exit blocked while signature restore is pending");
-            ShowTrayWarning("Launcher belum dapat ditutup sebelum signature game dipulihkan.");
+        if (DeferCloseUntilSignatureRestore())
             return;
-        }
 
-        _trayExitRequested = true;
         Application.Current.Shutdown();
     }
 
-    void ShowTrayWarning(string message) =>
-        _trayIcon?.ShowBalloonTip(3000, "WuwaID Launcher", message, System.Windows.Forms.ToolTipIcon.Warning);
+    bool DeferCloseUntilSignatureRestore()
+    {
+        if (!LaunchLifecyclePolicy.ShouldDeferClose(_signatureRestorePending, _gameProcessRunning))
+            return false;
+
+        _closeWhenSafe = true;
+        AppLogger.Info("Close deferred until game signature is restored");
+        HideLauncherToTray(notify: false);
+        return true;
+    }
+
+    bool CloseAfterSignatureRestoreIfRequested()
+    {
+        if (!_closeWhenSafe) return false;
+        AppLogger.Info("Deferred close continuing after signature restore");
+        Dispatcher.Invoke(() => Application.Current.Shutdown());
+        return true;
+    }
 
     void DisposeTrayIcon()
     {
@@ -216,14 +223,13 @@ public partial class MainWindow : Window
     async void OnLoaded(object sender, RoutedEventArgs e)
     {
         LogStartupMilestone("main_window_loaded");
+        _splash = new SplashWindow();
+        _splash.Show();
         _externalGameActive = Helpers.IsGameRunning();
         AppLogger.Info("Initial game process state: " + _externalGameActive);
         if (_externalGameActive)
             ActivePlayerService.Start(ReadStoredInstallMethod());
         _ = WatchExternalGameAsync();
-        _splash = new SplashWindow();
-        _splash.Show();
-
         try
         {
             
@@ -277,7 +283,6 @@ public partial class MainWindow : Window
             MessageBox.Show("Gagal menginisialisasi WebView2: " + ex.Message);
             _splash?.FadeOutAndClose();
             _splash = null;
-            _trayExitRequested = true;
             Application.Current.Shutdown(1);
         }
     }
@@ -348,6 +353,13 @@ public partial class MainWindow : Window
         LogStartupMilestone("dom_content_loaded");
         Dispatcher.Invoke(() =>
         {
+            var centerX = Left + ActualWidth / 2;
+            var centerY = Top + ActualHeight / 2;
+            Width = 1280;
+            Height = 720;
+            Left = centerX - Width / 2;
+            Top = centerY - Height / 2;
+            ShowInTaskbar = true;
             Opacity = 1;
             Activate();
             Focus();
@@ -584,13 +596,14 @@ public partial class MainWindow : Window
         try
         {
             using var timeout = LauncherHttp.TimeoutAfter(TimeSpan.FromSeconds(15), cancellationToken);
-            var remoteAssets = new List<PatchAssetStatus>();
-            foreach (var asset in assets)
-            {
-                var url = WuwaIDLatestDownloadBaseUrl + Uri.EscapeDataString(asset.Name);
-                var metadata = await GetReleaseAssetMetadata(LauncherHttp.Client, url, timeout.Token);
-                remoteAssets.Add(asset with { Fingerprint = metadata.Fingerprint });
-            }
+            var checksums = await GetReleaseChecksums(LauncherHttp.Client, timeout.Token);
+            var remoteAssets = assets
+                .Select(asset => asset with { Fingerprint = RequiredChecksum(checksums, asset.Name) })
+                .ToList();
+            var verifyCanonicalPak = !localCache.TryGetValue("_installMethod", out var cachedInstallMethod) ||
+                                     !string.Equals(cachedInstallMethod, method, StringComparison.OrdinalIgnoreCase);
+            if (PatchAssetCache.PromoteVerified(localCache, remoteAssets, verifyCanonicalPak))
+                File.WriteAllText(versionCachePath, JsonSerializer.Serialize(localCache));
             result = PatchStatusEvaluator.Evaluate(gamePath, method, localCache, remoteAssets, remoteAvailable: true);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -624,14 +637,14 @@ public partial class MainWindow : Window
             LogStartupMilestone("patch_ready");
     }
 
-    static List<PatchAssetStatus> ExpectedPatchAssets(
+    internal static List<PatchAssetStatus> ExpectedPatchAssets(
         string gamePath,
         string method,
         IReadOnlyDictionary<string, string> localCache,
         bool useCachedFingerprint)
     {
         var names = UsesManualLoaderMethod(method)
-            ? new[] { Helpers.ManualPakFileName, Helpers.WinHttpLoaderFileName }
+            ? new[] { PakFileName, Helpers.WinHttpLoaderFileName }
             : new[] { PakFileName };
 
         return names.Select(name => new PatchAssetStatus(
@@ -876,7 +889,6 @@ public partial class MainWindow : Window
             }
             else
             {
-                Helpers.DeleteManualLoaderFiles(gamePath, preservePak: true);
                 var oldVersionLoader = Path.Combine(baseDir, Helpers.VersionLoaderFileName);
                 var legacyModDir = Path.Combine(baseDir, Helpers.LegacyModFolderName);
 
@@ -888,44 +900,43 @@ public partial class MainWindow : Window
             }
 
             var expectedAssets = UsesManualLoaderMethod(method)
-                ? new[] { Helpers.ManualPakFileName, Helpers.WinHttpLoaderFileName }
+                ? new[] { PakFileName, Helpers.WinHttpLoaderFileName }
                 : new[] { PakFileName };
             var toDownload = new List<(string Name, string Url, long Size, string Fingerprint, string DestPath)>();
 
             var http = LauncherHttp.Client;
             using var installTimeout = LauncherHttp.TimeoutAfter(TimeSpan.FromMinutes(10), _shutdown.Token);
             var tagName = "latest";
+            var checksums = await GetReleaseChecksums(http, installTimeout.Token);
 
             foreach (var name in expectedAssets)
             {
                 var url = WuwaIDLatestDownloadBaseUrl + Uri.EscapeDataString(name);
-                var metadata = await GetReleaseAssetMetadata(http, url, installTimeout.Token);
+                var size = await GetReleaseAssetSize(http, url, installTimeout.Token);
                 var destPath = name.Equals(Helpers.WinHttpLoaderFileName, StringComparison.OrdinalIgnoreCase)
                     ? Helpers.Method2LoaderPath(gamePath)
-                    : Path.Combine(pakDir, name);
-                toDownload.Add((name, url, metadata.Size, metadata.Fingerprint, destPath));
+                    : UsesManualLoaderMethod(method)
+                        ? Helpers.Method2PakPath(gamePath)
+                        : Helpers.Method1PakPath(gamePath);
+                toDownload.Add((name, url, size, RequiredChecksum(checksums, name), destPath));
             }
 
             var versionCachePath = Path.Combine(AppDataFolder, "versions.json");
-            var localCache = new Dictionary<string, string>();
-            if (File.Exists(versionCachePath))
-            {
-                try
-                {
-                    var cacheJson = File.ReadAllText(versionCachePath);
-                    localCache = JsonSerializer.Deserialize<Dictionary<string, string>>(cacheJson) ?? new();
-                }
-                catch (Exception ex)
-                {
-                    AppLogger.Exception(ex, "Failed to read version cache");
-                }
-            }
+            var localCache = PatchStatusEvaluator.ReadVersionCache(versionCachePath);
 
             if (!UsesManualLoaderMethod(method))
             {
                 Helpers.DeleteLegacyPakFile(gamePath);
                 localCache.Remove(LegacyPakFileName);
             }
+
+            var verifyCanonicalPak = !localCache.TryGetValue("_installMethod", out var cachedInstallMethod) ||
+                                     !string.Equals(cachedInstallMethod, method, StringComparison.OrdinalIgnoreCase);
+            PatchAssetCache.PromoteVerified(
+                localCache,
+                toDownload.Select(asset => new PatchAssetStatus(
+                    asset.Name, asset.DestPath, asset.Fingerprint)).ToList(),
+                verifyCanonicalPak);
 
             bool allFilesUpToDate = true;
             foreach (var (name, _, _, fingerprint, destPath) in toDownload)
@@ -939,7 +950,8 @@ public partial class MainWindow : Window
                 
                 if (!string.IsNullOrEmpty(fingerprint))
                 {
-                    if (!localCache.TryGetValue(name, out var cachedFingerprint) || cachedFingerprint != fingerprint)
+                    if (!localCache.TryGetValue(name, out var cachedFingerprint) ||
+                        !string.Equals(cachedFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase))
                     {
                         allFilesUpToDate = false;
                         break;
@@ -978,7 +990,8 @@ public partial class MainWindow : Window
 
                 bool needsUpdate = !File.Exists(destPath) ||
                                    (!string.IsNullOrEmpty(fingerprint)
-                                       ? !localCache.TryGetValue(name, out var cachedFingerprint) || cachedFingerprint != fingerprint
+                                       ? !localCache.TryGetValue(name, out var cachedFingerprint) ||
+                                         !string.Equals(cachedFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase)
                                        : !localCache.TryGetValue("_installMethod", out var cachedMethod) || cachedMethod != method);
                 if (needsUpdate)
                 {
@@ -1000,11 +1013,12 @@ public partial class MainWindow : Window
                 if (IsPakAsset(name))
                 {
                     var alternatePakPath = Helpers.AlternatePakPathForMethod(gamePath, method);
-                    if (IsSha256(fingerprint) && TryCopyReusablePak(alternatePakPath, destPath, fingerprint))
+                    if (IsSha256(fingerprint) && PatchAssetCache.TryCopyVerified(alternatePakPath, destPath, fingerprint))
                     {
                         AppLogger.Info("Reused existing pak for installer asset: " + name);
                         needsUpdateSet.Remove(name);
-                        localCache[name] = fingerprint;
+                        PatchAssetCache.RecordVerified(
+                            localCache, new PatchAssetStatus(name, destPath, fingerprint));
                         RunScript($"window.onProgressUpdate(100, " +
                                   $"{JsStr("Menggunakan file patch yang sudah ada...")}, '', '')");
                         continue;
@@ -1044,16 +1058,18 @@ public partial class MainWindow : Window
                     }
                 }
                 
-                fileStream.Close(); File.Move(tmpPath, destPath, true);
-                if (IsSha256(fingerprint) && !Helpers.VerifySha256(destPath, fingerprint))
+                fileStream.Close();
+                if (IsSha256(fingerprint) && !Helpers.VerifySha256(tmpPath, fingerprint))
                 {
                     AppLogger.Error("Downloaded asset hash mismatch: " + name);
-                    try { File.Delete(destPath); } catch (Exception ex) { AppLogger.Exception(ex, "Failed to delete hash-mismatched asset"); }
+                    try { File.Delete(tmpPath); } catch (Exception ex) { AppLogger.Exception(ex, "Failed to delete hash-mismatched asset"); }
                     throw new Exception($"Hash file {name} tidak cocok. Unduhan dibatalkan.");
                 }
+                File.Move(tmpPath, destPath, true);
 
                 if (!string.IsNullOrEmpty(fingerprint))
-                    localCache[name] = fingerprint;
+                    PatchAssetCache.RecordVerified(
+                        localCache, new PatchAssetStatus(name, destPath, fingerprint));
             }
 
             if (!string.IsNullOrEmpty(tagName))
@@ -1075,19 +1091,24 @@ public partial class MainWindow : Window
         }
     }
 
-    static async Task<(long Size, string Fingerprint)> GetReleaseAssetMetadata(
+    static async Task<long> GetReleaseAssetSize(
         HttpClient http, string url, CancellationToken cancellationToken = default)
     {
         using var req = new HttpRequestMessage(HttpMethod.Head, url);
         using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         resp.EnsureSuccessStatusCode();
 
-        var size = resp.Content.Headers.ContentLength ?? 0;
-        var etag = resp.Headers.ETag?.Tag?.Trim('"') ?? "";
-        var lastModified = resp.Content.Headers.LastModified?.UtcDateTime.ToString("O") ?? "";
-        var fingerprint = string.Join("|", new[] { etag, lastModified, size.ToString() });
-        return (size, fingerprint);
+        return resp.Content.Headers.ContentLength ?? 0;
     }
+
+    static async Task<Dictionary<string, string>> GetReleaseChecksums(
+        HttpClient http, CancellationToken cancellationToken) =>
+        ReleaseChecksumManifest.Parse(await http.GetStringAsync(WuwaIDLatestChecksumsUrl, cancellationToken));
+
+    static string RequiredChecksum(IReadOnlyDictionary<string, string> checksums, string name) =>
+        checksums.TryGetValue(name, out var checksum)
+            ? checksum
+            : throw new InvalidDataException($"Checksum release untuk {name} tidak ditemukan.");
 
     static async Task<string> GetLatestReleaseTag(
         HttpClient http, string latestReleaseUrl, CancellationToken cancellationToken = default)
@@ -1121,26 +1142,12 @@ public partial class MainWindow : Window
         return (tag, date, body, title);
     }
 
-    static bool IsSha256(string value) =>
-        value.Length == 64 && value.All(Uri.IsHexDigit);
+    static bool IsSha256(string value) => Helpers.IsSha256(value);
 
     static bool IsPakAsset(string name) =>
         name.Equals(Helpers.PakFileName, StringComparison.OrdinalIgnoreCase) ||
         name.Equals(Helpers.ManualPakFileName, StringComparison.OrdinalIgnoreCase) ||
         name.Equals(Helpers.LegacyPakFileName, StringComparison.OrdinalIgnoreCase);
-
-    static bool TryCopyReusablePak(string sourcePath, string destPath, string hash)
-    {
-        if (!File.Exists(sourcePath))
-            return false;
-
-        if (!string.IsNullOrEmpty(hash) && !Helpers.VerifySha256(sourcePath, hash))
-            return false;
-
-        Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
-        File.Copy(sourcePath, destPath, overwrite: true);
-        return string.IsNullOrEmpty(hash) || Helpers.VerifySha256(destPath, hash);
-    }
 
     static void CleanupInactiveMethodFiles(string gamePath, string method)
     {
@@ -1197,12 +1204,18 @@ public partial class MainWindow : Window
                 await gameExitTask;
                 _gameProcessRunning = false;
                 if (TryRestoreSignature(gamePath))
-                    FinishInternalLaunch(showWindow: true);
+                {
+                    if (!CloseAfterSignatureRestoreIfRequested())
+                        FinishInternalLaunch(showWindow: true);
+                }
                 else
                     RunScript("window.onGameLaunchWaitingRestore()");
             }
             return;
         }
+
+        if (CloseAfterSignatureRestoreIfRequested())
+            return;
 
         if (completion == Method1Completion.RestoreAndTray)
         {
@@ -1352,7 +1365,7 @@ public partial class MainWindow : Window
                 _ = ActivePlayerService.SendLaunchHeartbeatAsync(method);
                 RunScript("window.onGameLaunchStarted()");
                 NotifyGameRuntimeState(true, "launcher");
-                HideLauncherToTray();
+                HideLauncherToTray(notify: true);
                 _ = UsesManualLoaderMethod(method)
                     ? MonitorMethod2Async()
                     : MonitorMethod1Async(gamePath, process);

@@ -1,4 +1,6 @@
 using FluentAssertions;
+using System.Security.Cryptography;
+using System.Text;
 using WuwaIDLauncher;
 using Xunit;
 
@@ -58,7 +60,7 @@ public sealed class OptimizationServicesTests : IDisposable
 
         var result = PatchStatusEvaluator.Evaluate(_root, "method2", new Dictionary<string, string>(),
             [
-                new PatchAssetStatus(Helpers.ManualPakFileName, pak, "pak"),
+                new PatchAssetStatus(Helpers.PakFileName, pak, "pak"),
                 new PatchAssetStatus(Helpers.WinHttpLoaderFileName, Helpers.Method2LoaderPath(_root), "loader")
             ], true);
 
@@ -171,6 +173,15 @@ public sealed class OptimizationServicesTests : IDisposable
         LaunchLifecyclePolicy.MayCloseAfterSignatureRestore(restoreSucceeded: false)
             .Should().BeFalse();
 
+    [Theory]
+    [InlineData(true, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    public void Method1_CloseDefersOnlyWhileSignatureIsPending(
+        bool signaturePending, bool gameRunning, bool expected) =>
+        LaunchLifecyclePolicy.ShouldDeferClose(signaturePending, gameRunning)
+            .Should().Be(expected);
+
     [Fact]
     public async Task Method2_TwoStableSamples_Succeeds()
     {
@@ -204,6 +215,125 @@ public sealed class OptimizationServicesTests : IDisposable
     }
 
     [Fact]
+    public void ReleaseChecksums_ParsesCanonicalPakAndLoader()
+    {
+        var pakHash = new string('a', 64);
+        var loaderHash = new string('B', 64);
+
+        var result = ReleaseChecksumManifest.Parse(
+            $"{pakHash}  {Helpers.PakFileName}\n{loaderHash} *{Helpers.WinHttpLoaderFileName}\n");
+
+        result[Helpers.PakFileName].Should().Be(pakHash);
+        result[Helpers.WinHttpLoaderFileName].Should().Be(loaderHash.ToLowerInvariant());
+    }
+
+    [Theory]
+    [InlineData("not-a-hash  patch.pak")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  folder/patch.pak")]
+    public void ReleaseChecksums_RejectsInvalidEntries(string content) =>
+        FluentActions.Invoking(() => ReleaseChecksumManifest.Parse(content))
+            .Should().Throw<InvalidDataException>();
+
+    [Fact]
+    public void VersionCache_LegacyMethod2Key_IsAvailableAsCanonicalAlias()
+    {
+        var path = Path.Combine(_root, "versions.json");
+        File.WriteAllText(path, $"{{\"{Helpers.ManualPakFileName}\":\"legacy\"}}");
+
+        var cache = PatchStatusEvaluator.ReadVersionCache(path);
+
+        cache[Helpers.PakFileName].Should().Be("legacy");
+        cache[Helpers.ManualPakFileName].Should().Be("legacy");
+    }
+
+    [Fact]
+    public void LegacyMethod2Cache_RemainsLaunchableBeforeRemoteRefresh()
+    {
+        var pakPath = Helpers.Method2PakPath(_root);
+        var loaderPath = Helpers.Method2LoaderPath(_root);
+        Directory.CreateDirectory(Path.GetDirectoryName(pakPath)!);
+        File.WriteAllText(pakPath, "patch");
+        File.WriteAllText(loaderPath, "loader");
+        var cachePath = Path.Combine(_root, "versions.json");
+        File.WriteAllText(cachePath,
+            $"{{\"_installMethod\":\"method2\",\"{Helpers.ManualPakFileName}\":\"legacy-pak\",\"{Helpers.WinHttpLoaderFileName}\":\"legacy-loader\"}}");
+        var cache = PatchStatusEvaluator.ReadVersionCache(cachePath);
+        var assets = MainWindow.ExpectedPatchAssets(_root, "method2", cache, useCachedFingerprint: true);
+
+        var result = PatchStatusEvaluator.EvaluateCached(_root, "method2", cache, assets);
+
+        result.State.Should().Be("cached");
+        result.CanLaunch.Should().BeTrue();
+    }
+
+    [Fact]
+    public void PatchCache_MigratesMatchingLegacyPakWithoutDownload()
+    {
+        var path = Helpers.Method2PakPath(_root);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "patch");
+        var sha256 = Sha256("patch");
+        var cache = new Dictionary<string, string>
+        {
+            [Helpers.PakFileName] = "legacy-fingerprint",
+            [Helpers.ManualPakFileName] = "legacy-fingerprint"
+        };
+
+        PatchAssetCache.PromoteVerified(cache,
+            [new PatchAssetStatus(Helpers.PakFileName, path, sha256)]).Should().BeTrue();
+
+        cache[Helpers.PakFileName].Should().Be(sha256);
+        cache.Should().NotContainKey(Helpers.ManualPakFileName);
+    }
+
+    [Fact]
+    public void PatchCache_DoesNotPromoteCorruptPak()
+    {
+        var path = Helpers.Method2PakPath(_root);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "corrupt");
+        var cache = new Dictionary<string, string> { [Helpers.PakFileName] = "legacy-fingerprint" };
+
+        PatchAssetCache.PromoteVerified(cache,
+            [new PatchAssetStatus(Helpers.PakFileName, path, Sha256("patch"))]).Should().BeFalse();
+
+        cache[Helpers.PakFileName].Should().Be("legacy-fingerprint");
+    }
+
+    [Fact]
+    public void PatchCache_RechecksCanonicalPakWhenInstallMethodChanges()
+    {
+        var path = Helpers.Method2PakPath(_root);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "corrupt");
+        var expected = Sha256("patch");
+        var cache = new Dictionary<string, string> { [Helpers.PakFileName] = expected };
+
+        PatchAssetCache.PromoteVerified(cache,
+            [new PatchAssetStatus(Helpers.PakFileName, path, expected)],
+            verifyCanonicalPak: true).Should().BeTrue();
+
+        cache.Should().NotContainKey(Helpers.PakFileName);
+    }
+
+    [Fact]
+    public void PatchCache_MetadataSkipsUnchangedFileAndInvalidatesChangedFile()
+    {
+        var path = Helpers.Method1PakPath(_root);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "patch");
+        var asset = new PatchAssetStatus(Helpers.PakFileName, path, Sha256("patch"));
+        var cache = new Dictionary<string, string>();
+
+        PatchAssetCache.PromoteVerified(cache, [asset]).Should().BeTrue();
+        PatchAssetCache.PromoteVerified(cache, [asset]).Should().BeFalse();
+        File.AppendAllText(path, "corrupt");
+        PatchAssetCache.PromoteVerified(cache, [asset]).Should().BeTrue();
+
+        cache.Should().NotContainKey(Helpers.PakFileName);
+    }
+
+    [Fact]
     public void MediaCache_SkipsHashOnlyWhileMetadataMatches()
     {
         var path = Path.Combine(_root, "bgm.mp3");
@@ -229,4 +359,7 @@ public sealed class OptimizationServicesTests : IDisposable
     {
         if (Directory.Exists(_root)) Directory.Delete(_root, true);
     }
+
+    static string Sha256(string content) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
 }

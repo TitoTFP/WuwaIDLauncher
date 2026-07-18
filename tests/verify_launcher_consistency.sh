@@ -33,8 +33,9 @@ if rg -n "[ÀÁÂÃÈÉÊÌÍÒÓÔÕÙÚĂĐĨŨƠƯàáâãèéêìíòóôõ�
   fail "Vietnamese diacritics must not remain in launcher UI/status files"
 fi
 
-if ! rg -n "VerifySha256\(destPath, hash\)" MainWindow.xaml.cs >/dev/null; then
-  fail "installer must verify local files against release SHA256"
+if ! rg -n "VerifySha256\(tmpPath, fingerprint\)" MainWindow.xaml.cs >/dev/null ||
+   ! rg -n "TryCopyVerified" MainWindow.xaml.cs OptimizationServices.cs >/dev/null; then
+  fail "installer must verify downloaded and reused files against release SHA256"
 fi
 
 if ! rg -n "Hash file .* tidak cocok" MainWindow.xaml.cs >/dev/null; then
@@ -62,7 +63,28 @@ if rg -n 'internal const string PakFileName = "WuWaID_99_P\.pak"' MainWindow.xam
 fi
 
 if ! rg -n 'ManualPakFileName = "WuWa_ID_99_P\.pak"' MainWindow.xaml.cs Helpers.cs >/dev/null; then
-  fail "method 2 installer must use WuWa_ID_99_P.pak"
+  fail "method 2 must preserve WuWa_ID_99_P.pak as its local filename"
+fi
+
+if ! rg -n 'WuwaIDLatestChecksumsUrl = .*SHA256sums\.txt' MainWindow.xaml.cs >/dev/null ||
+   ! rg -n 'ReleaseChecksumManifest\.Parse' MainWindow.xaml.cs OptimizationServices.cs >/dev/null ||
+   rg -n 'GetReleaseAssetMetadata|Headers\.ETag.*Fingerprint' MainWindow.xaml.cs >/dev/null; then
+  fail "release fingerprints must come from SHA256sums.txt"
+fi
+
+if ! rg -n '\? new\[\] \{ PakFileName, Helpers\.WinHttpLoaderFileName \}' MainWindow.xaml.cs >/dev/null ||
+   rg -n 'WuwaIDLatestDownloadBaseUrl.*ManualPakFileName' MainWindow.xaml.cs >/dev/null; then
+  fail "both install methods must download only the canonical pak asset"
+fi
+
+if ! rg -n 'Helpers\.Method2PakPath\(gamePath\)' MainWindow.xaml.cs >/dev/null ||
+   ! rg -n 'cache\.Remove\(Helpers\.ManualPakFileName\)' OptimizationServices.cs >/dev/null; then
+  fail "method 2 must map the canonical asset to its local name and migrate the old cache key"
+fi
+
+if rg -n 'DeleteManualLoaderFiles\(gamePath, preservePak: true\)' MainWindow.xaml.cs >/dev/null ||
+   ! rg -n 'VerifySha256\(tmpPath, fingerprint\).*' MainWindow.xaml.cs >/dev/null; then
+  fail "the previous install method must remain intact until the replacement is verified"
 fi
 
 if ! rg -n 'LegacyPakFileName = "WuWaID_99_P\.pak"' MainWindow.xaml.cs Helpers.cs >/dev/null; then
@@ -386,6 +408,22 @@ if ! rg -n '<UseWindowsForms>true</UseWindowsForms>' WuwaIDLauncher.csproj >/dev
    ! rg -n 'System\.Windows\.Forms\.NotifyIcon' MainWindow.xaml.cs >/dev/null ||
    ! rg -n 'TrySuspendAsync' MainWindow.xaml.cs >/dev/null; then
   fail "game launch must use native tray mode with suspended WebView2"
+fi
+
+if ! rg -n 'HideLauncherToTray\(notify: true\)' MainWindow.xaml.cs >/dev/null ||
+   ! rg -n 'HideLauncherToTray\(notify: false\)' MainWindow.xaml.cs >/dev/null ||
+   ! rg -n 'ToolTipIcon\.Info' MainWindow.xaml.cs >/dev/null; then
+  fail "auto-tray must notify while manual minimize remains silent"
+fi
+
+if ! rg -n '_closeWhenSafe' MainWindow.xaml.cs >/dev/null ||
+   ! rg -n 'CloseAfterSignatureRestoreIfRequested' MainWindow.xaml.cs >/dev/null ||
+   rg -n '_trayExitRequested' MainWindow.xaml.cs >/dev/null; then
+  fail "close must exit immediately or defer only for signature safety"
+fi
+
+if rg -n 'header\.jpg|DispatcherTimer|Storyboard|BeginAnimation|treeCanvas' SplashWindow.xaml SplashWindow.xaml.cs >/dev/null; then
+  fail "splash must preserve the release look without dynamic rendering"
 fi
 
 monitor_code="$(sed -n '/async Task MonitorMethod1Async/,/bool TryRestoreSignature/p' MainWindow.xaml.cs)"

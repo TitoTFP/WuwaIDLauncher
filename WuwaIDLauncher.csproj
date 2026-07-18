@@ -42,7 +42,6 @@
 
   <ItemGroup>
     <Resource Include="Resources\Images\app.ico" />
-    <Resource Include="Resources\Images\header.jpg" />
     <Resource Include="Resources\Images\bg-default.jpg" />
   </ItemGroup>
 

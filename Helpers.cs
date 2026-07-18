@@ -78,6 +78,9 @@ internal static class Helpers
         catch { return false; }
     }
 
+    internal static bool IsSha256(string value) =>
+        value.Length == 64 && value.All(Uri.IsHexDigit);
+
     internal static string GetMimeType(string path) => Path.GetExtension(path).ToLowerInvariant() switch
     {
         ".html" => "text/html; charset=utf-8",

@@ -5,10 +5,85 @@
         Height="215" Width="460"
         WindowStyle="None"
         AllowsTransparency="False"
-        Background="#060a14"
+        Background="#E7DCC2"
         ShowInTaskbar="False"
         Topmost="True"
         ResizeMode="NoResize"
         WindowStartupLocation="CenterScreen">
-    <Image Source="Resources/Images/header.jpg" Stretch="Fill" />
+    <Border BorderThickness="1" BorderBrush="#C6A04A">
+        <Border.Background>
+            <RadialGradientBrush GradientOrigin="0.35,0.25" Center="0.4,0.35"
+                                 RadiusX="0.95" RadiusY="0.95">
+                <GradientStop Color="#F3ECDA" Offset="0"/>
+                <GradientStop Color="#E7DCC2" Offset="0.55"/>
+                <GradientStop Color="#D8C9A6" Offset="1"/>
+            </RadialGradientBrush>
+        </Border.Background>
+
+        <Grid ClipToBounds="True">
+            <Ellipse Width="320" Height="320"
+                     HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                     Margin="0,0,-90,-110" Opacity="0.10">
+                <Ellipse.Fill>
+                    <RadialGradientBrush>
+                        <GradientStop Color="#18130E" Offset="0"/>
+                        <GradientStop Color="#00181310" Offset="1"/>
+                    </RadialGradientBrush>
+                </Ellipse.Fill>
+            </Ellipse>
+
+            <!-- Static ink tree: same visual identity as v2.5.0, no timer or animation. -->
+            <Path Stroke="#1B130C" StrokeThickness="8.2" Opacity="0.72"
+                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                  Data="M -8,222 Q 42,184 83,143 Q 126,100 178,69 Q 214,47 252,42"/>
+            <Path Stroke="#1B130C" StrokeThickness="4.8" Opacity="0.75"
+                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                  Data="M 43,181 Q 35,143 16,112 M 75,151 Q 112,160 153,147 M 101,124 Q 92,87 115,51 M 133,96 Q 171,113 211,98 M 169,74 Q 205,38 250,28 M 211,54 Q 252,70 294,56"/>
+            <Path Stroke="#1B130C" StrokeThickness="2.2" Opacity="0.78"
+                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                  Data="M 18,115 L 4,88 M 18,115 L 42,91 M 108,157 L 129,177 M 149,148 L 181,158 M 96,88 L 76,65 M 113,53 L 139,29 M 171,112 L 188,132 M 207,99 L 236,108 M 205,39 L 195,17 M 247,29 L 278,18 M 253,69 L 276,88 M 292,57 L 326,43"/>
+            <Path Stroke="#BE3A34" StrokeThickness="3.2" Opacity="0.85"
+                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                  Data="M 2,88 L 7,84 M 40,91 L 45,87 M 127,177 L 133,179 M 179,158 L 185,157 M 74,64 L 79,61 M 138,29 L 144,27 M 187,132 L 192,135 M 235,108 L 241,109 M 194,17 L 199,13 M 277,18 L 283,17 M 275,88 L 281,91 M 325,43 L 331,41"/>
+
+            <StackPanel Margin="22" VerticalAlignment="Top" HorizontalAlignment="Left">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="玄方" FontFamily="Cambria,Georgia,serif"
+                               Foreground="#1B130C" FontSize="30" FontWeight="Bold" Opacity="0.88"/>
+                    <TextBlock Text="启卷" FontFamily="Cambria,Georgia,serif"
+                               Foreground="#9A8A5E" FontSize="16"
+                               VerticalAlignment="Bottom" Margin="8,0,0,5"/>
+                </StackPanel>
+                <Rectangle Height="1.5" Width="120" Fill="#C6A04A"
+                           HorizontalAlignment="Left" Margin="2,4,0,0" Opacity="0.6"/>
+            </StackPanel>
+
+            <Border Width="34" Height="34" CornerRadius="3"
+                    BorderBrush="#BE3A34" BorderThickness="2"
+                    HorizontalAlignment="Right" VerticalAlignment="Top"
+                    Margin="0,18,20,0" Opacity="0.85">
+                <TextBlock Text="玄方" FontFamily="Cambria,Georgia,serif"
+                           FontSize="11" Foreground="#BE3A34" FontWeight="Bold"
+                           TextAlignment="Center" LineHeight="11" TextWrapping="Wrap"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom"
+                        HorizontalAlignment="Left" Margin="24,0,0,20">
+                <TextBlock Text="正在凝墨…" FontFamily="Cambria,Georgia,serif"
+                           FontSize="13" Foreground="#3A2E1E"/>
+                <Border Background="#BE3A34" Width="6" Height="14" Margin="8,0,0,0"/>
+            </StackPanel>
+
+            <Rectangle IsHitTestVisible="False" Opacity="0.05">
+                <Rectangle.Fill>
+                    <VisualBrush TileMode="Tile" Viewport="0,0,3,3" ViewportUnits="Absolute">
+                        <VisualBrush.Visual>
+                            <Rectangle Fill="#1B130C" Width="1" Height="1"/>
+                        </VisualBrush.Visual>
+                    </VisualBrush>
+                </Rectangle.Fill>
+            </Rectangle>
+        </Grid>
+    </Border>
 </Window>
