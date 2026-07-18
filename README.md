@@ -23,22 +23,24 @@ Launcher mempermudah instalasi patch Bahasa Indonesia untuk Wuthering Waves.
 
 ## Benchmark Optimasi (Windows)
 
-Build baseline dan varian eksperimen tanpa mengubah default produksi:
+Build compressed dan uncompressed dengan output/intermediate terisolasi. Default produksi tetap compressed:
 
 ```powershell
-dotnet publish -c Release -r win-x64 -p:EnableCompressionInSingleFile=true  -o publish/baseline
-dotnet publish -c Release -r win-x64 -p:EnableCompressionInSingleFile=false -o publish/no-compression
-dotnet publish -c Release -r win-x64 -p:UseOpaqueWindowBenchmark=true       -o publish/opaque
+.\tests\build_benchmark_variants.ps1
 ```
 
-Ukur clean-profile, warm-start, visible idle, dan minimized idle menggunakan `tests/measure_startup.ps1`:
+Ukur `CleanEveryRun`, `CleanFirst`, dan enam warm run. CSV mencatat `ui_interactive`, `patch_ready`, CPU, working set, dan private bytes:
 
 ```powershell
-.\tests\measure_startup.ps1 -ExePath .\publish\baseline\WuwaIDLauncher.exe -Runs 6 -CleanProfile -OutputCsv baseline-visible.csv
-.\tests\measure_startup.ps1 -ExePath .\publish\baseline\WuwaIDLauncher.exe -Runs 5 -MinimizeAfterInteractive -OutputCsv baseline-minimized.csv
+.\tests\measure_startup.ps1 -ExePath .\publish\benchmark\compressed\WuwaIDLauncher.exe -Runs 6 -ProfileMode CleanEveryRun -OutputCsv compressed-clean.csv
+.\tests\measure_startup.ps1 -ExePath .\publish\benchmark\compressed\WuwaIDLauncher.exe -Runs 6 -ProfileMode CleanFirst -OutputCsv compressed-clean-first.csv
+.\tests\measure_startup.ps1 -ExePath .\publish\benchmark\compressed\WuwaIDLauncher.exe -Runs 6 -ProfileMode Warm -OutputCsv compressed-warm.csv
+.\tests\measure_startup.ps1 -ExePath .\publish\benchmark\compressed\WuwaIDLauncher.exe -Runs 6 -ProfileMode Warm -MinimizeAfterInteractive -OutputCsv compressed-minimized.csv
 ```
 
-Varian opaque hanya diadopsi bila tampilan setara dan penggunaan idle/startup membaik minimal 10%. Compression hanya dinonaktifkan bila cold-start membaik minimal 10% dengan kenaikan ukuran distribusi maksimal 30%.
+Jalankan matriks sama untuk `publish/benchmark/uncompressed`. Jadikan uncompressed default hanya bila median enam warm run minimal 10% lebih cepat dan median clean startup tidak regresi lebih dari 5%.
+
+Untuk dampak ke game, rekam skenario launcher tertutup dan launcher visible/`Mati` dengan PresentMon pada rute, preset, resolusi, dan durasi identik. Simpan CSV proses `Client-Win64-Shipping.exe`, lalu bandingkan GPU busy, P99 frametime, dan 1% low. Lulus bila CPU/GPU launcher masing-masing di bawah 1% dan P99/1% low game tidak memburuk lebih dari 2%.
 
 ## Kredit
 

@@ -6,14 +6,14 @@
         Width="1280" Height="720"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
-        AllowsTransparency="True"
-        Background="Transparent"
+        AllowsTransparency="False"
+        Background="#060a14"
         ResizeMode="NoResize"
         ShowInTaskbar="True"
         Opacity="0">
-    <Border x:Name="rootBorder" Background="#060a14" CornerRadius="8"
+    <Border x:Name="rootBorder" Background="#060a14" CornerRadius="0"
             ClipToBounds="True">
         <wv2:WebView2 x:Name="webView"
-                      DefaultBackgroundColor="Transparent" />
+                      DefaultBackgroundColor="#060a14" />
     </Border>
 </Window>

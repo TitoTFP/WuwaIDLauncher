@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$ExePath,
-    [int]$Runs = 5,
-    [switch]$CleanProfile,
+    [int]$Runs = 6,
+    [ValidateSet("CleanEveryRun", "CleanFirst", "Warm")]
+    [string]$ProfileMode = "Warm",
     [switch]$MinimizeAfterInteractive,
     [string]$OutputCsv = "startup-benchmark.csv"
 )
@@ -35,12 +36,15 @@ function Get-ProcessTreeIds([int]$RootPid) {
 }
 
 for ($run = 1; $run -le $Runs; $run++) {
-    if ($CleanProfile -and $run -eq 1 -and (Test-Path $profile)) { Remove-Item $profile -Recurse -Force }
+    $cleanThisRun = $ProfileMode -eq "CleanEveryRun" -or
+        ($ProfileMode -eq "CleanFirst" -and $run -eq 1)
+    if ($cleanThisRun -and (Test-Path $profile)) { Remove-Item $profile -Recurse -Force }
     $log = Join-Path $logDir ("launcher-{0}.log" -f (Get-Date -Format "yyyyMMdd"))
     $beforeLength = if (Test-Path $log) { (Get-Item $log).Length } else { 0 }
     $process = Start-Process -FilePath $ExePath -PassThru
     $deadline = (Get-Date).AddSeconds(45)
     $interactiveMs = $null
+    $patchReadyMs = $null
     while ((Get-Date) -lt $deadline -and -not $process.HasExited) {
         if (Test-Path $log) {
             $stream = [System.IO.File]::Open($log, 'Open', 'Read', 'ReadWrite')
@@ -49,13 +53,17 @@ for ($run = 1; $run -le $Runs; $run++) {
                 $reader = [System.IO.StreamReader]::new($stream)
                 $newText = $reader.ReadToEnd()
                 $match = [regex]::Match($newText, 'Startup milestone: ui_interactive elapsed_ms=(\d+)')
-                if ($match.Success) { $interactiveMs = [int]$match.Groups[1].Value; break }
+                if ($match.Success) { $interactiveMs = [int]$match.Groups[1].Value }
+                $patchMatch = [regex]::Match($newText, 'Startup milestone: patch_ready elapsed_ms=(\d+)')
+                if ($patchMatch.Success) { $patchReadyMs = [int]$patchMatch.Groups[1].Value }
+                if ($null -ne $interactiveMs -and $null -ne $patchReadyMs) { break }
             } finally { $stream.Dispose() }
         }
         Start-Sleep -Milliseconds 100
         $process.Refresh()
     }
     if ($null -eq $interactiveMs) { throw "Run $run did not reach ui_interactive." }
+    if ($null -eq $patchReadyMs) { throw "Run $run did not reach patch_ready." }
 
     if ($MinimizeAfterInteractive) {
         $process.Refresh()
@@ -65,6 +73,7 @@ for ($run = 1; $run -le $Runs; $run++) {
     $ids = Get-ProcessTreeIds $process.Id
     $tree = Get-Process -Id $ids -ErrorAction SilentlyContinue
     $workingSetMb = [math]::Round((($tree | Measure-Object WorkingSet64 -Sum).Sum / 1MB), 2)
+    $privateBytesMb = [math]::Round((($tree | Measure-Object PrivateMemorySize64 -Sum).Sum / 1MB), 2)
     $cpuStart = (($tree | ForEach-Object { $_.TotalProcessorTime.TotalSeconds }) | Measure-Object -Sum).Sum
     $sampleStart = Get-Date
     Start-Sleep -Seconds 10
@@ -75,11 +84,14 @@ for ($run = 1; $run -le $Runs; $run++) {
 
     $results += [pscustomobject]@{
         Run = $run
-        CleanProfile = ($CleanProfile -and $run -eq 1)
+        ProfileMode = $ProfileMode
+        ProfileCleaned = $cleanThisRun
         State = if ($MinimizeAfterInteractive) { "Minimized" } else { "Visible" }
         UiInteractiveMs = $interactiveMs
+        PatchReadyMs = $patchReadyMs
         WorkingSetMb = $workingSetMb
-        VisibleIdleCpuPercent = $cpuPercent
+        PrivateBytesMb = $privateBytesMb
+        IdleCpuPercent = $cpuPercent
     }
 
     if (-not $process.HasExited) {

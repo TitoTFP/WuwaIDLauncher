@@ -4,81 +4,11 @@
         Title=""
         Height="215" Width="460"
         WindowStyle="None"
-        AllowsTransparency="True"
-        Background="Transparent"
+        AllowsTransparency="False"
+        Background="#060a14"
         ShowInTaskbar="False"
         Topmost="True"
         ResizeMode="NoResize"
         WindowStartupLocation="CenterScreen">
-    <Border CornerRadius="6" BorderThickness="1" BorderBrush="#C6A04A">
-        <Border.Background>
-
-            <RadialGradientBrush GradientOrigin="0.35,0.25" Center="0.4,0.35" RadiusX="0.95" RadiusY="0.95">
-                <GradientStop Color="#F3ECDA" Offset="0"/>
-                <GradientStop Color="#E7DCC2" Offset="0.55"/>
-                <GradientStop Color="#D8C9A6" Offset="1"/>
-            </RadialGradientBrush>
-        </Border.Background>
-        <Grid>
-
-            <Ellipse Width="320" Height="320" HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                     Margin="0,0,-90,-110" Opacity="0.10">
-                <Ellipse.Fill>
-                    <RadialGradientBrush>
-                        <GradientStop Color="#18130E" Offset="0"/>
-                        <GradientStop Color="#00181310" Offset="1"/>
-                    </RadialGradientBrush>
-                </Ellipse.Fill>
-            </Ellipse>
-
-            <Canvas x:Name="treeCanvas" IsHitTestVisible="False" ClipToBounds="True"/>
-
-            <StackPanel Margin="22" VerticalAlignment="Top" HorizontalAlignment="Left">
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock Text="玄方" FontFamily="Cambria,Georgia,serif" Foreground="#1B130C"
-                               FontSize="30" FontWeight="Bold" Opacity="0.88"/>
-                    <TextBlock Text="启卷" FontFamily="Cambria,Georgia,serif" Foreground="#9A8A5E"
-                               FontSize="16" VerticalAlignment="Bottom" Margin="8,0,0,5"/>
-                </StackPanel>
-                <Rectangle Height="1.5" Width="120" Fill="#C6A04A" HorizontalAlignment="Left" Margin="2,4,0,0" Opacity="0.6"/>
-            </StackPanel>
-
-            <Border Width="34" Height="34" CornerRadius="3" BorderBrush="#BE3A34" BorderThickness="2"
-                    HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,18,20,0" Opacity="0.85">
-                <TextBlock Text="玄方" FontFamily="Cambria,Georgia,serif" FontSize="11" Foreground="#BE3A34"
-                           FontWeight="Bold" TextAlignment="Center" LineHeight="11" TextWrapping="Wrap"
-                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
-            </Border>
-
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="24,0,0,20">
-                <TextBlock x:Name="currentLine" Text="正在凝墨…" FontFamily="Cambria,Georgia,serif"
-                           FontSize="13" Foreground="#3A2E1E"/>
-                <Border Background="#BE3A34" Width="6" Height="14" Margin="8,0,0,0">
-                    <Border.Style>
-                        <Style TargetType="Border">
-                            <Style.Triggers>
-                                <EventTrigger RoutedEvent="Loaded">
-                                    <BeginStoryboard>
-                                        <Storyboard RepeatBehavior="Forever">
-                                            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.9" To="0.1" Duration="0:0:0.7" AutoReverse="True"/>
-                                        </Storyboard>
-                                    </BeginStoryboard>
-                                </EventTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </Border.Style>
-                </Border>
-            </StackPanel>
-
-            <Rectangle IsHitTestVisible="False" Opacity="0.05">
-                <Rectangle.Fill>
-                    <VisualBrush TileMode="Tile" Viewport="0,0,3,3" ViewportUnits="Absolute">
-                        <VisualBrush.Visual>
-                            <Rectangle Fill="#1B130C" Width="1" Height="1"/>
-                        </VisualBrush.Visual>
-                    </VisualBrush>
-                </Rectangle.Fill>
-            </Rectangle>
-        </Grid>
-    </Border>
+    <Image Source="Resources/Images/header.jpg" Stretch="Fill" />
 </Window>

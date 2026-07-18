@@ -10,13 +10,33 @@ internal static class ActivePlayerService
 {
     internal const string ActiveHeartbeatEndpoint = "https://logs.titotfp.my.id/api/active/heartbeat";
     static readonly TimeSpan HeartbeatInterval = TimeSpan.FromMinutes(5);
+    static readonly object Gate = new();
     static Timer? _timer;
+    static CancellationTokenSource? _work;
 
     internal static void Start(string? installMethod = null)
     {
-        _ = SendHeartbeatAsync("open", installMethod);
-        _timer ??= new Timer(_ => _ = SendHeartbeatAsync("heartbeat", installMethod),
-            null, HeartbeatInterval, HeartbeatInterval);
+        lock (Gate)
+        {
+            if (_timer != null) return;
+            var work = _work = new CancellationTokenSource();
+            var token = work.Token;
+            _ = SendHeartbeatAsync("open", installMethod, token);
+            _timer = new Timer(_ => _ = SendHeartbeatAsync("heartbeat", installMethod, token),
+                null, HeartbeatInterval, HeartbeatInterval);
+        }
+    }
+
+    internal static void Stop()
+    {
+        lock (Gate)
+        {
+            _timer?.Dispose();
+            _timer = null;
+            _work?.Cancel();
+            _work?.Dispose();
+            _work = null;
+        }
     }
 
     internal static Task SendLaunchHeartbeatAsync(string? installMethod) =>
@@ -39,6 +59,7 @@ internal static class ActivePlayerService
             else
                 AppLogger.Warn("Active heartbeat failed: HTTP " + (int)response.StatusCode);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (Exception ex)
         {
             AppLogger.Exception(ex, "Active heartbeat failed");

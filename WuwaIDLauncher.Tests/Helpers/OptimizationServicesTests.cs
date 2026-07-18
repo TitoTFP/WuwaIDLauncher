@@ -94,6 +94,107 @@ public sealed class OptimizationServicesTests : IDisposable
     }
 
     [Fact]
+    public void PatchStatus_CachedFirst_IsLaunchableWhileRefreshing()
+    {
+        var path = Helpers.Method1PakPath(_root);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "patch");
+
+        var result = PatchStatusEvaluator.EvaluateCached(_root, "method1",
+            new Dictionary<string, string>
+            {
+                ["_installMethod"] = "method1",
+                [Helpers.PakFileName] = "cached"
+            },
+            [new PatchAssetStatus(Helpers.PakFileName, path, "cached")]);
+
+        result.State.Should().Be("cached");
+        result.CanLaunch.Should().BeTrue();
+        result.IsRefreshing.Should().BeTrue();
+    }
+
+    [Fact]
+    public void PatchStatus_InvalidCache_RemainsDisabled()
+    {
+        var path = Helpers.Method1PakPath(_root);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "patch");
+
+        var result = PatchStatusEvaluator.EvaluateCached(_root, "method1",
+            new Dictionary<string, string>(),
+            [new PatchAssetStatus(Helpers.PakFileName, path, "")]);
+
+        result.CanLaunch.Should().BeFalse();
+        result.State.Should().Be("offline");
+    }
+
+    [Fact]
+    public void PatchStatus_RemoteFailure_PreservesVerifiedLaunch()
+    {
+        var path = Helpers.Method1PakPath(_root);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "patch");
+        var result = PatchStatusEvaluator.Evaluate(_root, "method1",
+            new Dictionary<string, string>
+            {
+                ["_installMethod"] = "method1",
+                [Helpers.PakFileName] = "cached"
+            },
+            [new PatchAssetStatus(Helpers.PakFileName, path, "cached")],
+            remoteAvailable: false);
+
+        result.State.Should().Be("offline");
+        result.CanLaunch.Should().BeTrue();
+    }
+
+    [Fact]
+    public void PatchStatus_LateResultDuringLaunch_IsDiscarded()
+    {
+        PatchStatusDelivery.ShouldPublish(4, 4, launchInProgress: true, externalGameActive: false)
+            .Should().BeFalse();
+        PatchStatusDelivery.ShouldPublish(3, 4, launchInProgress: false, externalGameActive: false)
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public void Method1_EarlyExit_RestoresAndShowsLauncher() =>
+        LaunchLifecyclePolicy.Method1(gameRunningAtDeadline: false)
+            .Should().Be(Method1Completion.RestoreAndShow);
+
+    [Fact]
+    public void Method1_Deadline_RestoresThenCloses() =>
+        LaunchLifecyclePolicy.Method1(gameRunningAtDeadline: true)
+            .Should().Be(Method1Completion.RestoreAndClose);
+
+    [Fact]
+    public void Method1_RestoreFailure_BlocksClose() =>
+        LaunchLifecyclePolicy.MayCloseAfterSignatureRestore(restoreSucceeded: false)
+            .Should().BeFalse();
+
+    [Fact]
+    public async Task Method2_TwoStableSamples_Succeeds()
+    {
+        var samples = new Queue<bool>([false, true, true]);
+        var result = await LaunchLifecyclePolicy.WaitForStableGameStartAsync(
+            () => samples.Count > 0 && samples.Dequeue(),
+            TimeSpan.FromMilliseconds(1),
+            TimeSpan.FromSeconds(1));
+
+        result.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Method2_Timeout_ReturnsFalse()
+    {
+        var result = await LaunchLifecyclePolicy.WaitForStableGameStartAsync(
+            () => false,
+            TimeSpan.FromMilliseconds(1),
+            TimeSpan.FromMilliseconds(5));
+
+        result.Should().BeFalse();
+    }
+
+    [Fact]
     public void VersionCache_CorruptJson_FallsBackToEmpty()
     {
         var path = Path.Combine(_root, "versions.json");

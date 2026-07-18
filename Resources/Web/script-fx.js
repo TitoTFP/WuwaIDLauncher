@@ -1,33 +1,40 @@
 ﻿const LauncherAnimationScheduler = (() => {
     const jobs = new Map();
     let frame = 0;
-    let paused = document.hidden;
+    let manualPaused = false;
+    let modeEnabled = true;
+
+    function shouldRun() {
+        return modeEnabled && !manualPaused && !document.hidden && jobs.size > 0;
+    }
 
     function tick(ts) {
         frame = 0;
-        if (paused) return;
+        if (!shouldRun()) return;
         jobs.forEach(job => {
             if (!job.enabled() || ts - job.last < job.interval) return;
             job.last = ts;
             job.draw(ts);
         });
-        if (jobs.size) frame = requestAnimationFrame(tick);
+        if (shouldRun()) frame = requestAnimationFrame(tick);
     }
-    function start() {
-        if (!paused && !frame && jobs.size) frame = requestAnimationFrame(tick);
+    function sync() {
+        if (!shouldRun() && frame) {
+            cancelAnimationFrame(frame);
+            frame = 0;
+        } else if (shouldRun() && !frame) {
+            frame = requestAnimationFrame(tick);
+        }
     }
-    document.addEventListener('visibilitychange', () => {
-        paused = document.hidden;
-        if (paused && frame) { cancelAnimationFrame(frame); frame = 0; }
-        else start();
-    });
+    document.addEventListener('visibilitychange', sync);
     return {
         add(name, fps, draw, enabled = () => true) {
             jobs.set(name, { interval: 1000 / fps, last: 0, draw, enabled });
-            start();
+            sync();
         },
-        pause() { paused = true; if (frame) cancelAnimationFrame(frame); frame = 0; },
-        resume() { paused = document.hidden; start(); }
+        pause() { manualPaused = true; sync(); },
+        resume() { manualPaused = false; sync(); },
+        setModeEnabled(enabled) { modeEnabled = !!enabled; sync(); }
     };
 })();
 
@@ -38,17 +45,30 @@ function normalizeLauncherVisualMode(mode) {
 function applyLauncherVisualMode(mode) {
     mode = normalizeLauncherVisualMode(mode);
     S.cfg.launcherVisualMode = mode;
+    applyEffectiveLauncherVisualMode();
+}
+
+function applyEffectiveLauncherVisualMode() {
+    const mode = launcherVisualMode();
     document.body.dataset.visualMode = mode;
     document.documentElement.classList.toggle('launcher-reduced-motion', mode === 'off');
     document.querySelectorAll('[name="launcherVisualMode"]').forEach(input => {
         input.checked = input.value === mode;
     });
-    if (mode === 'full') loadLauncherVideo();
+    LauncherAnimationScheduler.setModeEnabled(mode !== 'off');
+    if (mode === 'full' && !S.gameRunning) loadLauncherVideo();
     else unloadLauncherVideo();
-    if (mode === 'full' && document.readyState !== 'loading') initCyberEffects();
+    if (mode === 'full' && !S.gameRunning && document.readyState !== 'loading') {
+        window.initializeLauncherEffects?.();
+        initCyberEffects();
+    }
 }
 
-function launcherVisualMode() { return normalizeLauncherVisualMode(S.cfg.launcherVisualMode); }
+window.applyEffectiveLauncherVisualMode = applyEffectiveLauncherVisualMode;
+
+function launcherVisualMode() {
+    return S.gameRunning ? 'off' : normalizeLauncherVisualMode(S.cfg.launcherVisualMode);
+}
 
 let _launcherVideoUrl = '';
 function loadLauncherVideo() {
@@ -68,7 +88,10 @@ function unloadLauncherVideo() {
     video.removeAttribute('src');
     video.load();
 }
-window.setLauncherVideoSource = url => { _launcherVideoUrl = url || ''; loadLauncherVideo(); };
+window.setLauncherVideoSource = url => {
+    _launcherVideoUrl = url || '';
+    if (!S.gameRunning) loadLauncherVideo();
+};
 
 function initParticles() {
     const c = document.getElementById('particleCanvas');
@@ -197,12 +220,12 @@ function initCyberEffects() {
 function initGlitchEffect() {
     const btn = document.getElementById('btnStart');
     if (!btn) return;
-    setInterval(() => {
-        if (launcherVisualMode() === 'full' && !document.hidden && Math.random() < 0.05) {
+    LauncherAnimationScheduler.add('glitch', 1 / 3, () => {
+        if (Math.random() < 0.05) {
             btn.classList.add('glitch-active');
             setTimeout(() => btn.classList.remove('glitch-active'), 400);
         }
-    }, 3000);
+    }, () => launcherVisualMode() === 'full');
 }
 
 function getE(d, a, b) {
@@ -298,9 +321,6 @@ function initAudioVisualizer() {
     }
 
     let _vizRunning = false;
-    const bgLayer = document.querySelector('.bg-layer');
-    let _bgScale = 1.0;
-    let _bgVelocity = 0;
     let _fftData = null;
     let bassE = 0, midE = 0, hiE = 0, overallE = 0;
 
@@ -309,8 +329,6 @@ function initAudioVisualizer() {
         if (hasAudio) {
             if (!_fftData) _fftData = new Uint8Array(_analyser.frequencyBinCount);
             _analyser.getByteFrequencyData(_fftData);
-
-            const dataLen = _fftData.length;
 
             const rBass = getE(_fftData, 0, 12);
             const rMid  = getE(_fftData, 12, 100);
@@ -461,7 +479,21 @@ window.onLauncherSuspending = () => {
 
 window.onLauncherResumed = () => {
     LauncherAnimationScheduler.resume();
-    window.apResume?.();
-    if (_resumeVideoAfterSuspend && launcherVisualMode() === 'full') loadLauncherVideo();
+    if (!S.gameRunning) window.apResume?.();
+    if (!S.gameRunning && _resumeVideoAfterSuspend && launcherVisualMode() === 'full') loadLauncherVideo();
     _resumeVideoAfterSuspend = false;
+};
+
+window.setLauncherEffectsRuntime = active => {
+    if (active) _audioCtx?.suspend?.();
+    else if (launcherVisualMode() === 'full') _audioCtx?.resume?.();
+};
+
+let _launcherEffectsInitialized = false;
+window.initializeLauncherEffects = () => {
+    if (_launcherEffectsInitialized || S.gameRunning) return;
+    _launcherEffectsInitialized = true;
+    initParticles();
+    initWaterRipple();
+    initCyberEffects();
 };

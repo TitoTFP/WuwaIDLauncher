@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -7,6 +8,7 @@ namespace WuwaIDLauncher;
 
 internal enum PatchState
 {
+    Cached,
     Current,
     UpdateAvailable,
     NotInstalled,
@@ -15,24 +17,50 @@ internal enum PatchState
     Error
 }
 
-internal sealed record PatchStatusResult(string State, bool CanLaunch, string Message, string InstallMethod = "")
+internal sealed record PatchStatusResult(
+    string State,
+    bool CanLaunch,
+    string Message,
+    string InstallMethod = "",
+    bool IsRefreshing = false)
 {
-    internal static PatchStatusResult From(PatchState state, bool canLaunch, string message) =>
+    internal static PatchStatusResult From(
+        PatchState state,
+        bool canLaunch,
+        string message,
+        bool isRefreshing = false) =>
         new(state switch
         {
+            PatchState.Cached => "cached",
             PatchState.Current => "current",
             PatchState.UpdateAvailable => "update_available",
             PatchState.NotInstalled => "not_installed",
             PatchState.Offline => "offline",
             PatchState.InvalidPath => "invalid_path",
             _ => "error"
-        }, canLaunch, message);
+        }, canLaunch, message, IsRefreshing: isRefreshing);
 }
 
 internal sealed record PatchAssetStatus(string Name, string Path, string Fingerprint);
 
 internal static class PatchStatusEvaluator
 {
+    internal static PatchStatusResult EvaluateCached(
+        string gamePath,
+        string installMethod,
+        IReadOnlyDictionary<string, string> localCache,
+        IReadOnlyList<PatchAssetStatus> assets)
+    {
+        var local = Evaluate(gamePath, installMethod, localCache, assets, remoteAvailable: false);
+        return local.CanLaunch
+            ? PatchStatusResult.From(
+                PatchState.Cached,
+                true,
+                "Patch lokal siap; memeriksa pembaruan di latar belakang.",
+                isRefreshing: true)
+            : local;
+    }
+
     internal static PatchStatusResult Evaluate(
         string gamePath,
         string installMethod,
@@ -54,6 +82,7 @@ internal static class PatchStatusEvaluator
                                   string.Equals(cachedMethod, normalizedMethod, StringComparison.OrdinalIgnoreCase);
         var cachedAssetsMatch = assets.All(asset =>
             localCache.TryGetValue(asset.Name, out var cachedFingerprint) &&
+            !string.IsNullOrWhiteSpace(cachedFingerprint) &&
             (string.IsNullOrEmpty(asset.Fingerprint) || cachedFingerprint == asset.Fingerprint));
 
         if (!remoteAvailable)
@@ -87,6 +116,49 @@ internal static class PatchStatusEvaluator
 
     internal static string NormalizeInstallMethod(string? method) =>
         string.Equals(method, "method2", StringComparison.OrdinalIgnoreCase) ? "method2" : "method1";
+}
+
+internal enum Method1Completion
+{
+    RestoreAndShow,
+    RestoreAndClose
+}
+
+internal static class LaunchLifecyclePolicy
+{
+    internal static Method1Completion Method1(bool gameRunningAtDeadline) =>
+        gameRunningAtDeadline ? Method1Completion.RestoreAndClose : Method1Completion.RestoreAndShow;
+
+    internal static bool MayCloseAfterSignatureRestore(bool restoreSucceeded) => restoreSucceeded;
+
+    internal static async Task<bool> WaitForStableGameStartAsync(
+        Func<bool> isGameRunning,
+        TimeSpan sampleInterval,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        var deadline = Stopwatch.StartNew();
+        var consecutiveSamples = 0;
+        while (deadline.Elapsed < timeout)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            consecutiveSamples = isGameRunning() ? consecutiveSamples + 1 : 0;
+            if (consecutiveSamples >= 2)
+                return true;
+            await Task.Delay(sampleInterval, cancellationToken);
+        }
+        return false;
+    }
+}
+
+internal static class PatchStatusDelivery
+{
+    internal static bool ShouldPublish(
+        int requestId,
+        int latestRequestId,
+        bool launchInProgress,
+        bool externalGameActive) =>
+        requestId == latestRequestId && !launchInProgress && !externalGameActive;
 }
 
 internal sealed record MediaCacheEntry(string Sha256, long Size, long LastWriteUtcTicks);

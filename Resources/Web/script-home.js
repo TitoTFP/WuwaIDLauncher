@@ -88,7 +88,7 @@ function initBottomBar() {
 
 
 async function handleStart() {
-    if (S.installing || S.launching) return;
+    if (S.gameRunning || S.installing || S.launching) return;
     if (!S.gamePath || S.patchState === 'invalid_path') {
         if (!await browseFolder()) return;
     }
@@ -101,6 +101,7 @@ async function handleStart() {
 }
 
 function startInstall() {
+    if (S.gameRunning) return;
     S.installing = true;
     const btn = document.getElementById('btnStart');
     const txt = document.getElementById('startBtnText');
@@ -120,7 +121,7 @@ function startInstall() {
 }
 
 function checkPatchStatus(silent = true) {
-    if (!S.gamePath || !bridge()) return;
+    if (S.gameRunning || S.launching || !bridge()) return;
     const btn = document.getElementById('btnStart');
     const txt = document.getElementById('startBtnText');
     S.patchState = 'checking';
@@ -129,6 +130,13 @@ function checkPatchStatus(silent = true) {
     if (!silent) toast('Memeriksa Patch ID...', 'info');
     bridge().CheckPatchStatus(S.gamePath, S.cfg.installMethod || 'method1');
 }
+
+window.startInitialPatchCheck = (force = false) => {
+    if (S.gameRunning || S.installing || S.launching) return;
+    if (S.autoCheckDone && !force) return;
+    S.autoCheckDone = true;
+    checkPatchStatus();
+};
 
 function simulateInstall() {
     let p = 0;
@@ -180,7 +188,7 @@ function installDone() {
 }
 
 function launchGame() {
-    if (S.launching) return;
+    if (S.gameRunning || S.launching) return;
     const dx11 = document.getElementById('chkDx11')?.checked ?? false;
     if (bridge()) {
         bridge().LaunchGame(S.gamePath, dx11, S.cfg.installMethod || 'method1');
@@ -198,6 +206,10 @@ function setLaunchLock(label) {
 }
 
 function clearLaunchLock() {
+    if (S.gameRunning && S.gameOrigin === 'external') {
+        setLaunchLock('Game eksternal sedang berjalan');
+        return;
+    }
     S.launching = false;
     const btn = document.getElementById('btnStart');
     const txt = document.getElementById('startBtnText');
@@ -214,6 +226,7 @@ window.onProgressUpdate  = (p,t,sp,sz) => setProgress(p,t,sp,sz);
 window.onInstallComplete = () => installDone();
 window.onPatchStatus = result => {
     if (!result) return;
+    if (S.launching || S.gameRunning) return;
     if (result.installMethod && result.installMethod !== (S.cfg.installMethod || 'method1')) return;
     S.patchState = result.state || 'error';
     S.installed = !!result.canLaunch;
@@ -223,7 +236,8 @@ window.onPatchStatus = result => {
     btn?.classList.remove('disabled', 'installed');
     if (S.installed) btn?.classList.add('installed');
 
-    const label = S.installed ? 'Mainkan Game'
+    const label = S.installed && result.isRefreshing ? 'Mainkan Game · memeriksa pembaruan'
+        : S.installed ? 'Mainkan Game'
         : S.patchState === 'update_available' ? 'Perbarui Patch ID'
         : S.patchState === 'invalid_path' ? 'Pilih Folder Game'
         : S.patchState === 'offline' ? 'Coba Periksa Lagi'
@@ -272,13 +286,11 @@ window.onAdminRequired = () => {
     toast('Folder game terkunci. Perlu izin Admin!', 'err');
 };
 window.onGamePathDetected = path => {
-    S.gamePath = path;
-    S.cfg.gamePath = path;
-    saveSettings();
-    if (!S.autoCheckDone && !S.installing) {
-        S.autoCheckDone = true;
-        checkPatchStatus();
+    if (!S.gamePath) {
+        S.gamePath = path;
+        S.cfg.gamePath = path;
     }
+    if (S.runtimeReady) window.startInitialPatchCheck?.();
 };
 
 

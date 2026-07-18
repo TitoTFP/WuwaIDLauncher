@@ -357,4 +357,44 @@ if ! rg -n 'UploadLogs\(S\.gamePath' Resources/Web/script-misc.js >/dev/null; th
   fail "manual log upload must pass selected game path"
 fi
 
+if ! rg -n '<Version>2\.6\.0</Version>' WuwaIDLauncher.csproj >/dev/null ||
+   ! rg -n '<Deterministic>true</Deterministic>' WuwaIDLauncher.csproj >/dev/null; then
+  fail "launcher release must be deterministic version 2.6.0"
+fi
+
+if rg -n 'OPAQUE_WINDOW_BENCHMARK|UseOpaqueWindowBenchmark' WuwaIDLauncher.csproj MainWindow.xaml.cs README.md >/dev/null; then
+  fail "opaque window experiment flags must be removed"
+fi
+
+if ! rg -n 'AllowsTransparency="False"' MainWindow.xaml >/dev/null ||
+   ! rg -n 'DefaultBackgroundColor="#060a14"' MainWindow.xaml >/dev/null; then
+  fail "main WPF/WebView2 shell must be opaque"
+fi
+
+if ! rg -n 'ModuleVersionId:N' MainWindow.xaml.cs >/dev/null ||
+   ! rg -n 'GetWebAssetVersion' MainWindow.xaml.cs >/dev/null; then
+  fail "web resource cache key must include deterministic module MVID"
+fi
+
+if ! rg -n 'WatchExternalGameAsync' MainWindow.xaml.cs >/dev/null ||
+   ! rg -n 'public bool IsGameRunning\(\)' MainWindow.xaml.cs >/dev/null ||
+   ! rg -n 'onGameRuntimeState' MainWindow.xaml.cs Resources/Web/script-core.js >/dev/null; then
+  fail "launcher must watch and publish external game runtime state"
+fi
+
+if ! rg -n 'PatchState\.Cached' OptimizationServices.cs >/dev/null ||
+   ! rg -n 'IsRefreshing' OptimizationServices.cs >/dev/null ||
+   ! rg -n 'patch_ready' MainWindow.xaml.cs >/dev/null; then
+  fail "patch status must support cached-first readiness"
+fi
+
+if rg -n 'checkPatchStatus\(' Resources/Web/script-misc.js | rg -n 'loadSettings' >/dev/null; then
+  fail "loadSettings must not start patch network work"
+fi
+
+if ! command -v node >/dev/null; then
+  fail "node is required for animation scheduler self-check"
+fi
+node tests/check_animation_scheduler.js >/dev/null
+
 echo "launcher consistency checks passed"

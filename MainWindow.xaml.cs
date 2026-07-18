@@ -32,36 +32,51 @@ public partial class MainWindow : Window
     internal const string SigFileName = Helpers.SigFileName;
     internal const string SigBackupFileName = Helpers.SigBackupFileName;
     const string GameExeName = "Client-Win64-Shipping.exe";
-    const string GameProcessName = "Client-Win64-Shipping";
     const string WuwaIDLatestDownloadBaseUrl = "https://github.com/TitoTFP/WuwaID/releases/latest/download/";
     static readonly TimeSpan SigRestoreDelay = Helpers.SigRestoreDelay;
 
     volatile bool _pageReady;
+    volatile bool _uiInteractive;
     volatile bool _launchInProgress;
     volatile bool _signatureRestorePending;
     volatile bool _gameProcessRunning;
+    volatile bool _externalGameActive;
     volatile bool _updateInProgress;
     string? _launchGamePath;
     string? _pendingBgm, _pendingVideo, _pendingUpdateDate;
     SplashWindow? _splash;
     readonly CancellationTokenSource _shutdown = new();
     readonly SemaphoreSlim _webViewLifecycleLock = new(1, 1);
+    readonly object _runtimeWorkLock = new();
     static readonly ConcurrentDictionary<string, byte[]> WebResourceCache = new(StringComparer.OrdinalIgnoreCase);
+    CancellationTokenSource? _runtimeWork;
     bool _webViewSuspended;
-    int _startupTasksStarted;
+    int _deferredStartupState;
+    int _patchRequestId;
+    int _patchReadyLogged;
+
+    internal bool IsExternalGameActive => _externalGameActive;
 
     public MainWindow()
     {
         InitializeComponent();
-#if OPAQUE_WINDOW_BENCHMARK
-        AllowsTransparency = false;
-        Background = System.Windows.Media.Brushes.Black;
         webView.DefaultBackgroundColor = System.Drawing.Color.FromArgb(255, 6, 10, 20);
-#endif
         Directory.CreateDirectory(CacheFolder);
         LogStartupMilestone("main_window_initialized");
         Loaded += OnLoaded;
         Closing += OnClosing;
+    }
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        const int dwmwaWindowCornerPreference = 33;
+        var doNotRound = 1;
+        _ = DwmSetWindowAttribute(
+            new WindowInteropHelper(this).Handle,
+            dwmwaWindowCornerPreference,
+            ref doNotRound,
+            sizeof(int));
     }
 
     static void LogStartupMilestone(string name) =>
@@ -81,19 +96,17 @@ public partial class MainWindow : Window
 
             if (!string.IsNullOrWhiteSpace(_launchGamePath))
             {
-                try
+                AppLogger.Info("Restoring signature during close");
+                if (!TryRestoreSignature(_launchGamePath))
                 {
-                    AppLogger.Info("Restoring signature during close");
-                    Helpers.RestoreSigBackup(_launchGamePath);
+                    e.Cancel = true;
+                    WindowState = WindowState.Normal;
+                    return;
                 }
-                catch (Exception ex)
-                {
-                    AppLogger.Exception(ex, "Failed to restore signature during close");
-                }
-                _signatureRestorePending = false;
             }
         }
 
+        StopRuntimeWork();
         _shutdown.Cancel();
         try
         {
@@ -123,6 +136,9 @@ public partial class MainWindow : Window
     async void OnLoaded(object sender, RoutedEventArgs e)
     {
         LogStartupMilestone("main_window_loaded");
+        _externalGameActive = Helpers.IsGameRunning();
+        AppLogger.Info("Initial game process state: " + _externalGameActive);
+        _ = WatchExternalGameAsync();
         _splash = new SplashWindow();
         _splash.Show();
 
@@ -165,7 +181,7 @@ public partial class MainWindow : Window
             webView.CoreWebView2.DOMContentLoaded += OnDOMContentLoaded;
             webView.CoreWebView2.NavigationStarting += OnNavigationStarting;
             webView.CoreWebView2.NewWindowRequested += OnNewWindowRequested;
-            webView.CoreWebView2.Navigate($"https://app.local/v{GetAppVersion()}/index.html");
+            webView.CoreWebView2.Navigate($"https://app.local/v{GetWebAssetVersion()}/index.html");
             StateChanged += OnWindowStateChanged;
 
 #if DEBUG
@@ -185,6 +201,9 @@ public partial class MainWindow : Window
 
     static string GetAppVersion() =>
         Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "1.0.0";
+
+    static string GetWebAssetVersion() =>
+        $"{GetAppVersion()}-{Assembly.GetExecutingAssembly().ManifestModule.ModuleVersionId:N}";
 
     async Task EnsureWebViewInitializedAsync(CoreWebView2EnvironmentOptions options)
     {
@@ -252,8 +271,10 @@ public partial class MainWindow : Window
             })();
         ");
 
+        NotifyGameRuntimeState(_externalGameActive, "external");
         DetectGamePath();
-        FlushPendingMedia();
+        if (!_externalGameActive)
+            FlushPendingMedia();
     }
 
     void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e)
@@ -271,6 +292,8 @@ public partial class MainWindow : Window
     static extern nint SendMessage(nint hWnd, int Msg, nint wParam, nint lParam);
     [DllImport("user32.dll")]
     static extern bool ReleaseCapture();
+    [DllImport("dwmapi.dll")]
+    static extern int DwmSetWindowAttribute(nint hwnd, int attribute, ref int value, int valueSize);
     const int WM_NCLBUTTONDOWN = 0x00A1;
     const int HT_CAPTION = 0x0002;
 
@@ -311,80 +334,189 @@ public partial class MainWindow : Window
 
     internal void NotifyUiInteractive()
     {
+        _uiInteractive = true;
         LogStartupMilestone("settings_loaded");
         LogStartupMilestone("ui_interactive");
-        SignalMediaReady();
-        if (Interlocked.Exchange(ref _startupTasksStarted, 1) == 0)
-            _ = RunDeferredStartupTasksAsync();
+        if (!_externalGameActive)
+            StartDeferredStartupTasks();
     }
 
-    async Task RunDeferredStartupTasksAsync()
+    void StartDeferredStartupTasks()
+    {
+        if (_externalGameActive)
+            return;
+        if (Volatile.Read(ref _deferredStartupState) == 2)
+        {
+            SignalMediaReady();
+            ActivePlayerService.Start();
+            return;
+        }
+        if (Interlocked.CompareExchange(ref _deferredStartupState, 1, 0) != 0)
+            return;
+        _ = RunDeferredStartupTasksAsync(GetRuntimeWorkToken());
+    }
+
+    async Task RunDeferredStartupTasksAsync(CancellationToken cancellationToken)
     {
         try
         {
-            await Task.Delay(250, _shutdown.Token);
-            var mediaTask = CheckAndDownloadMedia();
-            var versionTask = CheckLauncherVersion();
-            await Task.Delay(750, _shutdown.Token);
+            SignalMediaReady();
+            await Task.Delay(250, cancellationToken);
+            var mediaTask = CheckAndDownloadMedia(cancellationToken);
+            var versionTask = CheckLauncherVersion(cancellationToken);
+            await Task.Delay(750, cancellationToken);
             ActivePlayerService.Start();
-            var notesTask = FetchVHReleaseNotes();
+            var notesTask = FetchVHReleaseNotes(cancellationToken);
             await Task.WhenAll(mediaTask, versionTask, notesTask);
             var remaining = TimeSpan.FromSeconds(5) - App.StartupClock.Elapsed;
             if (remaining > TimeSpan.Zero)
-                await Task.Delay(remaining, _shutdown.Token);
+                await Task.Delay(remaining, cancellationToken);
             AppLogger.Info("Startup metric: network_requests_first_5s=" + LauncherHttp.StartupRequestCount);
+            Interlocked.Exchange(ref _deferredStartupState, 2);
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            Interlocked.CompareExchange(ref _deferredStartupState, 0, 1);
+        }
         catch (Exception ex)
         {
+            Interlocked.CompareExchange(ref _deferredStartupState, 0, 1);
             AppLogger.Exception(ex, "Deferred startup tasks failed");
         }
     }
 
+    CancellationToken GetRuntimeWorkToken()
+    {
+        lock (_runtimeWorkLock)
+        {
+            if (_runtimeWork == null || _runtimeWork.IsCancellationRequested)
+            {
+                _runtimeWork?.Dispose();
+                _runtimeWork = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
+            }
+            return _runtimeWork.Token;
+        }
+    }
+
+    void StopRuntimeWork()
+    {
+        lock (_runtimeWorkLock)
+        {
+            _runtimeWork?.Cancel();
+            _runtimeWork?.Dispose();
+            _runtimeWork = null;
+        }
+        ActivePlayerService.Stop();
+    }
+
+    async Task WatchExternalGameAsync()
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(3), _shutdown.Token);
+                if (_launchInProgress)
+                    continue;
+
+                var active = Helpers.IsGameRunning();
+                if (active != _externalGameActive)
+                    SetExternalGameState(active);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            AppLogger.Exception(ex, "External game watcher failed");
+        }
+    }
+
+    void SetExternalGameState(bool active)
+    {
+        _externalGameActive = active;
+        AppLogger.Info("External game process state changed: " + active);
+        if (active)
+        {
+            Interlocked.Increment(ref _patchRequestId);
+            StopRuntimeWork();
+            NotifyGameRuntimeState(true, "external");
+            return;
+        }
+
+        NotifyGameRuntimeState(false, "external");
+        FlushPendingMedia();
+        if (_uiInteractive)
+            StartDeferredStartupTasks();
+    }
+
+    void NotifyGameRuntimeState(bool active, string origin) =>
+        RunScript($"window.onGameRuntimeState?.({active.ToString().ToLowerInvariant()}, {JsStr(origin)})");
+
     internal async Task CheckPatchStatus(string gamePath, string installMethod)
     {
+        if (_externalGameActive)
+            return;
+
+        var requestId = Interlocked.Increment(ref _patchRequestId);
+        var cancellationToken = GetRuntimeWorkToken();
         AppLogger.SetGamePath(gamePath);
         var method = NormalizeInstallMethod(installMethod);
         var versionCachePath = Path.Combine(AppDataFolder, "versions.json");
         var localCache = PatchStatusEvaluator.ReadVersionCache(versionCachePath);
         var assets = ExpectedPatchAssets(gamePath, method, localCache, useCachedFingerprint: true);
 
-        PatchStatusResult result;
-        var localResult = PatchStatusEvaluator.Evaluate(
-            gamePath, method, localCache, assets, remoteAvailable: false);
+        var localResult = PatchStatusEvaluator.EvaluateCached(gamePath, method, localCache, assets);
         if (localResult.State is "invalid_path" or "not_installed")
         {
-            result = localResult;
+            PublishPatchStatus(localResult, method, requestId);
+            return;
         }
-        else
+
+        if (localResult.State == "cached")
+            PublishPatchStatus(localResult, method, requestId);
+
+        PatchStatusResult result;
+        try
         {
-            try
+            using var timeout = LauncherHttp.TimeoutAfter(TimeSpan.FromSeconds(15), cancellationToken);
+            var remoteAssets = new List<PatchAssetStatus>();
+            foreach (var asset in assets)
             {
-                using var timeout = LauncherHttp.TimeoutAfter(TimeSpan.FromSeconds(15), _shutdown.Token);
-                var remoteAssets = new List<PatchAssetStatus>();
-                foreach (var asset in assets)
-                {
-                    var url = WuwaIDLatestDownloadBaseUrl + Uri.EscapeDataString(asset.Name);
-                    var metadata = await GetReleaseAssetMetadata(LauncherHttp.Client, url, timeout.Token);
-                    remoteAssets.Add(asset with { Fingerprint = metadata.Fingerprint });
-                }
-                result = PatchStatusEvaluator.Evaluate(gamePath, method, localCache, remoteAssets, remoteAvailable: true);
+                var url = WuwaIDLatestDownloadBaseUrl + Uri.EscapeDataString(asset.Name);
+                var metadata = await GetReleaseAssetMetadata(LauncherHttp.Client, url, timeout.Token);
+                remoteAssets.Add(asset with { Fingerprint = metadata.Fingerprint });
             }
-            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
-            {
-                AppLogger.Exception(ex, "Patch status remote check failed");
-                result = PatchStatusEvaluator.Evaluate(gamePath, method, localCache, assets, remoteAvailable: false);
-            }
-            catch (Exception ex)
-            {
-                AppLogger.Exception(ex, "Patch status check failed");
-                result = PatchStatusResult.From(PatchState.Error, false, "Gagal memeriksa status patch.");
-            }
+            result = PatchStatusEvaluator.Evaluate(gamePath, method, localCache, remoteAssets, remoteAvailable: true);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
+        {
+            AppLogger.Exception(ex, "Patch status remote check failed");
+            result = PatchStatusEvaluator.Evaluate(gamePath, method, localCache, assets, remoteAvailable: false);
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Exception(ex, "Patch status check failed");
+            result = PatchStatusResult.From(PatchState.Error, false, "Gagal memeriksa status patch.");
+        }
+
+        PublishPatchStatus(result, method, requestId);
+    }
+
+    void PublishPatchStatus(PatchStatusResult result, string method, int requestId)
+    {
+        if (!PatchStatusDelivery.ShouldPublish(
+                requestId, Volatile.Read(ref _patchRequestId), _launchInProgress, _externalGameActive))
+            return;
 
         result = result with { InstallMethod = method };
         var json = JsonSerializer.Serialize(result, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
         RunScript($"window.onPatchStatus({json})");
+        if (Interlocked.Exchange(ref _patchReadyLogged, 1) == 0)
+            LogStartupMilestone("patch_ready");
     }
 
     static List<PatchAssetStatus> ExpectedPatchAssets(
@@ -937,73 +1069,129 @@ public partial class MainWindow : Window
         }
     }
 
-    async Task MonitorLaunchStateAsync(string gamePath, Process? process, bool restoreSignature = true)
+    async Task MonitorMethod1Async(string gamePath, Process? process)
     {
-        AppLogger.SetGamePath(gamePath);
+        AppLogger.Info("Method 1 launch monitor started");
+        var gameExitTask = WaitForGameExitAsync(process, _shutdown.Token);
+        var first = await Task.WhenAny(gameExitTask, Task.Delay(SigRestoreDelay, _shutdown.Token));
+        var completion = LaunchLifecyclePolicy.Method1(first != gameExitTask && Helpers.IsGameRunning());
+
+        if (completion == Method1Completion.RestoreAndShow)
+        {
+            _gameProcessRunning = false;
+            AppLogger.Info("Game exited before signature restore deadline");
+            RunScript("window.onGameLaunchWaitingRestore()");
+        }
+
+        if (!TryRestoreSignature(gamePath))
+        {
+            RunScript("window.onGameLaunchWaitingRestore()");
+            RestoreLauncherWindow();
+            if (completion == Method1Completion.RestoreAndClose)
+            {
+                await gameExitTask;
+                _gameProcessRunning = false;
+                if (TryRestoreSignature(gamePath))
+                    FinishInternalLaunch(showWindow: true);
+                else
+                    RunScript("window.onGameLaunchWaitingRestore()");
+            }
+            return;
+        }
+
+        if (completion == Method1Completion.RestoreAndClose)
+        {
+            AppLogger.Info("Method 1 safe auto-close after signature restore");
+            await Dispatcher.InvokeAsync(() => Application.Current.Shutdown());
+            return;
+        }
+
+        FinishInternalLaunch(showWindow: true);
+    }
+
+    async Task MonitorMethod2Async()
+    {
+        AppLogger.Info("Method 2 stable-start monitor started");
+        var started = await LaunchLifecyclePolicy.WaitForStableGameStartAsync(
+            Helpers.IsGameRunning,
+            TimeSpan.FromMilliseconds(500),
+            TimeSpan.FromSeconds(30),
+            _shutdown.Token);
+
+        if (started)
+        {
+            AppLogger.Info("Method 2 game detected twice; closing launcher");
+            await Dispatcher.InvokeAsync(() => Application.Current.Shutdown());
+            return;
+        }
+
+        AppLogger.Warn("Method 2 game start timed out");
+        FinishInternalLaunch(showWindow: true);
+        RunScript($"window.onInstallError({JsStr("Game tidak terdeteksi dalam 30 detik. Launcher dipulihkan.")})");
+    }
+
+    bool TryRestoreSignature(string gamePath)
+    {
         try
         {
-            AppLogger.Info("Launch monitor started");
-            if (!restoreSignature)
-            {
-                await WaitForGameExitAsync(process);
-                return;
-            }
-
-            var gameExitTask = WaitForGameExitAsync(process);
-            var restoreDelayTask = Task.Delay(SigRestoreDelay);
-            var first = await Task.WhenAny(gameExitTask, restoreDelayTask);
-
-            if (first == gameExitTask)
-            {
-                _gameProcessRunning = false;
-                AppLogger.Info("Game exited before signature restore delay");
-                RunScript("window.onGameLaunchWaitingRestore()");
-            }
-
             Helpers.RestoreSigBackup(gamePath);
-            AppLogger.Info("Signature restore completed");
+            if (!File.Exists(Helpers.SigPath(gamePath)))
+                throw new FileNotFoundException("File signature game tidak ditemukan setelah pemulihan.");
             _signatureRestorePending = false;
-
-            if (first != gameExitTask)
-                await gameExitTask;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            AppLogger.Warn("Signature restore needs admin permission");
-            RunScript($"window.onInstallError({JsStr("Tidak memiliki izin memulihkan signature game. Jalankan sebagai Admin.")})");
+            AppLogger.Info("Signature restore completed");
+            return true;
         }
         catch (Exception ex)
         {
             AppLogger.Exception(ex, "Signature restore failed");
             RunScript($"window.onInstallError({JsStr("Gagal memulihkan signature game: " + ex.Message)})");
-        }
-        finally
-        {
-            _gameProcessRunning = false;
-            _signatureRestorePending = false;
-            _launchInProgress = false;
-            _launchGamePath = null;
-            AppLogger.Info("Launch monitor finished");
-            RunScript("window.onGameLaunchFinished()");
+            return false;
         }
     }
 
-    static async Task WaitForGameExitAsync(Process? process)
+    void RestoreLauncherWindow() => Dispatcher.Invoke(() =>
+    {
+        WindowState = WindowState.Normal;
+        Show();
+        Activate();
+    });
+
+    void FinishInternalLaunch(bool showWindow)
+    {
+        _gameProcessRunning = false;
+        _launchInProgress = false;
+        _launchGamePath = null;
+        var active = Helpers.IsGameRunning();
+        _externalGameActive = active;
+        AppLogger.Info("Launch monitor finished; external state=" + active);
+        RunScript("window.onGameLaunchFinished()");
+        NotifyGameRuntimeState(active, active ? "external" : "launcher");
+        if (showWindow)
+            RestoreLauncherWindow();
+        if (!active)
+        {
+            FlushPendingMedia();
+            if (_uiInteractive)
+                StartDeferredStartupTasks();
+        }
+    }
+
+    static async Task WaitForGameExitAsync(Process? process, CancellationToken cancellationToken)
     {
         try
         {
             if (process != null)
-                await process.WaitForExitAsync();
+                await process.WaitForExitAsync(cancellationToken);
         }
         catch (Exception ex)
         {
             AppLogger.Exception(ex, "Failed to wait for direct game process exit");
         }
 
-        await Task.Delay(3000);
+        await Task.Delay(3000, cancellationToken);
 
         while (Helpers.IsGameRunning())
-            await Task.Delay(1000);
+            await Task.Delay(3000, cancellationToken);
     }
 
     internal void LaunchGame(string gamePath, bool dx11, string installMethod = "method1")
@@ -1011,10 +1199,9 @@ public partial class MainWindow : Window
         AppLogger.SetGamePath(gamePath);
         var method = NormalizeInstallMethod(installMethod);
         AppLogger.Info("Game launch requested; dx11=" + dx11 + "; installMethod=" + method);
-        _ = ActivePlayerService.SendLaunchHeartbeatAsync(method);
         try
         {
-            if (_launchInProgress)
+            if (_launchInProgress || _externalGameActive)
             {
                 AppLogger.Info("Duplicate game launch request ignored");
                 RunScript("window.onGameLaunchStarted()");
@@ -1051,9 +1238,15 @@ public partial class MainWindow : Window
                     Verb = "runas"
                 });
                 AppLogger.Info("Game process start requested");
+                _ = ActivePlayerService.SendLaunchHeartbeatAsync(method);
+                Interlocked.Increment(ref _patchRequestId);
+                StopRuntimeWork();
                 RunScript("window.onGameLaunchStarted()");
+                NotifyGameRuntimeState(true, "launcher");
                 Dispatcher.Invoke(() => WindowState = WindowState.Minimized);
-                _ = MonitorLaunchStateAsync(gamePath, process, !UsesManualLoaderMethod(method));
+                _ = UsesManualLoaderMethod(method)
+                    ? MonitorMethod2Async()
+                    : MonitorMethod1Async(gamePath, process);
             }
             else
             {
@@ -1064,14 +1257,31 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             AppLogger.Exception(ex, "Game launch failed");
-            _launchInProgress = false;
-            _signatureRestorePending = false;
             _gameProcessRunning = false;
-            _launchGamePath = null;
+            var restored = true;
             if (!UsesManualLoaderMethod(method))
-                Helpers.RestoreSigBackup(gamePath);
-            RunScript("window.onGameLaunchFinished()");
+            {
+                restored = !_signatureRestorePending || TryRestoreSignature(gamePath);
+                if (restored)
+                    _launchGamePath = null;
+            }
+            else
+            {
+                _signatureRestorePending = false;
+                _launchGamePath = null;
+            }
+            _launchInProgress = !restored;
+            var activeAfterFailure = Helpers.IsGameRunning();
+            _externalGameActive = activeAfterFailure;
+            if (restored)
+                RunScript("window.onGameLaunchFinished()");
+            NotifyGameRuntimeState(activeAfterFailure, activeAfterFailure ? "external" : "launcher");
+            RestoreLauncherWindow();
             RunScript($"window.onInstallError({JsStr("Gagal menjalankan game: " + ex.Message)})");
+            if (!restored)
+                RunScript("window.onGameLaunchWaitingRestore()");
+            else if (!activeAfterFailure && _uiInteractive)
+                StartDeferredStartupTasks();
         }
     }
 
@@ -1079,12 +1289,14 @@ public partial class MainWindow : Window
     const string LauncherLatestReleaseUrl = "https://github.com/TitoTFP/WuwaIDLauncher/releases/latest";
     const string LauncherReleasesPageUrl = "https://github.com/TitoTFP/WuwaIDLauncher/releases";
 
-    internal async Task CheckLauncherVersion()
+    internal Task CheckLauncherVersion() => CheckLauncherVersion(GetRuntimeWorkToken());
+
+    async Task CheckLauncherVersion(CancellationToken cancellationToken)
     {
         try
         {
             AppLogger.Info("Checking launcher version");
-            using var timeout = LauncherHttp.TimeoutAfter(TimeSpan.FromSeconds(15), _shutdown.Token);
+            using var timeout = LauncherHttp.TimeoutAfter(TimeSpan.FromSeconds(15), cancellationToken);
             var tag = (await GetLatestReleaseTag(LauncherHttp.Client, LauncherLatestReleaseUrl, timeout.Token)).TrimStart('v', 'V');
             if (string.IsNullOrEmpty(tag)) return;
 
@@ -1094,11 +1306,12 @@ public partial class MainWindow : Window
             if (latest > current)
             {
                 AppLogger.Info($"Launcher update available: v{tag}");
-                while (!_pageReady) await Task.Delay(100);
+                while (!_pageReady) await Task.Delay(100, cancellationToken);
                 var downloadUrl = $"https://github.com/TitoTFP/WuwaIDLauncher/releases/download/v{tag}/WuwaIDLauncher-v{tag}.zip";
                 RunScript($"window.onLauncherUpdateAvailable({JsStr('v' + tag)}, {JsStr(downloadUrl)})");
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (Exception ex)
         {
             AppLogger.Exception(ex, "Launcher update check failed");
@@ -1109,18 +1322,21 @@ public partial class MainWindow : Window
     const string VHLatestReleaseUrl = "https://github.com/TitoTFP/WuwaID/releases/latest";
     const string VHReleasesAtomUrl = "https://github.com/TitoTFP/WuwaID/releases.atom";
 
-    internal async Task FetchVHReleaseNotes()
+    internal Task FetchVHReleaseNotes() => FetchVHReleaseNotes(GetRuntimeWorkToken());
+
+    async Task FetchVHReleaseNotes(CancellationToken cancellationToken)
     {
         try
         {
             AppLogger.Info("Fetching WuwaID release notes");
-            using var timeout = LauncherHttp.TimeoutAfter(TimeSpan.FromSeconds(15), _shutdown.Token);
+            using var timeout = LauncherHttp.TimeoutAfter(TimeSpan.FromSeconds(15), cancellationToken);
             var (tag, date, body, name) = await FetchLatestReleaseNotesFromAtom(
                 LauncherHttp.Client, VHReleasesAtomUrl, timeout.Token);
 
-            while (!_pageReady) await Task.Delay(100);
+            while (!_pageReady) await Task.Delay(100, cancellationToken);
             RunScript($"window.onVHReleaseNotes({JsStr(tag)}, {JsStr(date)}, {JsStr(body)}, {JsStr(name)})");
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (Exception ex)
         {
             AppLogger.Exception(ex, "Failed to fetch WuwaID release notes");
@@ -1275,7 +1491,7 @@ public partial class MainWindow : Window
         }
     }
 
-    async Task CheckAndDownloadMedia()
+    async Task CheckAndDownloadMedia(CancellationToken cancellationToken)
     {
         AppLogger.Info("Media check started");
         RunScript("window.onMediaStatus('checking', '')");
@@ -1284,7 +1500,7 @@ public partial class MainWindow : Window
 
         try
         {
-            using var timeout = LauncherHttp.TimeoutAfter(TimeSpan.FromSeconds(20), _shutdown.Token);
+            using var timeout = LauncherHttp.TimeoutAfter(TimeSpan.FromSeconds(20), cancellationToken);
             var json = await LauncherHttp.Client.GetStringAsync(AssetsUrl, timeout.Token);
             using var doc = JsonDocument.Parse(json);
 
@@ -1322,6 +1538,10 @@ public partial class MainWindow : Window
             }
             mediaCache.Save(MediaCachePath);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
         catch (Exception ex)
         {
             AppLogger.Exception(ex, "Media manifest check failed");
@@ -1330,7 +1550,7 @@ public partial class MainWindow : Window
         if (toDownload.Count > 0)
         {
             AppLogger.Info("Media download queue count: " + toDownload.Count);
-            using var timeout = LauncherHttp.TimeoutAfter(TimeSpan.FromMinutes(30), _shutdown.Token);
+            using var timeout = LauncherHttp.TimeoutAfter(TimeSpan.FromMinutes(30), cancellationToken);
             foreach (var (name, url, hash) in toDownload)
             {
                 try
@@ -1344,6 +1564,10 @@ public partial class MainWindow : Window
                     }
                     mediaCache.Record(name, dest, hash);
                     mediaCache.Save(MediaCachePath);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    return;
                 }
                 catch (Exception ex)
                 {
@@ -1403,6 +1627,8 @@ public partial class MainWindow : Window
 
     void SignalMediaReady()
     {
+        if (_externalGameActive || _launchInProgress)
+            return;
         var bgm = File.Exists(Path.Combine(CacheFolder, "bgm.mp3")) ? "https://cache.local/bgm.mp3" : "";
         var video = File.Exists(Path.Combine(CacheFolder, "bg-video.mp4")) ? "https://cache.local/bg-video.mp4" : "";
 
@@ -1413,11 +1639,15 @@ public partial class MainWindow : Window
     }
 
     void FlushPendingMedia()
-    {        if (_pendingUpdateDate != null)
+    {
+        if (_externalGameActive || _launchInProgress)
+            return;
+        if (_pendingUpdateDate != null)
         {
             RunScript($"window.onUpdateDate({JsStr(_pendingUpdateDate)})");
             _pendingUpdateDate = null;
-        }        if (_pendingBgm != null || _pendingVideo != null)
+        }
+        if (_pendingBgm != null || _pendingVideo != null)
         {
             RunScript($"window.onMediaReady({JsStr(_pendingBgm ?? "")}, {JsStr(_pendingVideo ?? "")})");
             _pendingBgm = _pendingVideo = null;
@@ -1439,8 +1669,10 @@ public class LauncherBridge
     public void CloseWindow() =>
         _w.Dispatcher.Invoke(() => _w.RequestCloseWindow());
 
-        public string BrowseGameFolder() =>
-        _w.Dispatcher.Invoke(() =>
+    public bool IsGameRunning() => Helpers.IsGameRunning();
+
+    public string BrowseGameFolder() =>
+        _w.IsExternalGameActive ? "" : _w.Dispatcher.Invoke(() =>
         {
             var dlg = new OpenFolderDialog
             {
@@ -1472,6 +1704,7 @@ public class LauncherBridge
 
     public void OpenUrl(string url)
     {
+        if (_w.IsExternalGameActive) return;
         if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
             (uri.Scheme == "https" || uri.Scheme == "http"))
         {
@@ -1482,6 +1715,7 @@ public class LauncherBridge
 
     public void SaveSettings(string json)
     {
+        if (_w.IsExternalGameActive) return;
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(MainWindow.SettingsPath)!);
@@ -1532,39 +1766,57 @@ public class LauncherBridge
         catch { return ""; }
     }
 
-    public void CheckLauncherUpdate() => _ = _w.CheckLauncherVersion();
+    public void CheckLauncherUpdate()
+    {
+        if (!_w.IsExternalGameActive) _ = _w.CheckLauncherVersion();
+    }
 
-    public void GetVHReleaseNotes() => _ = _w.FetchVHReleaseNotes();
+    public void GetVHReleaseNotes()
+    {
+        if (!_w.IsExternalGameActive) _ = _w.FetchVHReleaseNotes();
+    }
 
-    public void PerformLauncherUpdate(string version, string zipUrl) =>
-        _ = _w.PerformLauncherUpdate(version, zipUrl);
+    public void PerformLauncherUpdate(string version, string zipUrl)
+    {
+        if (!_w.IsExternalGameActive) _ = _w.PerformLauncherUpdate(version, zipUrl);
+    }
 
-    public void CheckPatchStatus(string gamePath, string installMethod) =>
-        _ = _w.CheckPatchStatus(gamePath, installMethod);
+    public void CheckPatchStatus(string gamePath, string installMethod)
+    {
+        if (!_w.IsExternalGameActive) _ = _w.CheckPatchStatus(gamePath, installMethod);
+    }
 
     public void NotifyUiInteractive() => _w.NotifyUiInteractive();
 
-    public void ResetWebViewCache() => _ = _w.ResetWebViewCache();
+    public void ResetWebViewCache()
+    {
+        if (!_w.IsExternalGameActive) _ = _w.ResetWebViewCache();
+    }
 
     public bool GetLogUploadEnabled() => LogUploadService.IsEnabled();
 
     public void UploadLogs(string gamePath) =>
         Task.Run(async () =>
         {
+            if (_w.IsExternalGameActive) return;
             _w.RunScript("window.onLogUploadStarted && window.onLogUploadStarted()");
             var result = await LogUploadService.UploadLatestLogsAsync(gamePath);
             var escaped = JsonSerializer.Serialize(result);
             _w.RunScript($"window.onLogUploadFinished && window.onLogUploadFinished({escaped})");
         });
 
-    public void StartInstallation(string gamePath, string vhMode, bool backup, string installMethod) =>
-        Task.Run(() => _w.RunInstallation(gamePath, vhMode, backup, installMethod));
+    public void StartInstallation(string gamePath, string vhMode, bool backup, string installMethod)
+    {
+        if (!_w.IsExternalGameActive)
+            Task.Run(() => _w.RunInstallation(gamePath, vhMode, backup, installMethod));
+    }
 
     public void LaunchGame(string gamePath, bool dx11, string installMethod) =>
         _w.LaunchGame(gamePath, dx11, installMethod);
 
     public void ForceQuitGame()
     {
+        if (_w.IsExternalGameActive) return;
         AppLogger.Info("Force quit game requested");
         var names = new[] { "WutheringWaves", "Client-Win64-Shipping", "Wuthering Waves" };
         foreach (var name in names)
@@ -1575,6 +1827,7 @@ public class LauncherBridge
 
     public string Uninstall(string gamePath)
     {
+        if (_w.IsExternalGameActive) return "Launcher read-only saat game berjalan.";
         AppLogger.SetGamePath(gamePath);
         AppLogger.Info("Uninstall started");
         try
@@ -1613,6 +1866,7 @@ public class LauncherBridge
 
     public void RestartAsAdmin()
     {
+        if (_w.IsExternalGameActive) return;
         _w.Dispatcher.Invoke(() =>
         {
             try
@@ -1650,6 +1904,7 @@ public class LauncherBridge
 
     public string ApplyPerformanceConfig(string gamePath, string settingsJson)
     {
+        if (_w.IsExternalGameActive) return "Launcher read-only saat game berjalan.";
         AppLogger.SetGamePath(gamePath);
         AppLogger.Info("Applying performance config");
         try
@@ -1786,6 +2041,7 @@ public class LauncherBridge
 
     public string ClearPerformanceConfig(string gamePath)
     {
+        if (_w.IsExternalGameActive) return "Launcher read-only saat game berjalan.";
         AppLogger.SetGamePath(gamePath);
         AppLogger.Info("Clearing performance config");
         try

@@ -248,13 +248,10 @@ async function loadSettings() {
             }
         } catch(e) {}
     }
-    if (S.gamePath && !S.autoCheckDone && !S.installing) {
-        S.autoCheckDone = true;
-        checkPatchStatus();
-    }
 }
 
 async function browseFolder() {
+    if (S.gameRunning) return false;
     if (bridge()) {
         const p = await bridge().BrowseGameFolder();
         if (p === "?INVALID") {
@@ -391,16 +388,24 @@ function initAudioPlayer() {
         }
     }
 
-    function setVolumeFromSlider(v) {
+    function previewVolumeFromSlider(v) {
         if (audio.muted && v > 0) {
             audio.muted = false;
-            localStorage.setItem('apMuted', '0');
-            persistAudioState({ muted: false });
         }
-        setVolume(v, true);
+        setVolume(v, false);
+    }
+
+    function commitVolumeFromSlider(v) {
+        previewVolumeFromSlider(v);
+        const volume = Math.max(0, Math.min(100, parseInt(v, 10) || 0));
+        localStorage.setItem('apVolume', volume);
+        localStorage.setItem('apVol', volume);
+        localStorage.setItem('apMuted', audio.muted ? '1' : '0');
+        persistAudioState({ volume, muted: audio.muted });
     }
 
     btnPlay?.addEventListener('click', () => {
+        if (S.gameRunning) return;
         if (audio.paused) {
             userWantsPlayback = true;
             localStorage.setItem('apPlaybackState', 'playing');
@@ -417,14 +422,15 @@ function initAudioPlayer() {
     });
 
     btnVolBtn?.addEventListener('click', () => {
+        if (S.gameRunning) return;
         audio.muted = !audio.muted;
         localStorage.setItem('apMuted', audio.muted ? '1' : '0');
         persistAudioState({ muted: audio.muted });
         setVolume(parseInt(volSlider?.value ?? '35', 10) || 0, false);
     });
 
-    volSlider?.addEventListener('input',  () => setVolumeFromSlider(volSlider.value));
-    volSlider?.addEventListener('change', () => setVolumeFromSlider(volSlider.value));
+    volSlider?.addEventListener('input',  () => previewVolumeFromSlider(volSlider.value));
+    volSlider?.addEventListener('change', () => commitVolumeFromSlider(volSlider.value));
 
     audio.addEventListener('play',  () => setPlaying(true));
     audio.addEventListener('pause', () => setPlaying(false));
@@ -432,6 +438,7 @@ function initAudioPlayer() {
     audio.addEventListener('error', () => { console.error('[audio] error', audio.error); setPlaying(false); });
 
     document.addEventListener('click', function onFirstClick() {
+        if (S.gameRunning) return;
         if (userWantsPlayback) ensureAudioLoaded();
         if (userWantsPlayback && audio.paused && audio.src) {
             audio.play().then(() => setPlaying(true)).catch(() => {});
@@ -440,7 +447,7 @@ function initAudioPlayer() {
 
     let _canplayHandler = null;
     function ensureAudioLoaded() {
-        if (!pendingAudioUrl || audio.src) return;
+        if (S.gameRunning || !pendingAudioUrl || audio.src) return;
         audio.src = pendingAudioUrl;
         audio.load();
     }
@@ -449,14 +456,14 @@ function initAudioPlayer() {
         pendingAudioUrl = url;
         if (_canplayHandler) audio.removeEventListener('canplaythrough', _canplayHandler);
         _canplayHandler = () => {
-            if (userWantsPlayback) {
+            if (userWantsPlayback && !S.gameRunning) {
                 audio.play().then(() => setPlaying(true)).catch(() => {});
             } else {
                 setPlaying(false);
             }
         };
         audio.addEventListener('canplaythrough', _canplayHandler, { once: true });
-        if (userWantsPlayback) ensureAudioLoaded();
+        if (userWantsPlayback && !S.gameRunning) ensureAudioLoaded();
     };
 
     window.apApplySavedState = () => {
@@ -464,8 +471,8 @@ function initAudioPlayer() {
         userWantsPlayback = state.playbackState !== 'paused';
         audio.muted = state.muted;
         setVolume(state.volume, false);
-        if (userWantsPlayback) ensureAudioLoaded();
-        if (userWantsPlayback && audio.paused && audio.src) {
+        if (userWantsPlayback && !S.gameRunning) ensureAudioLoaded();
+        if (userWantsPlayback && !S.gameRunning && audio.paused && audio.src) {
             audio.play().then(() => setPlaying(true)).catch(() => {});
         } else if (!userWantsPlayback && !audio.paused) {
             audio.pause();
@@ -477,10 +484,23 @@ function initAudioPlayer() {
         audio.pause();
     };
     window.apResume = () => {
-        if (!resumeAfterSuspend || !userWantsPlayback) return;
+        if (S.gameRunning || !resumeAfterSuspend || !userWantsPlayback) return;
         ensureAudioLoaded();
         audio.play().then(() => setPlaying(true)).catch(() => {});
         resumeAfterSuspend = false;
+    };
+    window.apGameRuntime = active => {
+        if (active) {
+            audio.pause();
+            setPlaying(false);
+            audio.removeAttribute('src');
+            audio.load();
+            return;
+        }
+        if (!userWantsPlayback) return;
+        ensureAudioLoaded();
+        if (audio.src)
+            audio.play().then(() => setPlaying(true)).catch(() => {});
     };
 }
 
