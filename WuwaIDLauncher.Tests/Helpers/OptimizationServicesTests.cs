@@ -162,9 +162,9 @@ public sealed class OptimizationServicesTests : IDisposable
             .Should().Be(Method1Completion.RestoreAndShow);
 
     [Fact]
-    public void Method1_Deadline_RestoresThenCloses() =>
+    public void Method1_Deadline_RestoresThenStaysInTray() =>
         LaunchLifecyclePolicy.Method1(gameRunningAtDeadline: true)
-            .Should().Be(Method1Completion.RestoreAndClose);
+            .Should().Be(Method1Completion.RestoreAndTray);
 
     [Fact]
     public void Method1_RestoreFailure_BlocksClose() =>

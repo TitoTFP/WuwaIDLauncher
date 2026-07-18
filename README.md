@@ -14,7 +14,14 @@ Launcher mempermudah instalasi patch Bahasa Indonesia untuk Wuthering Waves.
 - **Manajemen Patch:** Instal, perbarui, atau hapus patch Bahasa Indonesia dengan sekali klik.
 - **Deteksi Otomatis:** Mencari dan mengenali jalur folder instalasi game secara otomatis.
 - **Bermain Langsung:** Jalankan Wuthering Waves langsung melalui launcher.
+- **Tray Hemat Resource:** Saat game berjalan, launcher bersembunyi ke tray dengan WebView2 suspended sambil mempertahankan heartbeat pemain aktif.
 - **Hak Akses Admin:** Opsi memuat ulang aplikasi dengan hak Administrator jika diperlukan (melalui menu ⋯ → Jalankan sebagai Administrator).
+
+## Mode Tray
+
+Game yang dijalankan melalui launcher otomatis memindahkan launcher ke system tray. Klik dua kali ikon tray atau pilih **Buka Launcher** untuk menampilkan UI read-only mode `Mati`. Setelah game keluar, launcher tampil kembali dan memulihkan profil tersimpan. Pilihan **Keluar** menghentikan launcher dan heartbeat, tetapi diblokir selama pemulihan signature masih wajib diselesaikan.
+
+Heartbeat anonim tetap dikirim setiap 5 menit selama launcher hidup, termasuk ketika visible, tray, atau mendeteksi game eksternal. Media, animasi, patch check, release notes, dan network latar belakang lain tetap dihentikan selama game aktif.
 
 ## Persyaratan Sistem
 
@@ -40,7 +47,7 @@ Ukur `CleanEveryRun`, `CleanFirst`, dan enam warm run. CSV mencatat `ui_interact
 
 Jalankan matriks sama untuk `publish/benchmark/uncompressed`. Jadikan uncompressed default hanya bila median enam warm run minimal 10% lebih cepat dan median clean startup tidak regresi lebih dari 5%.
 
-Untuk dampak ke game, rekam skenario launcher tertutup dan launcher visible/`Mati` dengan PresentMon pada rute, preset, resolusi, dan durasi identik. Simpan CSV proses `Client-Win64-Shipping.exe`, lalu bandingkan GPU busy, P99 frametime, dan 1% low. Lulus bila CPU/GPU launcher masing-masing di bawah 1% dan P99/1% low game tidak memburuk lebih dari 2%.
+Untuk dampak ke game, rekam skenario launcher tertutup dan launcher `tray-suspended` dengan PresentMon pada rute, preset, resolusi, dan durasi identik. Simpan CSV proses `Client-Win64-Shipping.exe`, lalu bandingkan GPU busy, P99 frametime, 1% low, working set launcher, dan private bytes. Lulus bila CPU/GPU launcher masing-masing di bawah 1%, working set tray turun minimal 25% dari visible-full, dan P99/1% low game tidak memburuk lebih dari 2%.
 
 ## Kredit
 

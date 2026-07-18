@@ -382,6 +382,26 @@ if ! rg -n 'WatchExternalGameAsync' MainWindow.xaml.cs >/dev/null ||
   fail "launcher must watch and publish external game runtime state"
 fi
 
+if ! rg -n '<UseWindowsForms>true</UseWindowsForms>' WuwaIDLauncher.csproj >/dev/null ||
+   ! rg -n 'System\.Windows\.Forms\.NotifyIcon' MainWindow.xaml.cs >/dev/null ||
+   ! rg -n 'TrySuspendAsync' MainWindow.xaml.cs >/dev/null; then
+  fail "game launch must use native tray mode with suspended WebView2"
+fi
+
+monitor_code="$(sed -n '/async Task MonitorMethod1Async/,/bool TryRestoreSignature/p' MainWindow.xaml.cs)"
+if printf '%s\n' "$monitor_code" | rg -n 'Application\.Current\.Shutdown|Environment\.Exit' >/dev/null; then
+  fail "game launch monitors must not auto-close the launcher"
+fi
+
+if ! rg -n 'CancelRuntimeWork\(\);' MainWindow.xaml.cs >/dev/null ||
+   ! rg -n 'SendLaunchHeartbeatAsync\(method\)' MainWindow.xaml.cs >/dev/null; then
+  fail "game runtime must cancel deferred work while preserving heartbeat"
+fi
+
+if ! rg -n "classList\.toggle\('game-runtime-readonly', S\.gameRunning\)" Resources/Web/script-core.js >/dev/null; then
+  fail "read-only runtime guard must cover internal and external games"
+fi
+
 if ! rg -n 'PatchState\.Cached' OptimizationServices.cs >/dev/null ||
    ! rg -n 'IsRefreshing' OptimizationServices.cs >/dev/null ||
    ! rg -n 'patch_ready' MainWindow.xaml.cs >/dev/null; then

@@ -121,13 +121,13 @@ internal static class PatchStatusEvaluator
 internal enum Method1Completion
 {
     RestoreAndShow,
-    RestoreAndClose
+    RestoreAndTray
 }
 
 internal static class LaunchLifecyclePolicy
 {
     internal static Method1Completion Method1(bool gameRunningAtDeadline) =>
-        gameRunningAtDeadline ? Method1Completion.RestoreAndClose : Method1Completion.RestoreAndShow;
+        gameRunningAtDeadline ? Method1Completion.RestoreAndTray : Method1Completion.RestoreAndShow;
 
     internal static bool MayCloseAfterSignatureRestore(bool restoreSucceeded) => restoreSucceeded;
 

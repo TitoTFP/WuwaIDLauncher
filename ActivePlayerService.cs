@@ -11,20 +11,26 @@ internal static class ActivePlayerService
     internal const string ActiveHeartbeatEndpoint = "https://logs.titotfp.my.id/api/active/heartbeat";
     static readonly TimeSpan HeartbeatInterval = TimeSpan.FromMinutes(5);
     static readonly object Gate = new();
-    static Timer? _timer;
+    static System.Threading.Timer? _timer;
     static CancellationTokenSource? _work;
+    static string _installMethod = "method1";
 
     internal static void Start(string? installMethod = null)
     {
+        CancellationToken token;
+        string method;
         lock (Gate)
         {
+            method = installMethod == null
+                ? Volatile.Read(ref _installMethod)
+                : NormalizeInstallMethod(installMethod);
+            if (installMethod != null)
+                Volatile.Write(ref _installMethod, method);
             if (_timer != null) return;
-            var work = _work = new CancellationTokenSource();
-            var token = work.Token;
-            _ = SendHeartbeatAsync("open", installMethod, token);
-            _timer = new Timer(_ => _ = SendHeartbeatAsync("heartbeat", installMethod, token),
-                null, HeartbeatInterval, HeartbeatInterval);
+            token = EnsureTimerLocked();
         }
+
+        _ = SendHeartbeatAsync("open", method, token);
     }
 
     internal static void Stop()
@@ -39,8 +45,32 @@ internal static class ActivePlayerService
         }
     }
 
-    internal static Task SendLaunchHeartbeatAsync(string? installMethod) =>
-        SendHeartbeatAsync("launch", installMethod);
+    internal static Task SendLaunchHeartbeatAsync(string? installMethod)
+    {
+        CancellationToken token;
+        string method;
+        lock (Gate)
+        {
+            method = NormalizeInstallMethod(installMethod);
+            Volatile.Write(ref _installMethod, method);
+            token = EnsureTimerLocked();
+        }
+
+        return SendHeartbeatAsync("launch", method, token);
+    }
+
+    static CancellationToken EnsureTimerLocked()
+    {
+        if (_timer != null)
+            return _work!.Token;
+
+        var work = _work = new CancellationTokenSource();
+        _timer = new System.Threading.Timer(
+            _ => _ = SendHeartbeatAsync(
+                "heartbeat", Volatile.Read(ref _installMethod), work.Token),
+            null, HeartbeatInterval, HeartbeatInterval);
+        return work.Token;
+    }
 
     internal static async Task SendHeartbeatAsync(string eventName, string? installMethod, CancellationToken cancellationToken = default)
     {
