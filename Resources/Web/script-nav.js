@@ -55,14 +55,18 @@ function updateMethodMenu() {
     });
 }
 
-let _adminCheckDone = false;
-
-async function checkAdminIfNeeded() {
-    if (_adminCheckDone || !S.gamePath || !bridge()) return;
-    _adminCheckDone = true;
+async function checkAdminIfNeeded(forInstallation) {
+    if (!S.gamePath || !bridge()) return true;
     try {
-        const result = await bridge().CheckGameFolderWriteAccess(S.gamePath);
-        if (result !== 'admin_required') return;
+        const result = await bridge().CheckGameFolderWriteAccess(
+            S.gamePath, S.cfg.installMethod || 'method1', !!forInstallation);
+        if (result === 'ok') return true;
+        if (result !== 'admin_required') {
+            toast(result === 'invalid_path'
+                ? 'Direktori game tidak valid.'
+                : 'Gagal memeriksa izin tulis folder game.', 'err');
+            return false;
+        }
 
         const pathEl = document.getElementById('adminModalPath');
         if (pathEl) pathEl.textContent = S.gamePath;
@@ -71,7 +75,10 @@ async function checkAdminIfNeeded() {
         if (ok && bridge()) {
             bridge().RestartAsAdmin();
         }
-    } catch(e) {}
+    } catch(e) {
+        toast('Gagal memeriksa izin tulis folder game.', 'err');
+    }
+    return false;
 }
 
 function showAdminModal() {

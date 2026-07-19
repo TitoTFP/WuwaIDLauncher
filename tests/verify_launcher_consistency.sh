@@ -119,6 +119,25 @@ if ! rg -n 'Verb = "runas"' MainWindow.xaml.cs >/dev/null; then
   fail "game launch must use runas like PT-BR launcher"
 fi
 
+if ! rg -n 'Arguments = \$"--restart-from \{Environment\.ProcessId\} \{App\.WebView2BrowserPid\}"' MainWindow.xaml.cs >/dev/null ||
+   ! rg -n 'WaitForRestartHandoff\(e\.Args\)' App.xaml.cs >/dev/null ||
+   ! rg -n 'process\.WaitForExit\(\)' App.xaml.cs >/dev/null; then
+  fail "admin restart must wait for the old launcher and WebView2 processes"
+fi
+
+if ! rg -n 'CheckGameFolderWriteAccess\(string gamePath, string installMethod, bool forInstallation\)' MainWindow.xaml.cs >/dev/null ||
+   ! rg -n '\.wuwaid-write-test-\{Guid\.NewGuid\(\):N\}\.tmp' MainWindow.xaml.cs >/dev/null ||
+   ! rg -n 'await checkAdminIfNeeded\(false\)' Resources/Web/script-home.js >/dev/null ||
+   ! rg -n 'await checkAdminIfNeeded\(true\)' Resources/Web/script-home.js >/dev/null; then
+  fail "launcher must probe exact game folders before install or launch"
+fi
+
+if ! rg -n 'needsAdmin = ex is UnauthorizedAccessException' MainWindow.xaml.cs >/dev/null ||
+   ! rg -n 'Game launch needs admin permission' MainWindow.xaml.cs >/dev/null ||
+   ! rg -n 'if\(window\.onAdminRequired\) window\.onAdminRequired\(\)' MainWindow.xaml.cs >/dev/null; then
+  fail "game launch permission failures must offer an admin restart"
+fi
+
 if ! rg -n 'Arguments = dx11 \? "-dx11" : ""' MainWindow.xaml.cs >/dev/null; then
   fail "game launch must only pass -dx11 when selected and no args otherwise"
 fi
@@ -379,9 +398,9 @@ if ! rg -n 'UploadLogs\(S\.gamePath' Resources/Web/script-misc.js >/dev/null; th
   fail "manual log upload must pass selected game path"
 fi
 
-if ! rg -n '<Version>2\.6\.0</Version>' WuwaIDLauncher.csproj >/dev/null ||
+if ! rg -n '<Version>2\.6\.1</Version>' WuwaIDLauncher.csproj >/dev/null ||
    ! rg -n '<Deterministic>true</Deterministic>' WuwaIDLauncher.csproj >/dev/null; then
-  fail "launcher release must be deterministic version 2.6.0"
+  fail "launcher release must be deterministic version 2.6.1"
 fi
 
 if rg -n 'OPAQUE_WINDOW_BENCHMARK|UseOpaqueWindowBenchmark' WuwaIDLauncher.csproj MainWindow.xaml.cs README.md >/dev/null; then

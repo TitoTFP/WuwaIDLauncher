@@ -92,12 +92,15 @@ async function handleStart() {
     if (!S.gamePath || S.patchState === 'invalid_path') {
         if (!await browseFolder()) return;
     }
-    if (S.installed) { launchGame(); return; }
+    if (S.installed) {
+        if (await checkAdminIfNeeded(false)) launchGame();
+        return;
+    }
     if (S.patchState === 'offline' || S.patchState === 'error') {
         checkPatchStatus(false);
         return;
     }
-    startInstall();
+    if (await checkAdminIfNeeded(true)) startInstall();
 }
 
 function startInstall() {

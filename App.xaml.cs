@@ -26,6 +26,7 @@ public partial class App : Application
     {
         AppLogger.Initialize(WuwaIDLauncher.MainWindow.AppDataFolder);
         AppLogger.Info("Startup milestone: process_start elapsed_ms=0");
+        WaitForRestartHandoff(e.Args);
         
         if (Debugger.IsAttached || IsDebuggerPresent())
         {
@@ -95,6 +96,28 @@ public partial class App : Application
             AppLogger.Exception(ex, "Main window startup failed");
             MessageBox.Show($"Lỗi khởi tạo: {ex.Message}");
             Shutdown(1);
+        }
+    }
+
+    static void WaitForRestartHandoff(string[] args)
+    {
+        if (args.Length != 3 || args[0] != "--restart-from") return;
+
+        foreach (var value in args[1..])
+        {
+            if (!int.TryParse(value, out var pid) || pid <= 0 || pid == Environment.ProcessId)
+                continue;
+
+            try
+            {
+                using var process = Process.GetProcessById(pid);
+                process.WaitForExit();
+            }
+            catch (ArgumentException) { }
+            catch (Exception ex)
+            {
+                AppLogger.Exception(ex, "Failed waiting for restart handoff process " + pid);
+            }
         }
     }
 

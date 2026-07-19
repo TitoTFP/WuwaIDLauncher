@@ -831,6 +831,42 @@ public partial class MainWindow : Window
     static bool UsesManualLoaderMethod(string? installMethod) =>
         NormalizeInstallMethod(installMethod) == "method2";
 
+    internal string CheckGameFolderWriteAccess(string gamePath, string installMethod, bool forInstallation)
+    {
+        AppLogger.SetGamePath(gamePath);
+        var method = NormalizeInstallMethod(installMethod);
+        var baseDir = Helpers.GameBinaryFolderPath(gamePath);
+        if (!Directory.Exists(baseDir)) return "invalid_path";
+        if (!forInstallation && UsesManualLoaderMethod(method)) return "ok";
+
+        var pakDir = UsesManualLoaderMethod(method)
+            ? Helpers.Method2PakFolderPath(gamePath)
+            : Helpers.PakFolderPath(gamePath);
+        var directories = forInstallation ? new[] { baseDir, pakDir } : new[] { pakDir };
+
+        try
+        {
+            foreach (var dir in directories.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                Directory.CreateDirectory(dir);
+                var testFile = Path.Combine(dir, $".wuwaid-write-test-{Guid.NewGuid():N}.tmp");
+                try { File.WriteAllText(testFile, "test"); }
+                finally { File.Delete(testFile); }
+            }
+            return "ok";
+        }
+        catch (UnauthorizedAccessException)
+        {
+            AppLogger.Warn("Game folder write access requires admin permission");
+            return "admin_required";
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Exception(ex, "Game folder write access check failed");
+            return "error";
+        }
+    }
+
     internal async Task RunInstallation(string gamePath, string vhMode, bool backup, string installMethod = "method1")
     {
         AppLogger.SetGamePath(gamePath);
@@ -838,42 +874,18 @@ public partial class MainWindow : Window
         AppLogger.Info("Installation started; mode=" + vhMode + "; backup=" + backup + "; installMethod=" + method);
         try
         {
-            var baseDir = Helpers.GameBinaryFolderPath(gamePath);
-            var pakDir = UsesManualLoaderMethod(method)
-                ? Helpers.Method2PakFolderPath(gamePath)
-                : Path.Combine(gamePath, PakFolderRelativePath);
-            
-            if (!Directory.Exists(baseDir))
-            {
-                AppLogger.Warn("Game directory missing: " + baseDir);
+            var writeAccess = CheckGameFolderWriteAccess(gamePath, method, forInstallation: true);
+            if (writeAccess == "invalid_path")
                 throw new Exception("Direktori game tidak ditemukan. Silakan periksa kembali pathnya.");
-            }
-
-            try
+            if (writeAccess == "admin_required")
             {
-                var writeCheckDirs = UsesManualLoaderMethod(method)
-                    ? new[] { baseDir, pakDir }
-                    : new[] { pakDir };
-
-                foreach (var dir in writeCheckDirs.Distinct(StringComparer.OrdinalIgnoreCase))
-                {
-                    Directory.CreateDirectory(dir);
-                    var testFile = Path.Combine(dir, "vh_write_test.tmp");
-                    File.WriteAllText(testFile, "test");
-                    File.Delete(testFile);
-                }
-            }
-            catch (UnauthorizedAccessException)
-            {
-                AppLogger.Warn("Installation needs admin permission for pak directory: " + pakDir);
                 RunScript("if(window.onAdminRequired) window.onAdminRequired(); else window.onInstallError('Folder game dikunci oleh Windows. Jalankan Launcher sebagai Admin.');");
                 return;
             }
-            catch (Exception ex)
-            {
-                AppLogger.Exception(ex, "Pak directory write test failed");
-                throw new Exception("Tidak dapat menulis file ke direktori game: " + ex.Message);
-            }
+            if (writeAccess != "ok")
+                throw new Exception("Tidak dapat memeriksa izin tulis direktori game.");
+
+            var baseDir = Helpers.GameBinaryFolderPath(gamePath);
 
             if (UsesManualLoaderMethod(method))
             {
@@ -1378,6 +1390,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            var needsAdmin = ex is UnauthorizedAccessException;
             AppLogger.Exception(ex, "Game launch failed");
             _gameProcessRunning = false;
             var restored = true;
@@ -1399,7 +1412,15 @@ public partial class MainWindow : Window
                 RunScript("window.onGameLaunchFinished()");
             NotifyGameRuntimeState(activeAfterFailure, activeAfterFailure ? "external" : "launcher");
             RestoreLauncherWindow();
-            RunScript($"window.onInstallError({JsStr("Gagal menjalankan game: " + ex.Message)})");
+            if (needsAdmin)
+            {
+                AppLogger.Warn("Game launch needs admin permission");
+                RunScript("if(window.onAdminRequired) window.onAdminRequired(); else window.onInstallError('Folder game dikunci oleh Windows. Jalankan Launcher sebagai Admin.');");
+            }
+            else
+            {
+                RunScript($"window.onInstallError({JsStr("Gagal menjalankan game: " + ex.Message)})");
+            }
             if (!restored)
                 RunScript("window.onGameLaunchWaitingRestore()");
             else if (!activeAfterFailure && _uiInteractive)
@@ -1932,6 +1953,11 @@ public class LauncherBridge
             Task.Run(() => _w.RunInstallation(gamePath, vhMode, backup, installMethod));
     }
 
+    public string CheckGameFolderWriteAccess(string gamePath, string installMethod, bool forInstallation) =>
+        _w.IsGameRuntimeActive
+            ? "game_running"
+            : _w.CheckGameFolderWriteAccess(gamePath, installMethod, forInstallation);
+
     public void LaunchGame(string gamePath, bool dx11, string installMethod) =>
         _w.LaunchGame(gamePath, dx11, installMethod);
 
@@ -1998,6 +2024,7 @@ public class LauncherBridge
                     Process.Start(new ProcessStartInfo
                     {
                         FileName = exe,
+                        Arguments = $"--restart-from {Environment.ProcessId} {App.WebView2BrowserPid}",
                         UseShellExecute = true,
                         Verb = "runas"
                     });
