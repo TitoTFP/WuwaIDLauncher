@@ -105,10 +105,7 @@ internal static class ActivePlayerService
             ["event"] = string.IsNullOrWhiteSpace(eventName) ? "heartbeat" : eventName
         });
 
-    internal static string NormalizeInstallMethod(string? installMethod) =>
-        string.Equals(installMethod, "method2", StringComparison.OrdinalIgnoreCase)
-            ? "method2"
-            : "method1";
+    internal static string NormalizeInstallMethod(string? installMethod) => InstallMethods.Normalize(installMethod);
 
     static string GetOrCreateClientId()
     {

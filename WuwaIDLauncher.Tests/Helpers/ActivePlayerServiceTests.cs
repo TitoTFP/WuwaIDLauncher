@@ -26,6 +26,8 @@ public class ActivePlayerServiceTests
     public void NormalizeInstallMethod_OnlyAllowsKnownMethods()
     {
         ActivePlayerService.NormalizeInstallMethod("method2").Should().Be("method2");
+        ActivePlayerService.NormalizeInstallMethod("method3").Should().Be("method3");
+        ActivePlayerService.NormalizeInstallMethod("METHOD3").Should().Be("method3");
         ActivePlayerService.NormalizeInstallMethod("anything").Should().Be("method1");
         ActivePlayerService.NormalizeInstallMethod(null).Should().Be("method1");
     }

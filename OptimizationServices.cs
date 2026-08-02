@@ -247,8 +247,7 @@ internal static class PatchStatusEvaluator
         }
     }
 
-    internal static string NormalizeInstallMethod(string? method) =>
-        string.Equals(method, "method2", StringComparison.OrdinalIgnoreCase) ? "method2" : "method1";
+    internal static string NormalizeInstallMethod(string? method) => InstallMethods.Normalize(method);
 }
 
 internal enum Method1Completion

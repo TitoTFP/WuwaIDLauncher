@@ -578,6 +578,28 @@ public partial class MainWindow : Window
         var cancellationToken = GetRuntimeWorkToken();
         AppLogger.SetGamePath(gamePath);
         var method = NormalizeInstallMethod(installMethod);
+        ResourceMountPlan? resourcePlan = null;
+        if (UsesResourceMountMethod(method))
+        {
+            if (!ResourceMountInstaller.TryProbe(gamePath, out resourcePlan, out var error))
+            {
+                PublishPatchStatus(PatchStatusResult.From(PatchState.NotInstalled, false, error), method, requestId);
+                return;
+            }
+            if (resourcePlan!.Conflicts.Count > 0)
+            {
+                PublishPatchStatus(PatchStatusResult.From(PatchState.Error, false,
+                    "Konflik mod terdeteksi: " + string.Join(", ", resourcePlan.Conflicts)), method, requestId);
+                return;
+            }
+            if (!ResourceMountInstaller.IsManaged(resourcePlan))
+            {
+                PublishPatchStatus(PatchStatusResult.From(PatchState.NotInstalled, false,
+                    "Resource Mount belum terpasang lengkap atau belum tervalidasi."), method, requestId);
+                return;
+            }
+        }
+
         var versionCachePath = Path.Combine(AppDataFolder, "versions.json");
         var localCache = PatchStatusEvaluator.ReadVersionCache(versionCachePath);
         var assets = ExpectedPatchAssets(gamePath, method, localCache, useCachedFingerprint: true);
@@ -621,6 +643,8 @@ public partial class MainWindow : Window
             result = PatchStatusResult.From(PatchState.Error, false, "Gagal memeriksa status patch.");
         }
 
+        if (resourcePlan != null && !ResourceMountInstaller.IsManaged(resourcePlan))
+            result = PatchStatusResult.From(PatchState.NotInstalled, false, "Resource Mount tidak lagi lengkap atau belum tervalidasi.");
         PublishPatchStatus(result, method, requestId);
     }
 
@@ -643,7 +667,8 @@ public partial class MainWindow : Window
         IReadOnlyDictionary<string, string> localCache,
         bool useCachedFingerprint)
     {
-        var names = UsesManualLoaderMethod(method)
+        var normalizedMethod = NormalizeInstallMethod(method);
+        var names = UsesManualLoaderMethod(normalizedMethod)
             ? new[] { PakFileName, Helpers.WinHttpLoaderFileName }
             : new[] { PakFileName };
 
@@ -651,9 +676,11 @@ public partial class MainWindow : Window
             name,
             name.Equals(Helpers.WinHttpLoaderFileName, StringComparison.OrdinalIgnoreCase)
                 ? Helpers.Method2LoaderPath(gamePath)
-                : UsesManualLoaderMethod(method)
-                    ? Helpers.Method2PakPath(gamePath)
-                    : Helpers.Method1PakPath(gamePath),
+                : UsesResourceMountMethod(normalizedMethod)
+                    ? ResourceMountInstaller.ExpectedPakPath(gamePath)
+                    : UsesManualLoaderMethod(normalizedMethod)
+                        ? Helpers.Method2PakPath(gamePath)
+                        : Helpers.Method1PakPath(gamePath),
             useCachedFingerprint && localCache.TryGetValue(name, out var fingerprint) ? fingerprint : ""
         )).ToList();
     }
@@ -823,13 +850,13 @@ public partial class MainWindow : Window
     }
 
 
-    static string NormalizeInstallMethod(string? installMethod) =>
-        string.Equals(installMethod, "method2", StringComparison.OrdinalIgnoreCase)
-            ? "method2"
-            : "method1";
+    static string NormalizeInstallMethod(string? installMethod) => InstallMethods.Normalize(installMethod);
 
-    static bool UsesManualLoaderMethod(string? installMethod) =>
-        NormalizeInstallMethod(installMethod) == "method2";
+    static bool UsesManualLoaderMethod(string? installMethod) => InstallMethods.UsesManualLoader(installMethod);
+
+    static bool UsesResourceMountMethod(string? installMethod) => InstallMethods.UsesResourceMount(installMethod);
+
+    static bool RequiresSignatureBypass(string? installMethod) => InstallMethods.RequiresSignatureBypass(installMethod);
 
     internal string CheckGameFolderWriteAccess(string gamePath, string installMethod, bool forInstallation)
     {
@@ -837,15 +864,28 @@ public partial class MainWindow : Window
         var method = NormalizeInstallMethod(installMethod);
         var baseDir = Helpers.GameBinaryFolderPath(gamePath);
         if (!Directory.Exists(baseDir)) return "invalid_path";
-        if (!forInstallation && UsesManualLoaderMethod(method)) return "ok";
-
-        var pakDir = UsesManualLoaderMethod(method)
-            ? Helpers.Method2PakFolderPath(gamePath)
-            : Helpers.PakFolderPath(gamePath);
-        var directories = forInstallation ? new[] { baseDir, pakDir } : new[] { pakDir };
 
         try
         {
+            if (UsesResourceMountMethod(method))
+            {
+                if (!ResourceMountInstaller.TryProbe(gamePath, out var plan, out _))
+                    return "resource_unavailable";
+                if (plan!.Conflicts.Count > 0)
+                    return "conflict";
+                if (!forInstallation)
+                    return ResourceMountInstaller.IsManaged(plan) ? "ok" : "resource_unavailable";
+
+                ResourceMountInstaller.EnsureWritable(plan);
+                return "ok";
+            }
+
+            if (!forInstallation && UsesManualLoaderMethod(method)) return "ok";
+
+            var pakDir = UsesManualLoaderMethod(method)
+                ? Helpers.Method2PakFolderPath(gamePath)
+                : Helpers.PakFolderPath(gamePath);
+            var directories = forInstallation ? new[] { baseDir, pakDir } : new[] { pakDir };
             foreach (var dir in directories.Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 Directory.CreateDirectory(dir);
@@ -882,8 +922,18 @@ public partial class MainWindow : Window
                 RunScript("if(window.onAdminRequired) window.onAdminRequired(); else window.onInstallError('Folder game dikunci oleh Windows. Jalankan Launcher sebagai Admin.');");
                 return;
             }
+            if (writeAccess == "resource_unavailable")
+                throw new Exception("Resource game belum siap untuk Resource Mount.");
+            if (writeAccess == "conflict")
+                throw new Exception("Konflik mod terdeteksi pada Resource Mount.");
             if (writeAccess != "ok")
                 throw new Exception("Tidak dapat memeriksa izin tulis direktori game.");
+
+            if (UsesResourceMountMethod(method))
+            {
+                await RunResourceMountInstallation(gamePath);
+                return;
+            }
 
             var baseDir = Helpers.GameBinaryFolderPath(gamePath);
 
@@ -1103,6 +1153,123 @@ public partial class MainWindow : Window
         }
     }
 
+    async Task RunResourceMountInstallation(string gamePath)
+    {
+        if (Helpers.IsGameRunning())
+            throw new InvalidOperationException("Tutup game sebelum memasang Resource Mount.");
+
+        var plan = ResourceMountInstaller.Probe(gamePath);
+        AppLogger.Info("Resource Mount dry-run passed; version=" + plan.ResourceVersion);
+        if (plan.Conflicts.Count > 0)
+            throw new InvalidDataException("Konflik mod terdeteksi: " + string.Join(", ", plan.Conflicts));
+
+        var http = LauncherHttp.Client;
+        using var timeout = LauncherHttp.TimeoutAfter(TimeSpan.FromMinutes(10), _shutdown.Token);
+        var checksum = RequiredChecksum(await GetReleaseChecksums(http, timeout.Token), PakFileName);
+        var versionCachePath = Path.Combine(AppDataFolder, "versions.json");
+        var localCache = PatchStatusEvaluator.ReadVersionCache(versionCachePath);
+
+        if (ResourceMountInstaller.IsManaged(plan) && Helpers.VerifySha256(plan.PakPath, checksum))
+        {
+            PatchAssetCache.RecordVerified(localCache, new PatchAssetStatus(PakFileName, plan.PakPath, checksum));
+            localCache["_vhVersion"] = "latest";
+            localCache["_installMethod"] = InstallMethods.Method3;
+            File.WriteAllText(versionCachePath, JsonSerializer.Serialize(localCache));
+            ResourceMountInstaller.CleanupInactiveVersions(gamePath, plan.ResourceVersion);
+            CleanupInactiveMethodFiles(gamePath, InstallMethods.Method3);
+            RunScript($"window.onProgressUpdate(100, {JsStr("Anda sudah menggunakan versi terbaru!")}, '', '')");
+            await Task.Delay(1000);
+            RunScript("window.onInstallComplete()");
+            return;
+        }
+
+        Directory.CreateDirectory(CacheFolder);
+        var stagedPak = Path.Combine(CacheFolder, $"resource-mount-{Guid.NewGuid():N}.pak");
+        try
+        {
+            var reused = new[] { plan.PakPath, Helpers.Method1PakPath(gamePath), Helpers.Method2PakPath(gamePath) }
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Any(path => PatchAssetCache.TryCopyVerified(path, stagedPak, checksum));
+            if (reused)
+            {
+                AppLogger.Info("Reused verified pak for Resource Mount");
+                RunScript($"window.onProgressUpdate(100, {JsStr("Menggunakan file patch yang sudah ada...")}, '', '')");
+            }
+            else
+            {
+                var url = WuwaIDLatestDownloadBaseUrl + Uri.EscapeDataString(PakFileName);
+                var size = await GetReleaseAssetSize(http, url, timeout.Token);
+                await DownloadResourceMountPakAsync(http, url, stagedPak, size, timeout.Token);
+            }
+
+            ResourceMountInstaller.Install(plan, stagedPak, checksum);
+            PatchAssetCache.RecordVerified(localCache, new PatchAssetStatus(PakFileName, plan.PakPath, checksum));
+            localCache["_vhVersion"] = "latest";
+            localCache["_installMethod"] = InstallMethods.Method3;
+            File.WriteAllText(versionCachePath, JsonSerializer.Serialize(localCache));
+            var cleaned = ResourceMountInstaller.CleanupInactiveVersions(gamePath, plan.ResourceVersion);
+            if (cleaned > 0)
+                AppLogger.Info("Cleaned stale Resource Mount artifacts: " + cleaned);
+            CleanupInactiveMethodFiles(gamePath, InstallMethods.Method3);
+
+            AppLogger.Info("Resource Mount installation completed");
+            RunScript($"window.onProgressUpdate(100, {JsStr("Instalasi Resource Mount selesai!")}, '', '')");
+            await Task.Delay(1000);
+            RunScript("window.onInstallComplete()");
+        }
+        finally
+        {
+            if (File.Exists(stagedPak)) File.Delete(stagedPak);
+            if (File.Exists(stagedPak + ".tmp")) File.Delete(stagedPak + ".tmp");
+            if (File.Exists(stagedPak + ".reuse.tmp")) File.Delete(stagedPak + ".reuse.tmp");
+        }
+    }
+
+    async Task DownloadResourceMountPakAsync(
+        HttpClient http, string url, string destination, long expectedSize, CancellationToken cancellationToken)
+    {
+        var temporary = destination + ".tmp";
+        try
+        {
+            using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            await using var network = await response.Content.ReadAsStreamAsync(cancellationToken);
+            long downloaded = 0;
+            await using (var file = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true))
+            {
+                var buffer = new byte[65536];
+                long lastDownloaded = 0;
+                var stopwatch = Stopwatch.StartNew();
+                int read;
+                while ((read = await network.ReadAsync(buffer, cancellationToken)) > 0)
+                {
+                    await file.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                    downloaded += read;
+                    if (stopwatch.ElapsedMilliseconds < 350)
+                        continue;
+
+                    var percent = expectedSize > 0 ? (int)(downloaded * 100 / expectedSize) : 0;
+                    var speed = (downloaded - lastDownloaded) / stopwatch.Elapsed.TotalSeconds / 1_048_576.0;
+                    var progress = expectedSize > 0
+                        ? $"{downloaded / 1_048_576.0:F1} / {expectedSize / 1_048_576.0:F1} MB"
+                        : $"{downloaded / 1_048_576.0:F1} MB";
+                    RunScript($"window.onProgressUpdate({percent}, {JsStr($"Mengunduh: {PakFileName}")}, {JsStr($"{speed:F1} MB/s")}, {JsStr(progress)})");
+                    lastDownloaded = downloaded;
+                    stopwatch.Restart();
+                }
+                await file.FlushAsync(cancellationToken);
+            }
+
+            if (expectedSize > 0 && downloaded != expectedSize)
+                throw new IOException("Ukuran PAK yang diunduh tidak sesuai.");
+            File.Move(temporary, destination, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary)) File.Delete(temporary);
+        }
+    }
+
     static async Task<long> GetReleaseAssetSize(
         HttpClient http, string url, CancellationToken cancellationToken = default)
     {
@@ -1163,6 +1330,18 @@ public partial class MainWindow : Window
 
     static void CleanupInactiveMethodFiles(string gamePath, string method)
     {
+        if (UsesResourceMountMethod(method))
+        {
+            var method1PakPath = Helpers.Method1PakPath(gamePath);
+            if (File.Exists(method1PakPath))
+                File.Delete(method1PakPath);
+            Helpers.DeleteManualLoaderFiles(gamePath);
+            Helpers.DeleteLegacyPakFile(gamePath);
+            Helpers.RestoreSigBackup(gamePath);
+            return;
+        }
+
+        ResourceMountInstaller.RemoveAllOwnedArtifacts(gamePath);
         if (UsesManualLoaderMethod(method))
         {
             var method1PakPath = Helpers.Method1PakPath(gamePath);
@@ -1240,9 +1419,9 @@ public partial class MainWindow : Window
         FinishInternalLaunch(showWindow: true);
     }
 
-    async Task MonitorMethod2Async()
+    async Task MonitorNoBypassMethodAsync()
     {
-        AppLogger.Info("Method 2 stable-start monitor started");
+        AppLogger.Info("No-bypass launch monitor started");
         var started = await LaunchLifecyclePolicy.WaitForStableGameStartAsync(
             Helpers.IsGameRunning,
             TimeSpan.FromMilliseconds(500),
@@ -1251,13 +1430,13 @@ public partial class MainWindow : Window
 
         if (started)
         {
-            AppLogger.Info("Method 2 game detected twice; monitoring game from tray");
+            AppLogger.Info("No-bypass game detected twice; monitoring game from tray");
             await WaitForGameExitAsync(null, _shutdown.Token);
             FinishInternalLaunch(showWindow: true);
             return;
         }
 
-        AppLogger.Warn("Method 2 game start timed out");
+        AppLogger.Warn("No-bypass game start timed out");
         FinishInternalLaunch(showWindow: true);
         RunScript($"window.onInstallError({JsStr("Game tidak terdeteksi dalam 30 detik. Launcher dipulihkan.")})");
     }
@@ -1342,10 +1521,24 @@ public partial class MainWindow : Window
                 return;
             }
 
+            if (UsesResourceMountMethod(method))
+            {
+                if (!ResourceMountInstaller.TryProbe(gamePath, out var plan, out var error) ||
+                    !ResourceMountInstaller.IsManaged(plan!))
+                {
+                    var message = string.IsNullOrWhiteSpace(error)
+                        ? "Resource Mount belum tervalidasi. Pasang ulang Metode 3 terlebih dahulu."
+                        : error;
+                    AppLogger.Warn("Resource Mount launch validation failed: " + message);
+                    RunScript($"window.onInstallError({JsStr(message)})");
+                    return;
+                }
+            }
+
             var full = Path.Combine(gamePath, @"Client\Binaries\Win64", GameExeName);
             if (File.Exists(full))
             {
-                if (!UsesManualLoaderMethod(method))
+                if (RequiresSignatureBypass(method))
                 {
                     Helpers.RestoreSigBackup(gamePath);
 
@@ -1360,7 +1553,7 @@ public partial class MainWindow : Window
                 }
 
                 _launchInProgress = true;
-                _signatureRestorePending = !UsesManualLoaderMethod(method);
+                _signatureRestorePending = RequiresSignatureBypass(method);
                 _gameProcessRunning = true;
                 _launchGamePath = gamePath;
 
@@ -1378,9 +1571,9 @@ public partial class MainWindow : Window
                 RunScript("window.onGameLaunchStarted()");
                 NotifyGameRuntimeState(true, "launcher");
                 HideLauncherToTray(notify: true);
-                _ = UsesManualLoaderMethod(method)
-                    ? MonitorMethod2Async()
-                    : MonitorMethod1Async(gamePath, process);
+                _ = RequiresSignatureBypass(method)
+                    ? MonitorMethod1Async(gamePath, process)
+                    : MonitorNoBypassMethodAsync();
             }
             else
             {
@@ -1394,7 +1587,7 @@ public partial class MainWindow : Window
             AppLogger.Exception(ex, "Game launch failed");
             _gameProcessRunning = false;
             var restored = true;
-            if (!UsesManualLoaderMethod(method))
+            if (RequiresSignatureBypass(method))
             {
                 restored = !_signatureRestorePending || TryRestoreSignature(gamePath);
                 if (restored)
@@ -1984,6 +2177,7 @@ public class LauncherBridge
             var method2PakPath = Helpers.Method2PakPath(gamePath);
 
             Helpers.RestoreSigBackup(gamePath);
+            ResourceMountInstaller.RemoveAllOwnedArtifacts(gamePath);
 
             if (File.Exists(pakPath))
                 File.Delete(pakPath);
