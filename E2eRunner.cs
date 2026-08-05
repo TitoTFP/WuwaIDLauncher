@@ -52,7 +52,7 @@ internal static class E2eRunner
             Check("S1.cache-method1",
                 ReadCache()["_installMethod"] == "method1" &&
                 ReadCache().TryGetValue(Helpers.PakFileName, out var fp) &&
-                fp == stub.ShaOf(Helpers.PakFileName),
+                string.Equals(fp, stub.ShaOf(Helpers.PakFileName), StringComparison.OrdinalIgnoreCase),
                 "versions.json salah untuk method1");
 
             // S2 — method2: manual loader; must remove the method1 pak.
