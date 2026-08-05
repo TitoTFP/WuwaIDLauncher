@@ -252,6 +252,4 @@ internal static class Helpers
 
         return string.Join("\n", result.ConvertAll(x => x.text)) + "\n";
     }
-
-    internal static IReadOnlyDictionary<string, string[]> ManagedPerfKeys => _managedPerfKeys;
 }

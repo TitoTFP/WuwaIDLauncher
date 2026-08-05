@@ -823,33 +823,6 @@ public partial class MainWindow : Window
         }
     }
 
-    void RestoreStaleSignatureFromSettings()
-    {
-        try
-        {
-            if (!File.Exists(SettingsPath) || Helpers.IsGameRunning())
-                return;
-
-            var json = File.ReadAllText(SettingsPath);
-            using var doc = JsonDocument.Parse(json);
-            if (!doc.RootElement.TryGetProperty("gamePath", out var pathProp))
-                return;
-
-            var gamePath = pathProp.GetString();
-            if (!string.IsNullOrWhiteSpace(gamePath))
-            {
-                AppLogger.SetGamePath(gamePath);
-                AppLogger.Info("Restoring stale signature from settings");
-                Helpers.RestoreSigBackup(gamePath);
-            }
-        }
-        catch (Exception ex)
-        {
-            AppLogger.Exception(ex, "Failed to restore stale signature from settings");
-        }
-    }
-
-
     static string NormalizeInstallMethod(string? installMethod) => InstallMethods.Normalize(installMethod);
 
     static bool UsesManualLoaderMethod(string? installMethod) => InstallMethods.UsesManualLoader(installMethod);
@@ -2037,17 +2010,6 @@ public class LauncherBridge
             return "";
         });
 
-    public void OpenUrl(string url)
-    {
-        if (_w.IsGameRuntimeActive) return;
-        if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
-            (uri.Scheme == "https" || uri.Scheme == "http"))
-        {
-            AppLogger.Info("Opening external URL: " + uri.Host);
-            Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
-        }
-    }
-
     public void SaveSettings(string json)
     {
         if (_w.IsGameRuntimeActive) return;
@@ -2076,14 +2038,6 @@ public class LauncherBridge
             return "";
         }
     }
-
-    public bool ShowConfirm(string message) =>
-        _w.Dispatcher.Invoke(() =>
-        {
-            var dlg = new ConfirmDialog(message, _w);
-            dlg.ShowDialog();
-            return dlg.Confirmed;
-        });
 
     public string GetAppVersion() =>
         Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "1.0.0";

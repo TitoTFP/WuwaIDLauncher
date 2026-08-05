@@ -40,8 +40,12 @@ PT-BR Launcher/
 # superpowers
 docs/superpowers/
 
+# Editor / LSP caches
+*.lscache
+
 # codegraph
 .codegraph/
+.pi-subagents/
 # Agent workspace files
 CLAUDE.md
 docs/agents/
