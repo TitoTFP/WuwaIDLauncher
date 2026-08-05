@@ -66,7 +66,7 @@ if ! rg -n 'ManualPakFileName = "WuWa_ID_99_P\.pak"' MainWindow.xaml.cs Helpers.
   fail "method 2 must preserve WuWa_ID_99_P.pak as its local filename"
 fi
 
-if ! rg -n 'WuwaIDLatestChecksumsUrl = .*SHA256sums\.txt' MainWindow.xaml.cs >/dev/null ||
+if ! rg -n 'WuwaIDLatestChecksumsUrl[^\n]*SHA256sums\.txt' MainWindow.xaml.cs >/dev/null ||
    ! rg -n 'ReleaseChecksumManifest\.Parse' MainWindow.xaml.cs OptimizationServices.cs >/dev/null ||
    rg -n 'GetReleaseAssetMetadata|Headers\.ETag.*Fingerprint' MainWindow.xaml.cs >/dev/null; then
   fail "release fingerprints must come from SHA256sums.txt"
