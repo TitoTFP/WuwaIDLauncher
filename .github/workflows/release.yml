@@ -94,8 +94,8 @@ jobs:
       - name: Run end-to-end tests
         run: |
           $env:WUWAID_E2E_APPDATA = "$env:RUNNER_TEMP\wuwaid-e2e-appdata"
-          & ".\publish\WuwaIDLauncher.exe" --e2e
-          $code = $LASTEXITCODE
+          $p = Start-Process -FilePath ".\publish\WuwaIDLauncher.exe" -ArgumentList "--e2e" -Wait -PassThru
+          $code = $p.ExitCode
           $results = "$env:RUNNER_TEMP\wuwaid-e2e-appdata\e2e-results.txt"
           if (Test-Path $results) { Get-Content $results }
           if ($code -ne 0) { throw "E2E tests failed with exit code $code" }
