@@ -32,8 +32,13 @@ Launcher ini dibuat dengan fokus utama pada **kecepatan, verifikasi integritas d
 
 ### 🛠️ Manajemen Patch & Engine Mod
 - **Instalasi & Perbaruan Sekali Klik:** Mengunduh, memverifikasi integritas file, dan menerapkan patch Bahasa Indonesia secara cepat dan otomatis.
+- **Tiga Mode Instalasi (`method1/2/3`):**
+  - **Method 1** (default) — PAK kanonik diunduh ke folder game + bypass signature.
+  - **Method 2** — manual loader `winhttp.dll` untuk game yang tidak bisa diganti signature-nya.
+  - **Method 3 (eksperimental)** — *Resource Mount*: pak + sig + mount-file ditulis ke folder resource versi game aktif, tanpa bypass signature, dengan owner-marker & verifikasi SHA-1 mount.
 - **Deteksi Folder Otomatis:** Otomatis mencari dan mengenali jalur instalasi Wuthering Waves melalui registry sistem dan lokasi default Windows.
-- **Verifikasi SHA256 Checksum:** Memastikan integritas setiap file patch terverifikasi dengan checksum manifest sebelum diterapkan untuk mencegah kerusakan file.
+- **Verifikasi SHA256 Checksum:** Setiap file patch diverifikasi terhadap manifest checksum (`SHA256sums.txt`) sebelum diterapkan; file yang tidak cocok langsung ditolak dan dihapus.
+- **Verifikasi Self-Update:** ZIP update launcher juga diverifikasi SHA-256 terhadap manifest sebelum diekstrak & dieksekusi.
 - **Engine PAK Packer Kustom:** Dilengkapi dengan modul internal (`WuwaPakPacker`) berbasis algoritma hash FNV64 & SHA-1 untuk pengelolaan paket patch secara efisien.
 
 ### ⚡ Mode Tray & Penghematan Resource Game
@@ -106,6 +111,26 @@ Bagi Anda yang ingin berkontribusi atau melakukan kompilasi mandiri dari source 
 > 🔐 **Enkripsi Aset MSBuild:**
 > Sebelum kompilasi C# berjalan, task `XorEncryptFiles` secara otomatis mengamankan seluruh file di `Resources/Web/` menggunakan kunci XOR dan menyimpannya sebagai `EmbeddedResource`.
 
+### Pengujian Otomatis & CI
+
+CI (GitHub Actions) menjalankan pengujian pada setiap *build* dan sebagai **gate** sebelum rilis.
+
+1. **Konsistensi & kebijakan statis:**
+   ```powershell
+   ./tests/verify_launcher_consistency.sh
+   ```
+2. **Unit test:**
+   ```powershell
+   dotnet test .\WuwaIDLauncher.Tests\ -c Release
+   ```
+3. **End-to-end (pipeline asli, tanpa UI):**
+   ```powershell
+   $env:WUWAID_E2E_APPDATA = "$env:TEMP\wuwaid-e2e"
+   .\publish\WuwaIDLauncher.exe --e2e
+   Write-Host "exit=$LASTEXITCODE"   # 0 = lulus
+   ```
+   Mode `--e2e` menjalankan seluruh jalur nyata (unduh → verifikasi SHA-256 → pasang → tulis version cache → bersihkan metode lain) untuk **method1/2/3** plus verifikasi **self-update ZIP**, terhadap *stub server* lokal, lalu keluar dengan kode 0/1. Hasil per-skenario ditulis ke `e2e-results.txt` di AppData yang diarahkan env di atas.
+
 ---
 
 ## 📊 Benchmark & Optimasi
@@ -139,18 +164,26 @@ Pengujian dampak ke game dilakukan menggunakan **PresentMon** pada proses `Clien
 
 ```text
 WuwaIDLauncher/
-├── 📄 MainWindow.xaml / .cs       # UI Utama WPF & Host WebView2 Engine
+├── 📄 MainWindow.xaml / .cs       # UI Utama WPF & Host WebView2, jalur patch/update
+├── 📄 InstallMethods.cs           # Pemetaan method1/method2/method3
+├── 📄 ResourceMountInstaller.cs   # Instalasi Resource Mount (method3)
+├── 📄 Helpers.cs                  # Path game/patch & utilitas SHA-256
+├── 📄 OptimizationServices.cs     # Status patch, version cache, manifest checksum
 ├── 📄 ActivePlayerService.cs      # Layanan Heartbeat Anonim Pemain Aktif
-├── 📄 OptimizationServices.cs    # Manajemen Status Patch & Verifikasi SHA256
 ├── 📄 LogUploadService.cs         # Service Kompresi & Unggah Log Diagnostik
-├── 📄 GameLogCollector.cs        # Pengumpul Log Otomatis Game & Launcher
-├── 📄 WuwaPakPacker.cs           # Engine Internal Pembentuk PAK Patch File
+├── 📄 GameLogCollector.cs         # Pengumpul Log Otomatis Game & Launcher
+├── 📄 WuwaPakPacker.cs            # Engine Internal Pembentuk PAK Patch File
 ├── 📄 AppLogger.cs                # Sistem Logging Internal
+├── 📄 E2eConfig.cs / E2eStubServer.cs / E2eRunner.cs   # Mode uji --e2e
+├── 📁 WuwaIDLauncher.Tests/       # Unit test (xunit)
 ├── 📁 Resources/
 │   ├── 📁 Images/                 # Asset Gambar & Ikon Utama WPF
 │   └── 📁 Web/                    # Source Code UI (HTML, CSS, JS) WebView2
-├── 📁 tests/                      # Skrip Benchmark Startup & Tes Konsistensi
+├── 📁 tests/                      # Skrip Benchmark, Konsistensi & Verifikasi
+├── 📁 .github/workflows/          # CI: release, testing, consistency
+├── 📄 CONTEXT.md + 📁 docs/adr/   # Glosarium konteks & keputusan (ADR)
 └── 📄 WuwaIDLauncher.csproj       # Definisi Proyek .NET 8 & Enkripsi Build MSBuild
+```
 ```
 
 ---
