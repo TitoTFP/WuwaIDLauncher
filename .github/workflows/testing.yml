@@ -22,6 +22,14 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
       - name: Restore dependencies
         run: dotnet restore
 
@@ -36,7 +44,16 @@ jobs:
             -o ./publish
 
       - name: Run unit tests
-        run: dotnet test WuwaIDLauncher.Tests/WuwaIDLauncher.Tests.csproj --no-restore --verbosity normal
+        run: dotnet test WuwaIDLauncher.Tests/WuwaIDLauncher.Tests.csproj --no-restore -c Release --verbosity normal
+
+      - name: Run end-to-end tests
+        run: |
+          $env:WUWAID_E2E_APPDATA = "$env:RUNNER_TEMP\wuwaid-e2e-appdata"
+          & ".\publish\WuwaIDLauncher.exe" --e2e
+          $code = $LASTEXITCODE
+          $results = "$env:RUNNER_TEMP\wuwaid-e2e-appdata\e2e-results.txt"
+          if (Test-Path $results) { Get-Content $results }
+          if ($code -ne 0) { throw "E2E tests failed with exit code $code" }
 
       - name: Upload testing artifact
         uses: actions/upload-artifact@v4

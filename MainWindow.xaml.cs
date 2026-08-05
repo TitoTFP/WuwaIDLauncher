@@ -20,11 +20,15 @@ namespace WuwaIDLauncher;
 
 public partial class MainWindow : Window
 {
-    internal static readonly string AppDataFolder = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WuwaIDLauncher");
+    internal static readonly string AppDataFolder = ResolveAppDataFolder();
     internal static readonly string CacheFolder = Path.Combine(AppDataFolder, "Cache");
     internal static readonly string SettingsPath = Path.Combine(AppDataFolder, "settings.json");
     internal static readonly string MediaCachePath = Path.Combine(AppDataFolder, "media-cache.json");
+
+    static string ResolveAppDataFolder() =>
+        Environment.GetEnvironmentVariable("WUWAID_E2E_APPDATA") is { Length: > 0 } dir
+            ? dir
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WuwaIDLauncher");
     const string AssetsUrl = "https://raw.githubusercontent.com/TitoTFP/WuwaID/refs/heads/main/Web/assets.json";
     internal const string ModFolderName = Helpers.ModFolderName;
     internal const string LegacyModFolderName = Helpers.LegacyModFolderName;
@@ -34,8 +38,10 @@ public partial class MainWindow : Window
     internal const string SigFileName = Helpers.SigFileName;
     internal const string SigBackupFileName = Helpers.SigBackupFileName;
     const string GameExeName = "Client-Win64-Shipping.exe";
-    const string WuwaIDLatestDownloadBaseUrl = "https://github.com/TitoTFP/WuwaID/releases/latest/download/";
-    const string WuwaIDLatestChecksumsUrl = WuwaIDLatestDownloadBaseUrl + "SHA256sums.txt";
+    const string WuwaIDLatestDownloadBaseUrlDefault = "https://github.com/TitoTFP/WuwaID/releases/latest/download/";
+    internal static string WuwaIDLatestDownloadBaseUrl =>
+        E2eConfig.BaseUrlOverride ?? WuwaIDLatestDownloadBaseUrlDefault;
+    internal static string WuwaIDLatestChecksumsUrl => WuwaIDLatestDownloadBaseUrl + "SHA256sums.txt";
     static readonly TimeSpan SigRestoreDelay = Helpers.SigRestoreDelay;
 
     volatile bool _pageReady;
@@ -792,6 +798,9 @@ public partial class MainWindow : Window
 
     internal void RunScript(string js)
     {
+        if (E2eConfig.Enabled || webView.CoreWebView2 == null)
+            return;
+
         Dispatcher.InvokeAsync(async () =>
         {
             try { await webView.CoreWebView2.ExecuteScriptAsync(js); }
@@ -1720,6 +1729,22 @@ public partial class MainWindow : Window
                 }
             }
 
+            // Verify the downloaded archive against the published SHA-256 before extracting.
+            // The updater executes the exe inside the zip, so a tampered archive must never run.
+            var zipFileName = Path.GetFileName(zipUrl);
+            var checksumUrl = zipUrl.Substring(0, zipUrl.Length - zipFileName.Length) + "SHA256sums.txt";
+            var expected = await FetchChecksumForAsset(http, checksumUrl, zipFileName, timeout.Token);
+            if (expected != null)
+            {
+                if (!Helpers.VerifySha256(zipPath, expected))
+                    throw new InvalidDataException("Hash zip tidak cocok dengan checksum resmi; update dibatalkan.");
+                AppLogger.Info("Launcher update archive verified against SHA-256 checksum");
+            }
+            else
+            {
+                AppLogger.Warn("Checksum manifest tidak tersedia; update berjalan tanpa verifikasi SHA-256.");
+            }
+
             RunScript("window.onLauncherUpdateProgress(95, 'Mengekstrak...')");
             var extractDir = Path.Combine(updateDir, "extracted");
             
@@ -1741,6 +1766,12 @@ public partial class MainWindow : Window
                                    .FirstOrDefault()
                          ?? throw new Exception("WuwaIDLauncher.exe tidak ditemukan dalam file zip.");
             AppLogger.Info("Launcher update executable extracted");
+
+            if (E2eConfig.Enabled)
+            {
+                AppLogger.Info("E2E: self-update verified (download + checksum + extract); restart handoff skipped");
+                return;
+            }
 
             var currentExe = Process.GetCurrentProcess().MainModule?.FileName
                              ?? throw new Exception("Direktori exe saat ini tidak diketahui.");
@@ -1797,6 +1828,22 @@ public partial class MainWindow : Window
         finally
         {
             _updateInProgress = false;
+        }
+    }
+
+    static async Task<string?> FetchChecksumForAsset(
+        HttpClient http, string manifestUrl, string assetName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var content = await http.GetStringAsync(manifestUrl, cancellationToken);
+            var checksums = ReleaseChecksumManifest.Parse(content);
+            return checksums.TryGetValue(assetName, out var hash) ? hash : null;
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Exception(ex, "Failed to fetch checksum manifest for launcher update");
+            return null;
         }
     }
 

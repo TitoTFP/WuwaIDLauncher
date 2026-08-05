@@ -8,6 +8,10 @@ publish/
 *.nupkg
 *.snupkg
 
+# Release artifacts built by .github/workflows/release.yml in the repo root
+WuwaIDLauncher-*.zip
+SHA256sums.txt
+
 # IDE / editor
 .vs/
 .vscode/

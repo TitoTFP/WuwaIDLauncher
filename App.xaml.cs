@@ -22,10 +22,30 @@ public partial class App : Application
     [DllImport("kernel32.dll")]
     static extern nint GetCurrentProcess();
 
-    protected override void OnStartup(StartupEventArgs e)
+    protected override async void OnStartup(StartupEventArgs e)
     {
         AppLogger.Initialize(WuwaIDLauncher.MainWindow.AppDataFolder);
         AppLogger.Info("Startup milestone: process_start elapsed_ms=0");
+
+        if (E2eRunner.IsEnabled(e.Args))
+        {
+            base.OnStartup(e);
+            AppLogger.Info("E2E mode enabled");
+            try
+            {
+                var exitCode = await E2eRunner.RunCoreAsync();
+                AppLogger.Info("E2E finished with exit code " + exitCode);
+                Shutdown(exitCode);
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Exception(ex, "E2E crashed");
+                Console.WriteLine("[e2e] CRASHED: " + ex);
+                Shutdown(1);
+            }
+            return;
+        }
+
         WaitForRestartHandoff(e.Args);
         
         if (Debugger.IsAttached || IsDebuggerPresent())

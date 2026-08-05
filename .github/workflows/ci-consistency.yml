@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# New pushes to the same ref supersede in-flight CI runs (PR-only spam guard).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   consistency:
     runs-on: ubuntu-latest
@@ -24,7 +29,14 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
       - name: Restore dependencies
         run: dotnet restore
       - name: Run unit tests
-        run: dotnet test WuwaIDLauncher.Tests/WuwaIDLauncher.Tests.csproj --no-restore --verbosity normal
+        run: dotnet test WuwaIDLauncher.Tests/WuwaIDLauncher.Tests.csproj --no-restore -c Release --verbosity normal
