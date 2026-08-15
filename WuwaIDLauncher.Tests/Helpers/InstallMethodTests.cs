@@ -35,6 +35,13 @@ public class InstallMethodTests : IDisposable
     }
 
     [Fact]
+    public void DefaultMethod_IsResourceMount()
+    {
+        InstallMethods.Default.Should().Be(InstallMethods.Method3);
+        InstallMethods.UsesResourceMount(InstallMethods.Default).Should().BeTrue();
+    }
+
+    [Fact]
     public void Method2_RemotePakIsCanonicalButLocalNameIsPreserved()
     {
         var assets = MainWindow.ExpectedPatchAssets(

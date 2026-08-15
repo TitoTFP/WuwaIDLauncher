@@ -13,7 +13,7 @@ internal static class ActivePlayerService
     static readonly object Gate = new();
     static System.Threading.Timer? _timer;
     static CancellationTokenSource? _work;
-    static string _installMethod = "method1";
+    static string _installMethod = InstallMethods.Default;
 
     internal static void Start(string? installMethod = null)
     {

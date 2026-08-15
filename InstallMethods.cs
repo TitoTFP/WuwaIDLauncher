@@ -7,6 +7,7 @@ internal static class InstallMethods
     internal const string Method1 = "method1";
     internal const string Method2 = "method2";
     internal const string Method3 = "method3";
+    internal const string Default = Method3;
 
     internal static string Normalize(string? method) =>
         string.Equals(method, Method2, StringComparison.OrdinalIgnoreCase) ? Method2 :

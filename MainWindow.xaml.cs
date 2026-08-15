@@ -303,15 +303,15 @@ public partial class MainWindow : Window
     {
         try
         {
-            if (!File.Exists(SettingsPath)) return "method1";
+            if (!File.Exists(SettingsPath)) return InstallMethods.Default;
             using var doc = JsonDocument.Parse(File.ReadAllText(SettingsPath));
             return doc.RootElement.TryGetProperty("installMethod", out var value)
                 ? NormalizeInstallMethod(value.GetString())
-                : "method1";
+                : InstallMethods.Default;
         }
         catch
         {
-            return "method1";
+            return InstallMethods.Default;
         }
     }
 
@@ -889,7 +889,7 @@ public partial class MainWindow : Window
         }
     }
 
-    internal async Task RunInstallation(string gamePath, string vhMode, bool backup, string installMethod = "method1")
+    internal async Task RunInstallation(string gamePath, string vhMode, bool backup, string installMethod = InstallMethods.Default)
     {
         AppLogger.SetGamePath(gamePath);
         var method = NormalizeInstallMethod(installMethod);
@@ -1489,7 +1489,7 @@ public partial class MainWindow : Window
             await Task.Delay(3000, cancellationToken);
     }
 
-    internal void LaunchGame(string gamePath, bool dx11, string installMethod = "method1")
+    internal void LaunchGame(string gamePath, bool dx11, string installMethod = InstallMethods.Default)
     {
         AppLogger.SetGamePath(gamePath);
         var method = NormalizeInstallMethod(installMethod);
