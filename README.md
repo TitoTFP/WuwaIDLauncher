@@ -34,9 +34,9 @@ Launcher ini dibuat dengan fokus utama pada **kecepatan, verifikasi integritas d
 
 - **Instalasi & Perbaruan Sekali Klik:** Mengunduh, memverifikasi integritas file, dan menerapkan patch Bahasa Indonesia secara cepat dan otomatis.
 - **Tiga Mode Instalasi (`method1/2/3`):**
-  - **Method 1** (default) — PAK kanonik diunduh ke folder game + bypass signature.
-  - **Method 2** — manual loader `winhttp.dll` untuk game yang tidak bisa diganti signature-nya.
-  - **Method 3 (eksperimental)** — _Resource Mount_: pak + sig + mount-file ditulis ke folder resource versi game aktif, tanpa bypass signature, dengan owner-marker & verifikasi SHA-1 mount.
+  - **Metode 1** (default, internal `method3`) — _Resource Mount_: pak + sig + mount-file ditulis ke folder resource versi game aktif, tanpa bypass signature, dengan owner-marker & verifikasi SHA-1 mount.
+  - **Metode 2** (internal `method2`) — manual loader `winhttp.dll` untuk game yang tidak bisa diganti signature-nya.
+  - **Metode 3** (internal `method1`) — PAK kanonik diunduh ke folder game + bypass signature.
 - **Deteksi Folder Otomatis:** Otomatis mencari dan mengenali jalur instalasi Wuthering Waves melalui registry sistem dan lokasi default Windows.
 - **Verifikasi SHA256 Checksum:** Setiap file patch diverifikasi terhadap manifest checksum (`SHA256sums.txt`) sebelum diterapkan; file yang tidak cocok langsung ditolak dan dihapus.
 - **Verifikasi Self-Update:** ZIP update launcher juga diverifikasi SHA-256 terhadap manifest sebelum diekstrak & dieksekusi.
@@ -139,7 +139,7 @@ CI (GitHub Actions) menjalankan pengujian pada setiap _build_ dan sebagai **gate
    .\publish\WuwaIDLauncher.exe --e2e
    Write-Host "exit=$LASTEXITCODE"   # 0 = lulus
    ```
-   Mode `--e2e` menjalankan seluruh jalur nyata (unduh → verifikasi SHA-256 → pasang → tulis version cache → bersihkan metode lain) untuk **method1/2/3** plus verifikasi **self-update ZIP**, terhadap _stub server_ lokal, lalu keluar dengan kode 0/1. Hasil per-skenario ditulis ke `e2e-results.txt` di AppData yang diarahkan env di atas.
+   Mode `--e2e` menjalankan seluruh jalur nyata (unduh → verifikasi SHA-256 → pasang → tulis version cache → bersihkan metode lain) untuk internal **method1/2/3** (user-facing Metode 3/2/1) plus verifikasi **self-update ZIP**, terhadap _stub server_ lokal, lalu keluar dengan kode 0/1. Hasil per-skenario ditulis ke `e2e-results.txt` di AppData yang diarahkan env di atas.
 
 ---
 
@@ -181,7 +181,7 @@ Pengujian dampak ke game dilakukan menggunakan **PresentMon** pada proses `Clien
 WuwaIDLauncher/
 ├── 📄 MainWindow.xaml / .cs       # UI Utama WPF & Host WebView2, jalur patch/update
 ├── 📄 InstallMethods.cs           # Pemetaan method1/method2/method3
-├── 📄 ResourceMountInstaller.cs   # Instalasi Resource Mount (method3)
+├── 📄 ResourceMountInstaller.cs   # Instalasi Resource Mount (internal method3, UI Metode 1)
 ├── 📄 Helpers.cs                  # Path game/patch & utilitas SHA-256
 ├── 📄 OptimizationServices.cs     # Status patch, version cache, manifest checksum
 ├── 📄 ActivePlayerService.cs      # Layanan Heartbeat Anonim Pemain Aktif

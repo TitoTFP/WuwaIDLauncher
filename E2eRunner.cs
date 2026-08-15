@@ -43,7 +43,7 @@ internal static class E2eRunner
             var window = new MainWindow();
             var updateDir = Path.Combine(Path.GetTempPath(), "WuwaIDLauncher_update");
 
-            // S1 — method1: fresh install of the canonical pak.
+            // S1 — user-facing Metode 3 (internal method1): fresh canonical pak install.
             await window.RunInstallation(game, "vh", backup: false, "method1");
             Check("S1.install-pak",
                 File.Exists(Helpers.Method1PakPath(game)) &&
@@ -55,7 +55,7 @@ internal static class E2eRunner
                 string.Equals(fp, stub.ShaOf(Helpers.PakFileName), StringComparison.OrdinalIgnoreCase),
                 "versions.json salah untuk method1");
 
-            // S2 — method2: manual loader; must remove the method1 pak.
+            // S2 — user-facing Metode 2 (internal method2): manual loader; remove method1 pak.
             await window.RunInstallation(game, "vh", backup: false, "method2");
             Check("S2.install-loader",
                 File.Exists(Helpers.Method2LoaderPath(game)) &&
@@ -70,14 +70,14 @@ internal static class E2eRunner
             Check("S2.cache-method2", ReadCache()["_installMethod"] == "method2",
                 "versions.json tidak menyimpan method2");
 
-            // S3 — tampered manifest: method1 install must be rejected, no file left behind.
+            // S3 — tampered manifest: user-facing Metode 3 (internal method1) must reject it.
             stub.TamperPak = true;
             await window.RunInstallation(game, "vh", backup: false, "method1");
             stub.TamperPak = false;
             Check("S3.reject-tampered", !File.Exists(Helpers.Method1PakPath(game)),
                 "pak method1 terpasang walau checksum release salah");
 
-            // S4 — method3: resource mount against a resource-ready fake game.
+            // S4 — user-facing Metode 1 (internal method3): resource mount on a ready fake game.
             await window.RunInstallation(game, "vh", backup: false, "method3");
             var plan = ResourceMountInstaller.Probe(game);
             Check("S4.probe", plan.Conflicts.Count == 0, "konflik: " + string.Join(", ", plan.Conflicts));
