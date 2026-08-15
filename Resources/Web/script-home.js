@@ -117,7 +117,7 @@ function startInstall() {
     if (dx11Row) dx11Row.style.display = 'none';
 
     if (bridge()) {
-        bridge().StartInstallation(S.gamePath, S.cfg.vhMode, S.cfg.backup, S.cfg.installMethod || 'method1');
+        bridge().StartInstallation(S.gamePath, S.cfg.vhMode, S.cfg.backup, S.cfg.installMethod || 'method3');
     } else {
         simulateInstall();
     }
@@ -131,7 +131,7 @@ function checkPatchStatus(silent = true) {
     if (btn) btn.classList.add('disabled');
     if (txt) txt.textContent = 'Memeriksa patch...';
     if (!silent) toast('Memeriksa Patch ID...', 'info');
-    bridge().CheckPatchStatus(S.gamePath, S.cfg.installMethod || 'method1');
+    bridge().CheckPatchStatus(S.gamePath, S.cfg.installMethod || 'method3');
 }
 
 window.startInitialPatchCheck = (force = false) => {
@@ -194,7 +194,7 @@ function launchGame() {
     if (S.gameRunning || S.launching) return;
     const dx11 = document.getElementById('chkDx11')?.checked ?? false;
     if (bridge()) {
-        bridge().LaunchGame(S.gamePath, dx11, S.cfg.installMethod || 'method1');
+        bridge().LaunchGame(S.gamePath, dx11, S.cfg.installMethod || 'method3');
     } else {
         toast('Demo: menjalankan game...','info');
     }
@@ -230,7 +230,7 @@ window.onInstallComplete = () => installDone();
 window.onPatchStatus = result => {
     if (!result) return;
     if (S.launching || S.gameRunning) return;
-    if (result.installMethod && result.installMethod !== (S.cfg.installMethod || 'method1')) return;
+    if (result.installMethod && result.installMethod !== (S.cfg.installMethod || 'method3')) return;
     S.patchState = result.state || 'error';
     S.installed = !!result.canLaunch;
     const btn = document.getElementById('btnStart');

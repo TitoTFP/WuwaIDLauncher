@@ -39,7 +39,7 @@ function initMethodMenu() {
             clearLaunchLock();
             let methodMessage = 'Metode 1 dipilih.';
             if (S.cfg.installMethod === 'method2') methodMessage = 'Metode 2 dipilih.';
-            if (S.cfg.installMethod === 'method3') methodMessage = 'Metode 3 eksperimental dipilih.';
+            if (S.cfg.installMethod === 'method1') methodMessage = 'Metode 3 dipilih.';
             toast(methodMessage, 'ok');
             checkPatchStatus();
         });
@@ -63,13 +63,13 @@ async function checkAdminIfNeeded(forInstallation) {
     if (!S.gamePath || !bridge()) return true;
     try {
         const result = await bridge().CheckGameFolderWriteAccess(
-            S.gamePath, S.cfg.installMethod || 'method1', !!forInstallation);
+            S.gamePath, S.cfg.installMethod || 'method3', !!forInstallation);
         if (result === 'ok') return true;
         if (result !== 'admin_required') {
             let message = 'Gagal memeriksa izin tulis folder game.';
             if (result === 'invalid_path') message = 'Direktori game tidak valid.';
-            if (result === 'resource_unavailable') message = 'Resource game belum siap untuk Metode 3.';
-            if (result === 'conflict') message = 'Konflik mod terdeteksi untuk Metode 3.';
+            if (result === 'resource_unavailable') message = 'Resource game belum siap untuk Metode 1.';
+            if (result === 'conflict') message = 'Konflik mod terdeteksi untuk Metode 1.';
             toast(message, 'err');
             return false;
         }

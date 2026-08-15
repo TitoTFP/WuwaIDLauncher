@@ -5,7 +5,7 @@ const S = {
     installing: false, installed: false, launching: false,
     gamePath: '',
     patchState: 'unchecked',
-    cfg: { gamePath:'', installMethod:'method1', launcherVisualMode:'full' },
+    cfg: { gamePath:'', installMethod:'method3', launcherVisualMode:'full' },
     autoCheckDone: false,
     gameRunning: false,
     gameOrigin: 'external',
