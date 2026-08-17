@@ -1,55 +1,28 @@
-# .NET build output
-bin/
-obj/
-artifacts/
-
-# Publish output
-publish/
-*.nupkg
-*.snupkg
-
-# Release artifacts built by .github/workflows/release.yml in the repo root
-WuwaIDLauncher-*.zip
+# Build and output artifacts
+dist/
+src-tauri/target/
+node_modules/
+*.exe
+*.zip
 SHA256sums.txt
 
-# IDE / editor
+# IDE / Editor
 .vs/
 .vscode/
 *.user
 *.suo
-*.userosscache
-*.sln.docstates
 .antigravitycli/
-
+.commandcode/
+.codegraph/
+.pi-subagents/
+.pi-glla/
+*.lscache
 
 # OS
 Thumbs.db
 Desktop.ini
 .DS_Store
 
-# Test output
-TestResults/
-test-results/
-.playwright-mcp/
-
-# Temporary files
-temp/
-
-# PT-BR launcher reference files
-PT-BR Launcher/
-
-# Command Code
-.commandcode/
-
-# superpowers
-docs/superpowers/
-
-# Editor / LSP caches
-*.lscache
-
-# codegraph
-.codegraph/
-.pi-subagents/
 # Agent workspace files
 CLAUDE.md
 docs/agents/

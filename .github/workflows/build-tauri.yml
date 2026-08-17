@@ -1,0 +1,80 @@
+name: Build Tauri Windows Release
+
+on:
+  push:
+    tags:
+      - "v*"
+    branches:
+      - main
+      - feat/tauri-rebuild
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-tauri:
+    permissions:
+      contents: write
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install Frontend Dependencies
+        run: npm install
+
+      - name: Run Frontend & Backend Checks
+        run: |
+          npm run check
+          cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build Tauri Application
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "WuwaID Launcher ${{ github.ref_name }}"
+          releaseBody: "Rilis resmi WuwaID Launcher (Tauri v2 + Rust)."
+          releaseDraft: true
+          prerelease: false
+
+      - name: Generate Checksums & Upload Extra Release Assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $artifacts = Get-ChildItem -Path "src-tauri/target/release/bundle" -Recurse -File
+          $hashLines = @()
+          foreach ($file in $artifacts) {
+            $hash = (Get-FileHash -Path $file.FullName -Algorithm SHA256).Hash.ToLower()
+            $hashLines += "$hash  $($file.Name)"
+          }
+          $hashLines | Out-File -FilePath "SHA256sums.txt" -Encoding ascii
+          Write-Host "Generated SHA256sums.txt:"
+          Get-Content "SHA256sums.txt"
+
+          # Upload SHA256sums.txt via gh cli
+          if ($env:GITHUB_TOKEN) {
+            gh release upload $env:TAG_NAME SHA256sums.txt --clobber
+          }

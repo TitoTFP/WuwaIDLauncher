@@ -1,0 +1,198 @@
+{
+  "milestone": "M5: Full Feature Parity & Live Asset Integration",
+  "total": 24,
+  "issues": [
+    {
+      "id": "T1-142",
+      "title": "M5.1: Background Video & BGM Live Ingestion dari Repo WuwaID",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:21.463Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-143",
+      "title": "M5.2: Dynamic Patch ID Release Notes & Sidebar Announcement (`releases.atom`)",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:29.942Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-144",
+      "title": "M5.3: Implementasi Lengkap Aksi Hamburger Menu (Right Panel)",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:53.781Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-145",
+      "title": "M5.4: Multi-Asset Real Mod Downloader & SHA-256 Verifier",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:53.883Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-146",
+      "title": "M5.5: Pipeline Instalasi & Peluncuran 3 Metode Mod (Method 1, 2, 3)",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:55.263Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-147",
+      "title": "M5.1.1: Parser Manifest assets.json & Evaluasi Cache Lokal Media",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:14.881Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-148",
+      "title": "M5.1.2: Background Streaming Media Downloader & Validasi SHA-256",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:17.040Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-149",
+      "title": "M5.1.3: Bridge Event Media & Integrasi Background Video + BGM Player",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:19.144Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-150",
+      "title": "M5.2.1: Rust Atom Feed Parser untuk WuwaID releases.atom",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:23.524Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-151",
+      "title": "M5.2.2: Cache Catatan Rilis & Offline Fallback Handling",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:25.565Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-152",
+      "title": "M5.2.3: Dynamic Markdown Renderer pada SidePanel Pengumuman",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:27.795Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-153",
+      "title": "M5.3.1: Dialog Native Pemilih Folder Game & Validasi Direktori",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:31.956Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-154",
+      "title": "M5.3.2: Re-check Patch ID & Trigger Pengecekan Update Launcher",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:34.267Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-155",
+      "title": "M5.3.3: Force-Quit Proses Game & UAC Administrator Elevation Restart",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:36.515Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-156",
+      "title": "M5.3.4: Log Collector (Zip Archive) & Upload Service",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:38.761Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-157",
+      "title": "M5.3.5: Reset Cache WebView2 & Launcher Trakteer Donation Link",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:40.808Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-158",
+      "title": "M5.3.6: Uninstall Patch ID & Pemulihan Signature .sig Asli",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:42.855Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-159",
+      "title": "M5.4.1: Parser SHA256sums.txt & Asset Release Metadata Resolver",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:54.843Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-160",
+      "title": "M5.4.2: Streaming Downloader dengan Live Progress Emission (MB/s & %)",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:54.633Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-161",
+      "title": "M5.4.3: Validasi SHA-256 Integritas File & Update versions.json",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:54.497Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-162",
+      "title": "M5.5.1: Pipeline Metode 1 (Resource Mount Method)",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:54.079Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-163",
+      "title": "M5.5.2: Pipeline Metode 2 (winhttp.dll Loader Method)",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:53.934Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-164",
+      "title": "M5.5.3: Pipeline Metode 3 (Signature Bypass Method & Auto-Restore)",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:53.989Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    },
+    {
+      "id": "T1-165",
+      "title": "M5.5.4: Sinkronisasi Status Instalasi & Dynamic Method Switcher",
+      "status": "Done",
+      "statusType": "completed",
+      "completedAt": "2026-08-17T08:04:55.041Z",
+      "milestone": "M5: Full Feature Parity & Live Asset Integration"
+    }
+  ]
+}
