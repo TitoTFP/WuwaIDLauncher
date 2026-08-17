@@ -6,11 +6,10 @@
   import SidePanel from './components/SidePanel.svelte';
   import AudioPlayer from './components/AudioPlayer.svelte';
   import RightPanel from './components/RightPanel.svelte';
+  import SettingsPanel from './components/SettingsPanel.svelte';
+  import LogsPanel from './components/LogsPanel.svelte';
+  import AboutPanel from './components/AboutPanel.svelte';
   import UpdateModal from './components/UpdateModal.svelte';
-
-  let updateModalOpen = $state(false);
-  let updateVersion = $state('');
-  let updateZipUrl = $state('');
 
   onMount(async () => {
     await appState.init();
@@ -20,14 +19,26 @@
 <div class="app-root" class:game-running={appState.gameRunning} data-visual-mode={appState.config.launcherVisualMode || 'full'}>
   <BackgroundFx />
   <TopBar />
-  <SidePanel />
-  <AudioPlayer />
-  <RightPanel />
+  {#if appState.page === 'home'}
+    <SidePanel />
+    <AudioPlayer />
+    <RightPanel />
+  {:else if appState.page === 'settings'}
+    <SettingsPanel />
+  {:else if appState.page === 'logs'}
+    <LogsPanel />
+  {:else if appState.page === 'about'}
+    <AboutPanel />
+  {/if}
   <UpdateModal
-    open={updateModalOpen}
-    version={updateVersion}
-    zipUrl={updateZipUrl}
-    onclose={() => (updateModalOpen = false)}
+    open={appState.launcherUpdateAvailable}
+    version={appState.launcherUpdatePayload?.version ?? ''}
+    zipUrl={appState.launcherUpdatePayload?.zipUrl ?? ''}
+    checksumsUrl={appState.launcherUpdatePayload?.checksumsUrl ?? ''}
+    progress={appState.launcherUpdateProgress}
+    status={appState.launcherUpdateStatus}
+    error={appState.launcherUpdateError}
+    onclose={() => appState.dismissLauncherUpdate()}
   />
 </div>
 

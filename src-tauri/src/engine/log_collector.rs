@@ -1,13 +1,70 @@
 use std::fs;
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
 pub const DEFAULT_LOG_UPLOAD_ENDPOINT: &str = "https://wuwa-logs.titofp.workers.dev/upload";
+pub const MAX_UPLOAD_ATTEMPTS: usize = 2;
+
+pub fn max_upload_attempts() -> usize {
+    MAX_UPLOAD_ATTEMPTS
+}
+
+pub fn redact_json_document(data: &[u8]) -> Result<Vec<u8>, String> {
+    let mut value: serde_json::Value = serde_json::from_slice(data)
+        .map_err(|error| format!("Diagnostic JSON tidak valid: {error}"))?;
+    redact_value(&mut value);
+    serde_json::to_vec(&value).map_err(|error| format!("Diagnostic JSON gagal diserialisasi: {error}"))
+}
+
+fn redact_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            object.retain(|key, _| {
+                !matches!(
+                    key.to_ascii_lowercase().as_str(),
+                    "gamepath" | "installpath" | "clientid" | "client_id" | "username"
+                )
+            });
+            for child in object.values_mut() {
+                redact_value(child);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_value(item);
+            }
+        }
+        _ => {}
+    }
+}
 
 pub fn get_game_logs_dir(game_path: &Path) -> PathBuf {
     game_path.join("Client").join("Saved").join("Logs")
+}
+
+pub fn save_logs_bundle(zip_data: &[u8], appdata_dir: &Path) -> Result<PathBuf, String> {
+    let diagnostics_dir = appdata_dir.join("Diagnostics");
+    fs::create_dir_all(&diagnostics_dir)
+        .map_err(|error| format!("Gagal membuat folder diagnostics lokal: {error}"))?;
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("Waktu sistem tidak valid: {error}"))?
+        .as_millis();
+    let stem = format!("wuwa_logs_{}_{}", std::process::id(), timestamp);
+    let final_path = diagnostics_dir.join(format!("{stem}.zip"));
+    let temp_path = diagnostics_dir.join(format!(".{stem}.part"));
+
+    fs::write(&temp_path, zip_data)
+        .map_err(|error| format!("Gagal menyimpan bundle diagnostics sementara: {error}"))?;
+    if let Err(error) = fs::rename(&temp_path, &final_path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(format!("Gagal menyimpan bundle diagnostics: {error}"));
+    }
+    Ok(final_path)
 }
 
 pub fn collect_logs_to_zip(
@@ -42,7 +99,9 @@ pub fn collect_logs_to_zip(
     if settings_file.exists() {
         if let Ok(content) = fs::read(&settings_file) {
             let _ = zip.start_file("launcher/settings.json", options);
-            let _ = zip.write_all(&content);
+            let redacted = redact_json_document(&content)
+                .unwrap_or_else(|_| br#"{"redacted":true}"#.to_vec());
+            let _ = zip.write_all(&redacted);
         }
     }
 
@@ -50,7 +109,9 @@ pub fn collect_logs_to_zip(
     if versions_file.exists() {
         if let Ok(content) = fs::read(&versions_file) {
             let _ = zip.start_file("launcher/versions.json", options);
-            let _ = zip.write_all(&content);
+            let redacted = redact_json_document(&content)
+                .unwrap_or_else(|_| br#"{"redacted":true}"#.to_vec());
+            let _ = zip.write_all(&redacted);
         }
     }
 
@@ -67,28 +128,38 @@ pub async fn upload_logs_zip(
         .build()
         .map_err(|e| format!("Failed to create client: {}", e))?;
 
-    let part = reqwest::multipart::Part::bytes(zip_data)
-        .file_name(format!("wuwa_logs_{}.zip", client_id))
-        .mime_str("application/zip")
-        .map_err(|e| format!("Failed to create multipart part: {}", e))?;
+    let mut last_error = "Upload diagnostics gagal.".to_string();
+    for attempt in 1..=MAX_UPLOAD_ATTEMPTS {
+        let part = reqwest::multipart::Part::bytes(zip_data.clone())
+            .file_name(format!("wuwa_logs_{}.zip", client_id))
+            .mime_str("application/zip")
+            .map_err(|error| format!("Gagal membuat multipart upload: {error}"))?;
+        let form = reqwest::multipart::Form::new()
+            .text("client_id", client_id.to_string())
+            .part("file", part);
 
-    let form = reqwest::multipart::Form::new()
-        .text("client_id", client_id.to_string())
-        .part("file", part);
+        match client
+            .post(DEFAULT_LOG_UPLOAD_ENDPOINT)
+            .multipart(form)
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => {
+                return Ok(response.text().await.unwrap_or_default());
+            }
+            Ok(response) => {
+                last_error = format!("Upload gagal dengan HTTP status {}", response.status());
+            }
+            Err(error) => {
+                last_error = format!("Request upload gagal: {error}");
+            }
+        }
 
-    let response = client
-        .post(DEFAULT_LOG_UPLOAD_ENDPOINT)
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|e| format!("Upload request failed: {}", e))?;
-
-    if response.status().is_success() {
-        let text = response.text().await.unwrap_or_default();
-        Ok(text)
-    } else {
-        Err(format!("Upload failed with HTTP status {}", response.status()))
+        if attempt < MAX_UPLOAD_ATTEMPTS {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
     }
+    Err(last_error)
 }
 
 #[cfg(test)]

@@ -1,8 +1,14 @@
 import { bridge, setupEventBridge } from "./bridge";
+import {
+  DEFAULT_LAUNCHER_CONFIG,
+  normalizeLauncherConfig,
+} from "./types";
 import type {
   ILauncherState,
   LauncherConfig,
   LauncherUpdatePayload,
+  MediaProgressPayload,
+  MediaStatusPayload,
   PageId,
   PatchState,
   ReleaseNotePayload,
@@ -22,14 +28,27 @@ export class LauncherState implements ILauncherState {
   patchState: PatchState = $state<PatchState>("unchecked");
   progressPercent: number = $state<number>(0);
   progressStatus: string = $state<string>("");
+  progressDownloadedBytes: number = $state<number>(0);
+  progressTotalBytes: number = $state<number>(0);
+  progressSpeedMbps: number = $state<number>(0);
   appVersion: string = $state<string>("2.6.1");
   vhVersion: string = $state<string>("");
   visualMode: VisualMode = $state<VisualMode>("full");
   statusMessage: string = $state<string>("");
+  diagnosticMessage: string = $state<string>("");
   logUploadActive: boolean = $state<boolean>(false);
   logUploadStatus: string = $state<string>("");
+  logUploadLocalPath: string = $state<string>("");
+  telemetryStatus: string = $state<string>("");
+  telemetryStatusMessage: string = $state<string>("");
+  mediaStatus: MediaStatusPayload["status"] | "" = $state<MediaStatusPayload["status"] | "">("");
+  mediaStatusMessage: string = $state<string>("");
+  mediaProgress: MediaProgressPayload | null = $state<MediaProgressPayload | null>(null);
+  launcherUpdateProgress: number = $state<number>(0);
+  launcherUpdateStatus: string = $state<string>("");
+  launcherUpdateError: string = $state<string>("");
   bgmPlaying: boolean = $state<boolean>(false);
-  bgmVolume: number = $state<number>(0.5);
+  bgmVolume: number = $state<number>(DEFAULT_LAUNCHER_CONFIG.bgmVolume);
 
   // Live Assets & Release Notes
   bgmUrl: string = $state<string>("");
@@ -46,14 +65,26 @@ export class LauncherState implements ILauncherState {
     $state<LauncherUpdatePayload | null>(null);
 
   config: LauncherConfig = $state<LauncherConfig>({
-    gamePath: "",
-    installMethod: "method3",
-    launcherVisualMode: "full" as VisualMode,
-    dx11: false,
-    autoCheckUpdate: true,
-    bgmVolume: 0.35,
-    bgmEnabled: true,
+    ...DEFAULT_LAUNCHER_CONFIG,
   });
+
+  setStatus(message: string, diagnostic = message) {
+    this.statusMessage = message;
+    this.diagnosticMessage = diagnostic;
+  }
+
+  clearStatus() {
+    this.statusMessage = "";
+    this.diagnosticMessage = "";
+  }
+
+  dismissLauncherUpdate() {
+    this.launcherUpdateAvailable = false;
+    this.launcherUpdatePayload = null;
+    this.launcherUpdateProgress = 0;
+    this.launcherUpdateStatus = "";
+    this.launcherUpdateError = "";
+  }
 
   async init() {
     // Load version
@@ -66,14 +97,18 @@ export class LauncherState implements ILauncherState {
 
     // Load settings
     try {
-      const raw = await bridge.loadSettings();
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        this.config = { ...this.config, ...parsed };
-        this.gamePath = this.config.gamePath || "";
+      const result = await bridge.loadSettings();
+      const normalized = normalizeLauncherConfig(result.settings);
+      this.config = normalized.config;
+      this.gamePath = this.config.gamePath;
+      this.visualMode = this.config.launcherVisualMode;
+      this.bgmVolume = this.config.bgmVolume;
+      if (result.diagnostics.length || normalized.diagnostics.length) {
+        const diagnostics = [...result.diagnostics, ...normalized.diagnostics];
+        this.setStatus("Konfigurasi launcher dipulihkan ke nilai aman.", diagnostics.join(" "));
       }
     } catch {
-      // ignore
+      this.setStatus("Konfigurasi launcher tidak dapat dimuat; memakai default.");
     }
 
     // Check game running
@@ -99,23 +134,42 @@ export class LauncherState implements ILauncherState {
         } else if (payload.status === "not_installed") {
           this.patchState = "not_installed";
           this.installed = false;
+        } else if (payload.status === "invalid" || payload.status === "error") {
+          this.patchState = payload.status;
+          this.installed = false;
+          if (payload.message) this.setStatus(payload.message, payload.message);
         }
+        if (payload.currentVersion) this.vhVersion = payload.currentVersion;
       },
       onProgressUpdate: (payload) => {
         this.progressPercent = payload.percent;
         this.progressStatus = payload.status;
+        this.progressDownloadedBytes = payload.downloadedBytes ?? 0;
+        this.progressTotalBytes = payload.totalBytes ?? 0;
+        this.progressSpeedMbps = payload.speedMbps ?? 0;
       },
       onInstallComplete: () => {
         this.installing = false;
         this.installed = true;
         this.patchState = "ready";
+        this.progressPercent = 100;
+        this.progressStatus = "Instalasi selesai.";
+        this.clearStatus();
         bridge.getVhVersion().then((v) => {
           this.vhVersion = v;
         });
       },
       onInstallError: (err) => {
+        const wasLaunching = this.launching;
         this.installing = false;
-        this.statusMessage = `Error: ${err}`;
+        this.launching = false;
+        if (!wasLaunching) this.patchState = "error";
+        this.progressStatus = "Operasi gagal.";
+        this.setStatus("Operasi gagal. Silakan coba lagi.", err || "Tidak ada detail error.");
+      },
+      onLaunchError: (err) => {
+        this.launching = false;
+        this.setStatus("Game tidak dapat dijalankan.", err || "Tidak ada detail error.");
       },
       onGameLaunchStarted: () => {
         this.launching = true;
@@ -126,20 +180,74 @@ export class LauncherState implements ILauncherState {
       onLogUploadStarted: () => {
         this.logUploadActive = true;
         this.logUploadStatus = "Mengunggah log...";
+        this.logUploadLocalPath = "";
       },
       onLogUploadFinished: (res) => {
         this.logUploadActive = false;
+        this.logUploadLocalPath = res.localPath || "";
         this.logUploadStatus = res.success
           ? "Log berhasil diunggah!"
           : `Gagal: ${res.message || ""}`;
+        this.setStatus(
+          res.success ? "Log berhasil diunggah." : "Pengunggahan log gagal.",
+          res.message || this.logUploadStatus,
+        );
+      },
+      onTelemetryStatus: (payload) => {
+        this.telemetryStatus = payload.status;
+        this.telemetryStatusMessage = payload.message;
+      },
+      onLauncherUpdateProgress: (percent, statusText) => {
+        this.launcherUpdateProgress = percent;
+        this.launcherUpdateStatus = statusText;
+        this.launcherUpdateError = "";
+      },
+      onLauncherUpdateRestarting: () => {
+        this.launcherUpdateError = "";
+        this.launcherUpdateStatus = "Update siap; launcher akan dimulai ulang.";
+        this.setStatus("Launcher sedang memulai ulang untuk menerapkan update.");
+      },
+      onLauncherUpdateError: (error) => {
+        this.launcherUpdateError = error;
+        this.launcherUpdateStatus = "Update gagal.";
+        this.setStatus("Update launcher gagal.", error);
       },
       onLauncherUpdateAvailable: (payload) => {
         this.launcherUpdateAvailable = true;
         this.launcherUpdatePayload = payload;
+        this.launcherUpdateProgress = 0;
+        this.launcherUpdateError = "";
+        this.launcherUpdateStatus = "Menunggu konfirmasi.";
+        this.setStatus(`Update launcher tersedia: v${payload.version}.`);
+      },
+      onLauncherUpdateStaged: () => {
+        this.launcherUpdateStatus = "Update terverifikasi dan siap diterapkan.";
+        this.setStatus("Update launcher sudah diverifikasi.");
       },
       onMediaReady: (payload) => {
+        this.mediaStatus = "ready";
+        this.mediaStatusMessage = "Media siap digunakan.";
+        this.mediaProgress = null;
         if (payload.bgmUrl) this.bgmUrl = payload.bgmUrl;
         if (payload.videoUrl) this.videoUrl = payload.videoUrl;
+      },
+      onMediaStatus: (payload) => {
+        this.mediaStatus = payload.status;
+        this.mediaStatusMessage = payload.message;
+        if (payload.status === "checking" || payload.status === "downloading") {
+          this.bgmPlaying = false;
+          this.bgmUrl = "";
+          this.videoUrl = "";
+        }
+        if (payload.status === "error" || payload.status === "offline") {
+          this.setStatus(
+            payload.status === "offline" ? "Media offline; launcher tetap dapat digunakan." : "Sinkronisasi media gagal.",
+            payload.message,
+          );
+        }
+      },
+      onMediaProgress: (payload) => {
+        this.mediaProgress = payload;
       },
       onUpdateDate: (dateStr) => {
         this.updateDate = dateStr;
@@ -174,6 +282,7 @@ export class LauncherState implements ILauncherState {
 
   async saveConfig() {
     this.config.gamePath = this.gamePath;
+    this.config = normalizeLauncherConfig(this.config).config;
     await bridge.saveSettings(JSON.stringify(this.config));
   }
 }

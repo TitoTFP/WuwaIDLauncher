@@ -39,46 +39,107 @@
     dropdownOpen = false;
   }
 
+  function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
   async function handleBrowseGameDir() {
     closeDropdown();
-    const selected = await bridge.browseGameFolder();
-    if (selected && selected !== '?INVALID') {
-      appState.gamePath = selected;
-      await appState.saveConfig();
-      await bridge.checkPatchStatus(appState.gamePath, appState.config.installMethod);
+    try {
+      const selected = await bridge.browseGameFolder();
+      if (selected === '?INVALID') {
+        appState.setStatus('Folder game yang dipilih tidak valid.');
+        return;
+      }
+      if (selected) {
+        const previous = appState.gamePath;
+        appState.gamePath = selected;
+        try {
+          await appState.saveConfig();
+          await bridge.checkPatchStatus(appState.gamePath, appState.config.installMethod);
+        } catch (error) {
+          appState.gamePath = previous;
+          appState.config.gamePath = previous;
+          throw error;
+        }
+      }
+    } catch (error) {
+      appState.setStatus('Gagal memilih folder game.', errorMessage(error));
     }
   }
 
   async function handleCheckPatch() {
     closeDropdown();
     if (!appState.gamePath) return;
-    await bridge.checkPatchStatus(appState.gamePath, appState.config.installMethod);
+    try {
+      await bridge.checkPatchStatus(appState.gamePath, appState.config.installMethod);
+    } catch (error) {
+      appState.setStatus('Gagal memeriksa status patch.', errorMessage(error));
+    }
   }
 
   async function handleCheckLauncherUpdate() {
     closeDropdown();
-    await bridge.checkLauncherUpdate();
+    try {
+      await bridge.checkLauncherUpdate();
+    } catch (error) {
+      appState.setStatus('Gagal memeriksa update launcher.', errorMessage(error));
+    }
   }
 
   async function handleForceQuit() {
     closeDropdown();
-    await bridge.forceQuitGame();
+    try {
+      await bridge.forceQuitGame();
+    } catch (error) {
+      appState.setStatus('Gagal menutup game.', errorMessage(error));
+    }
   }
 
   async function handleRestartAdmin() {
     closeDropdown();
-    await bridge.restartAsAdmin();
+    try {
+      await bridge.restartAsAdmin();
+    } catch (error) {
+      appState.setStatus('Gagal menjalankan launcher sebagai admin.', errorMessage(error));
+    }
   }
 
   async function handleUploadLogs() {
     closeDropdown();
     if (!appState.gamePath) return;
-    await bridge.uploadLogs(appState.gamePath);
+    if (!appState.config.diagnosticsUploadEnabled) {
+      appState.setStatus('Upload diagnostics nonaktif.', 'Aktifkan izin upload di Pengaturan.');
+      return;
+    }
+    try {
+      await bridge.uploadLogs(appState.gamePath);
+    } catch (error) {
+      appState.logUploadActive = false;
+      appState.setStatus('Gagal memulai pengunggahan log.', errorMessage(error));
+    }
   }
 
   async function handleResetCache() {
     closeDropdown();
-    await bridge.resetWebViewCache();
+    try {
+      await bridge.resetWebViewCache();
+      appState.setStatus('Cache tampilan berhasil direset.');
+    } catch (error) {
+      appState.setStatus('Gagal mereset cache tampilan.', errorMessage(error));
+    }
+  }
+
+  async function handleDx11Change(event: Event) {
+    const previous = appState.config.dx11;
+    appState.config.dx11 = (event.currentTarget as HTMLInputElement).checked;
+    try {
+      await appState.saveConfig();
+      appState.setStatus('Mode DX11 diperbarui.');
+    } catch (error) {
+      appState.config.dx11 = previous;
+      appState.setStatus('Mode DX11 tidak dapat disimpan.', errorMessage(error));
+    }
   }
 
   let showUninstallConfirm = $state(false);
@@ -92,10 +153,17 @@
   async function handleConfirmUninstall() {
     showUninstallConfirm = false;
     if (!appState.gamePath) return;
-    const res = await bridge.uninstall(appState.gamePath);
-    if (res === 'ok') {
-      appState.patchState = 'not_installed';
-      appState.installed = false;
+    try {
+      const res = await bridge.uninstall(appState.gamePath);
+      if (res === 'ok') {
+        appState.patchState = 'not_installed';
+        appState.installed = false;
+        appState.setStatus('Patch ID berhasil dihapus.');
+      } else {
+        appState.setStatus('Patch ID tidak dapat dihapus.', res);
+      }
+    } catch (error) {
+      appState.setStatus('Gagal menghapus Patch ID.', errorMessage(error));
     }
   }
 
@@ -106,31 +174,60 @@
   async function handlePrimaryAction() {
     if (appState.gameRunning || appState.installing || appState.launching) return;
 
-    if (!appState.gamePath) {
-      const selected = await bridge.browseGameFolder();
-      if (selected && selected !== '?INVALID') {
-        appState.gamePath = selected;
-        await appState.saveConfig();
-        await bridge.checkPatchStatus(appState.gamePath, appState.config.installMethod);
+    try {
+      if (!appState.gamePath) {
+        const selected = await bridge.browseGameFolder();
+        if (selected === '?INVALID') {
+          appState.setStatus('Folder game yang dipilih tidak valid.');
+          return;
+        }
+        if (selected) {
+          const previous = appState.gamePath;
+          appState.gamePath = selected;
+          try {
+            await appState.saveConfig();
+            await bridge.checkPatchStatus(appState.gamePath, appState.config.installMethod);
+          } catch (error) {
+            appState.gamePath = previous;
+            appState.config.gamePath = previous;
+            throw error;
+          }
+        }
+        return;
       }
-      return;
-    }
 
-    if (appState.patchState === 'ready') {
-      // Launch game
-      appState.launching = true;
-      await bridge.launchGame(appState.gamePath, !!appState.config.dx11, appState.config.installMethod);
-    } else {
-      // Install / Update patch
-      appState.installing = true;
-      appState.progressPercent = 0;
-      appState.progressStatus = 'Memulai proses instalasi...';
-      await bridge.startInstallation(
-        appState.gamePath,
-        'standard',
-        true,
-        appState.config.installMethod,
-      );
+      if (appState.patchState === 'ready') {
+        appState.launching = true;
+        await bridge.launchGame(appState.gamePath, appState.config.dx11, appState.config.installMethod);
+      } else {
+        const access = await bridge.checkGameFolderWriteAccess(
+          appState.gamePath,
+          appState.config.installMethod,
+          true,
+        );
+        if (access !== 'ok') {
+          appState.setStatus(
+            access === 'needs_admin'
+              ? 'Folder game membutuhkan hak Administrator.'
+              : 'Folder game tidak valid atau metode tidak didukung.',
+            access,
+          );
+          return;
+        }
+        appState.installing = true;
+        appState.progressPercent = 0;
+        appState.progressStatus = 'Memulai proses instalasi...';
+        await bridge.startInstallation(
+          appState.gamePath,
+          'standard',
+          true,
+          appState.config.installMethod,
+        );
+      }
+    } catch (error) {
+      appState.installing = false;
+      appState.launching = false;
+      appState.setStatus('Operasi launcher gagal.', errorMessage(error));
     }
   }
 
@@ -150,6 +247,48 @@
 <svelte:window onclick={closeDropdown} />
 
 <aside class="right-panel" id="rightPanel">
+  {#if appState.statusMessage}
+    <div class="rp-status operation-status" role="status" aria-live="polite">
+      <div class="rp-status__row">
+        <div class="operation-status__title">{appState.statusMessage}</div>
+        <button class="operation-status__close" type="button" aria-label="Tutup pesan" onclick={() => appState.clearStatus()}>×</button>
+      </div>
+      {#if appState.diagnosticMessage && appState.diagnosticMessage !== appState.statusMessage}
+        <details class="operation-status__details">
+          <summary>Detail teknis</summary>
+          <code>{appState.diagnosticMessage}</code>
+        </details>
+      {/if}
+    </div>
+  {/if}
+
+  {#if appState.logUploadActive || appState.logUploadStatus}
+    <div class="rp-status operation-status" role="status" aria-live="polite">
+      <div class="operation-status__title">{appState.logUploadActive ? 'Mengunggah log diagnostik...' : appState.logUploadStatus}</div>
+    </div>
+  {/if}
+
+  {#if appState.mediaStatus && appState.mediaStatus !== 'ready'}
+    <div class="rp-status operation-status" role="status" aria-live="polite">
+      <div class="operation-status__title">Media: {appState.mediaStatus}</div>
+      <div class="operation-status__details">{appState.mediaStatusMessage}</div>
+      {#if appState.mediaProgress}
+        <div class="rp-status__bar"><div class="progress__fill" style="width: {appState.mediaProgress.percent}%;"></div></div>
+      {/if}
+    </div>
+  {/if}
+
+  {#if appState.launcherUpdateStatus}
+    <div class="rp-status operation-status" role="status" aria-live="polite">
+      <div class="rp-status__row">
+        <span class="operation-status__title">Update launcher</span>
+        <span class="rp-status__pct">{appState.launcherUpdateProgress}%</span>
+      </div>
+      <div class="rp-status__bar"><div class="progress__fill" style="width: {appState.launcherUpdateProgress}%;"></div></div>
+      <div class="operation-status__details">{appState.launcherUpdateStatus}</div>
+    </div>
+  {/if}
+
   <!-- Countdown to Next Game Version -->
   {#if targetDateMs > 0}
     <div class="update-countdown" class:uc-done={isDone} id="updateCountdown">
@@ -196,8 +335,8 @@
         <div class="progress__fill" style="width: {appState.progressPercent}%;"></div>
       </div>
       <div class="progress__foot">
-        <span id="progressSpeed"></span>
-        <span id="progressSize"></span>
+        <span id="progressSpeed">{appState.progressSpeedMbps > 0 ? `${appState.progressSpeedMbps.toFixed(1)} MB/s` : ''}</span>
+        <span id="progressSize">{appState.progressTotalBytes > 0 ? `${(appState.progressDownloadedBytes / 1048576).toFixed(1)} / ${(appState.progressTotalBytes / 1048576).toFixed(1)} MB` : ''}</span>
       </div>
     </div>
   {/if}
@@ -286,10 +425,7 @@
         id="chkDx11"
         class="dx11-input"
         checked={!!appState.config.dx11}
-        onchange={(e) => {
-          appState.config.dx11 = (e.target as HTMLInputElement).checked;
-          void appState.saveConfig();
-        }}
+        onchange={handleDx11Change}
       />
       <span class="dx11-checkmark"></span>
       <span class="dx11-text">Jalankan game dengan DirectX 11</span>
@@ -346,3 +482,44 @@
     </div>
   </div>
 {/if}
+
+<style>
+  .operation-status {
+    color: var(--text-1, #f5f5f5);
+  }
+
+  .operation-status__title {
+    color: var(--cyan-accent, #9ee8ff);
+    font-size: 12px;
+    line-height: 1.35;
+  }
+
+  .operation-status__close {
+    margin-left: auto;
+    padding: 0 4px;
+    border: 0;
+    background: transparent;
+    color: var(--text-2, #b6bdcf);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .operation-status__details {
+    color: var(--text-2, #b6bdcf);
+    font-size: 10px;
+    line-height: 1.35;
+  }
+
+  .operation-status__details code {
+    display: block;
+    margin-top: 5px;
+    white-space: pre-wrap;
+    user-select: text;
+  }
+
+  .operation-status summary {
+    cursor: pointer;
+    color: var(--accent-gold, #f4d48a);
+  }
+</style>

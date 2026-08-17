@@ -36,8 +36,12 @@ pub fn parse_sha256sums(content: &str) -> HashMap<String, String> {
 }
 
 pub fn verify_sha256(file_path: &Path, expected_hash: &str) -> Result<bool, std::io::Error> {
+    Ok(compute_sha256(file_path)? == expected_hash.trim().to_lowercase())
+}
+
+pub fn compute_sha256(file_path: &Path) -> Result<String, std::io::Error> {
     if !file_path.exists() {
-        return Ok(false);
+        return Ok(String::new());
     }
     let mut file = File::open(file_path)?;
     let mut hasher = Sha256::new();
@@ -51,8 +55,7 @@ pub fn verify_sha256(file_path: &Path, expected_hash: &str) -> Result<bool, std:
         hasher.update(&buffer[..count]);
     }
 
-    let calculated = hex::encode(hasher.finalize()).to_lowercase();
-    Ok(calculated == expected_hash.trim().to_lowercase())
+    Ok(hex::encode(hasher.finalize()).to_lowercase())
 }
 
 pub async fn get_asset_content_length(url: &str) -> Result<u64, String> {

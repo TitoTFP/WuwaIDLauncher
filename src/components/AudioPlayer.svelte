@@ -9,6 +9,20 @@
   let wasPlayingBeforeGame = $state(false);
   let audioElement: HTMLAudioElement | null = $state(null);
 
+  function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  async function persistAudioConfig(): Promise<boolean> {
+    try {
+      await appState.saveConfig();
+      return true;
+    } catch (error) {
+      appState.setStatus('Preferensi audio tidak dapat disimpan.', errorMessage(error));
+      return false;
+    }
+  }
+
   // Sync state with loaded configuration
   $effect(() => {
     if (appState.config.bgmVolume !== undefined) {
@@ -23,6 +37,15 @@
   $effect(() => {
     if (!audioElement) return;
 
+    if (!appState.bgmUrl) {
+      audioElement.pause();
+      audioElement.removeAttribute('src');
+      audioElement.load();
+      isPlaying = false;
+      appState.bgmPlaying = false;
+      return;
+    }
+
     if (appState.bgmUrl && audioElement.src !== appState.bgmUrl) {
       audioElement.src = appState.bgmUrl;
       audioElement.volume = isMuted ? 0 : volumePercent / 100;
@@ -31,8 +54,10 @@
       if (userWantsPlayback && !appState.gameRunning && appState.config.bgmEnabled !== false) {
         void audioElement.play().then(() => {
           isPlaying = true;
+          appState.bgmPlaying = true;
         }).catch(() => {
           isPlaying = false;
+          appState.bgmPlaying = false;
         });
       }
     }
@@ -47,12 +72,17 @@
         wasPlayingBeforeGame = true;
         audioElement.pause();
         isPlaying = false;
+        appState.bgmPlaying = false;
       }
     } else if (wasPlayingBeforeGame && userWantsPlayback && appState.config.bgmEnabled !== false) {
       wasPlayingBeforeGame = false;
       void audioElement.play().then(() => {
         isPlaying = true;
-      }).catch(() => {});
+        appState.bgmPlaying = true;
+      }).catch(() => {
+        isPlaying = false;
+        appState.bgmPlaying = false;
+      });
     }
   });
 
@@ -62,6 +92,7 @@
       if (audioElement && userWantsPlayback && !isPlaying && !appState.gameRunning && appState.bgmUrl) {
         void audioElement.play().then(() => {
           isPlaying = true;
+          appState.bgmPlaying = true;
         }).catch(() => {});
       }
     };
@@ -75,22 +106,37 @@
   function togglePlay() {
     if (!audioElement) return;
 
+    const previousEnabled = appState.config.bgmEnabled;
+
     if (isPlaying) {
       audioElement.pause();
       isPlaying = false;
+      appState.bgmPlaying = false;
       userWantsPlayback = false;
       appState.config.bgmEnabled = false;
-      void appState.saveConfig();
+      void persistAudioConfig().then((saved) => {
+        if (!saved) {
+          appState.config.bgmEnabled = previousEnabled;
+          userWantsPlayback = previousEnabled;
+        }
+      });
     } else {
       userWantsPlayback = true;
       appState.config.bgmEnabled = true;
-      void appState.saveConfig();
+      void persistAudioConfig().then((saved) => {
+        if (!saved) {
+          appState.config.bgmEnabled = previousEnabled;
+          userWantsPlayback = previousEnabled;
+        }
+      });
 
       if (audioElement.src) {
         void audioElement.play().then(() => {
           isPlaying = true;
+          appState.bgmPlaying = true;
         }).catch(() => {
           isPlaying = false;
+          appState.bgmPlaying = false;
         });
       }
     }
@@ -98,17 +144,25 @@
 
   function toggleMute() {
     if (!audioElement) return;
+    const previousVolume = appState.config.bgmVolume;
     isMuted = !isMuted;
     audioElement.muted = isMuted;
     if (!isMuted && volumePercent === 0) {
       volumePercent = 35;
       audioElement.volume = 0.35;
       appState.config.bgmVolume = 0.35;
-      void appState.saveConfig();
+      void persistAudioConfig().then((saved) => {
+        if (!saved) {
+          appState.config.bgmVolume = previousVolume;
+          volumePercent = Math.round(previousVolume * 100);
+          if (audioElement) audioElement.volume = previousVolume;
+        }
+      });
     }
   }
 
-  function handleVolumeChange(e: Event) {
+  async function handleVolumeChange(e: Event) {
+    const previousVolume = appState.config.bgmVolume;
     const val = parseInt((e.target as HTMLInputElement).value, 10);
     volumePercent = val;
     if (audioElement) {
@@ -119,7 +173,11 @@
       audioElement.volume = isMuted ? 0 : val / 100;
     }
     appState.config.bgmVolume = val / 100;
-    void appState.saveConfig();
+    if (!(await persistAudioConfig())) {
+      appState.config.bgmVolume = previousVolume;
+      volumePercent = Math.round(previousVolume * 100);
+      if (audioElement) audioElement.volume = previousVolume;
+    }
   }
 </script>
 
@@ -129,9 +187,9 @@
     id="bgMusic"
     loop
     preload="auto"
-    onplay={() => (isPlaying = true)}
-    onpause={() => (isPlaying = false)}
-    onerror={() => (isPlaying = false)}
+    onplay={() => { isPlaying = true; appState.bgmPlaying = true; }}
+    onpause={() => { isPlaying = false; appState.bgmPlaying = false; }}
+    onerror={() => { isPlaying = false; appState.bgmPlaying = false; appState.setStatus('Audio BGM tidak dapat diputar.'); }}
   ></audio>
 
   <button
@@ -192,7 +250,7 @@
         min="0"
         max="100"
         value={isMuted ? 0 : volumePercent}
-        oninput={handleVolumeChange}
+        onchange={handleVolumeChange}
         step="1"
       />
       <div

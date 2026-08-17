@@ -1,6 +1,7 @@
 <script lang="ts">
   import { appState } from '../lib/launcherState.svelte';
   import { bridge } from '../lib/bridge';
+  import { INSTALL_METHOD_OPTIONS } from '../lib/types';
   import type { InstallMethod, PageId } from '../lib/types';
 
   let methodMenuOpen = $state(false);
@@ -15,13 +16,25 @@
       methodMenuOpen = false;
       return;
     }
-    appState.config.installMethod = method;
     methodMenuOpen = false;
-    await appState.saveConfig();
-
-    if (appState.gamePath) {
-      await bridge.switchMethod(appState.gamePath, method);
-      await bridge.checkPatchStatus(appState.gamePath, method);
+    const previous = appState.config.installMethod;
+    try {
+      if (appState.gamePath) {
+        const report = await bridge.switchMethod(appState.gamePath, method);
+        if (report.failures.length || report.preserved.length) {
+          throw new Error([...report.failures, ...report.preserved].join('; '));
+        }
+      }
+      appState.config.installMethod = method;
+      await appState.saveConfig();
+      if (appState.gamePath) {
+        await bridge.checkPatchStatus(appState.gamePath, method);
+      }
+      appState.clearStatus();
+    } catch (error) {
+      appState.config.installMethod = previous;
+      const detail = error instanceof Error ? error.message : String(error);
+      appState.setStatus('Gagal mengganti metode instalasi.', detail);
     }
   }
 
@@ -30,12 +43,14 @@
     methodMenuOpen = !methodMenuOpen;
   }
 
-  function handleMinimize() {
-    bridge.minimizeWindow();
+  async function handleMinimize() {
+    try { await bridge.minimizeWindow(); }
+    catch (error) { appState.setStatus('Gagal meminimalkan launcher.', error instanceof Error ? error.message : String(error)); }
   }
 
-  function handleClose() {
-    bridge.closeWindow();
+  async function handleClose() {
+    try { await bridge.closeWindow(); }
+    catch (error) { appState.setStatus('Gagal menutup launcher.', error instanceof Error ? error.message : String(error)); }
   }
 </script>
 
@@ -49,12 +64,23 @@
   <div class="top-bar__right">
     <nav class="top-nav" id="topNav">
       <button
-        class="top-nav__item active"
+        class="top-nav__item"
+        class:active={appState.page === 'home'}
         onclick={() => setPage('home')}
         type="button"
       >
         HOME
       </button>
+
+      {#each [{ id: 'settings', label: 'SETTINGS' }, { id: 'logs', label: 'LOGS' }, { id: 'about', label: 'ABOUT' }] as item}
+        <button
+          class="top-nav__item"
+          class:active={appState.page === item.id}
+          disabled={appState.gameRunning}
+          onclick={() => setPage(item.id as PageId)}
+          type="button"
+        >{item.label}</button>
+      {/each}
 
       <button
         class="top-nav__item top-nav__item--menu"
@@ -72,35 +98,17 @@
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="method-menu" id="methodMenu" onclick={(e) => e.stopPropagation()}>
-        <button
-          class="method-menu__item"
-          class:active={appState.config.installMethod === 'method3'}
-          onclick={() => selectMethod('method3')}
-          type="button"
-        >
-          <span class="method-menu__title">Metode 1</span>
-          <span class="method-menu__desc">Resource Mount · tanpa signature bypass</span>
-        </button>
-
-        <button
-          class="method-menu__item"
-          class:active={appState.config.installMethod === 'method2'}
-          onclick={() => selectMethod('method2')}
-          type="button"
-        >
-          <span class="method-menu__title">Metode 2</span>
-          <span class="method-menu__desc">winhttp.dll loader</span>
-        </button>
-
-        <button
-          class="method-menu__item"
-          class:active={appState.config.installMethod === 'method1'}
-          onclick={() => selectMethod('method1')}
-          type="button"
-        >
-          <span class="method-menu__title">Metode 3</span>
-          <span class="method-menu__desc">Signature bypass</span>
-        </button>
+        {#each INSTALL_METHOD_OPTIONS as option}
+          <button
+            class="method-menu__item"
+            class:active={appState.config.installMethod === option.value}
+            onclick={() => selectMethod(option.value)}
+            type="button"
+          >
+            <span class="method-menu__title">{option.title}</span>
+            <span class="method-menu__desc">{option.description}</span>
+          </button>
+        {/each}
       </div>
     {/if}
 

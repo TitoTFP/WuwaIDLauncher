@@ -1,8 +1,13 @@
 <script lang="ts">
   import { appState } from '../lib/launcherState.svelte.ts';
   import { marked } from 'marked';
+  import { INSTALL_METHOD_OPTIONS } from '../lib/types';
+  import { sanitizeReleaseNotesHtml } from '../lib/sanitize';
 
   let collapsed = $state(false);
+  let methodLabel = $derived(
+    INSTALL_METHOD_OPTIONS.find((option) => option.value === appState.config.installMethod)?.title ?? 'Metode tidak diketahui',
+  );
 
   // SidePanel toggle handler
   function toggle() {
@@ -12,9 +17,9 @@
   let parsedHtml = $derived.by(() => {
     if (!appState.releaseNotes?.body) return '';
     try {
-      return marked.parse(appState.releaseNotes.body, { async: false }) as string;
+      return sanitizeReleaseNotesHtml(marked.parse(appState.releaseNotes.body, { async: false }) as string);
     } catch {
-      return appState.releaseNotes.body;
+      return sanitizeReleaseNotesHtml(appState.releaseNotes.body);
     }
   });
 </script>
@@ -45,7 +50,7 @@
           <p>Nikmati petualangan di Sol3 dengan patch terjemahan Bahasa Indonesia untuk Wuthering Waves.</p>
           <br />
           <p>• Versi Launcher: v{appState.appVersion}</p>
-          <p>• Metode: {appState.config.installMethod === 'method3' ? 'Metode 1 (Resource Mount)' : appState.config.installMethod === 'method2' ? 'Metode 2 (Loader)' : 'Metode 3 (Bypass)'}</p>
+          <p>• Metode: {methodLabel}</p>
           <p>• Status Patch: {appState.patchState === 'ready' ? 'Siap digunakan' : appState.patchState === 'not_installed' ? 'Belum terpasang' : appState.patchState}</p>
         </div>
       {/if}

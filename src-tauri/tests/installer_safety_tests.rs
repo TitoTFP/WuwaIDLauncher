@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
-use wuwaid_launcher_lib::engine::{installer, pak, path, signature};
+use wuwaid_launcher_lib::engine::{downloader, installer, pak, path, signature};
 
 fn game_dir() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempdir().unwrap();
@@ -71,30 +71,35 @@ fn failed_deploy_restores_foreign_mount_targets() {
 }
 
 #[test]
-fn method2_partial_cleanup_removes_only_marked_launcher_artifacts() {
+fn loader_cleanup_removes_only_owned_launcher_artifacts() {
     let temp = tempdir().unwrap();
     let game = temp.path();
-    let method2_folder = signature::get_method2_folder(game);
-    fs::create_dir_all(&method2_folder).unwrap();
-    let method2_pak = signature::get_method2_pak_path(game);
-    let method2_loader = signature::get_method2_loader_path(game);
+    let loader_folder = signature::get_loader_folder(game);
+    fs::create_dir_all(&loader_folder).unwrap();
+    let loader_pak = signature::get_loader_pak_path(game);
+    let loader_dll = signature::get_loader_dll_path(game);
 
-    fs::write(&method2_pak, b"launcher-pak").unwrap();
+    valid_pak(&loader_pak);
+    fs::write(&loader_dll, b"launcher-loader").unwrap();
     fs::write(
-        signature::get_method2_marker_path(game),
-        "wuwaid-managed-method2",
+        signature::get_loader_marker_path(game),
+        format!(
+            "wuwaid-managed-loader:pak-sha256={};loader-sha256={}",
+            downloader::compute_sha256(&loader_pak).unwrap(),
+            downloader::compute_sha256(&loader_dll).unwrap()
+        ),
     )
     .unwrap();
     installer::remove_all_owned_artifacts(game);
-    assert!(!method2_pak.exists());
-    assert!(!signature::get_method2_marker_path(game).exists());
+    assert!(!loader_pak.exists());
+    assert!(!signature::get_loader_marker_path(game).exists());
 
-    fs::create_dir_all(&method2_folder).unwrap();
-    fs::write(&method2_pak, b"foreign-pak").unwrap();
-    fs::write(&method2_loader, b"foreign-loader").unwrap();
+    fs::create_dir_all(&loader_folder).unwrap();
+    fs::write(&loader_pak, b"foreign-pak").unwrap();
+    fs::write(&loader_dll, b"foreign-loader").unwrap();
     installer::remove_all_owned_artifacts(game);
-    assert!(method2_pak.exists());
-    assert!(method2_loader.exists());
+    assert!(loader_pak.exists());
+    assert!(loader_dll.exists());
 }
 
 #[test]

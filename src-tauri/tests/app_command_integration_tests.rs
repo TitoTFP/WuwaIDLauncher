@@ -2,6 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use tempfile::tempdir;
 use wuwaid_launcher_lib::engine::atom_feed::{parse_atom_feed, ReleaseNoteEntry};
+use wuwaid_launcher_lib::engine::downloader;
 use wuwaid_launcher_lib::engine::installer::{
     deploy_resource_mount, probe_resource_mount, remove_all_owned_artifacts,
 };
@@ -54,7 +55,7 @@ fn test_app_settings_persistence() {
     let (_tmp, _game_dir, appdata_dir) = setup_mock_environment();
     let settings_file = appdata_dir.join("settings.json");
 
-    let sample_json = r#"{"gamePath":"C:\\Games\\WuWa","installMethod":"method3","dx11":true}"#;
+    let sample_json = r#"{"gamePath":"C:\\Games\\WuWa","installMethod":"resource_mount","dx11":true}"#;
     fs::write(&settings_file, sample_json).unwrap();
 
     let read_back = fs::read_to_string(&settings_file).unwrap();
@@ -69,8 +70,8 @@ fn test_app_patch_status_evaluation_all_methods() {
     // 1. Initial State -> Not Installed
     let plan = probe_resource_mount(&game_dir).unwrap();
     assert!(!plan.pak_path.exists());
-    assert!(!signature::get_method1_pak_path(&game_dir).exists());
-    assert!(!signature::get_method2_pak_path(&game_dir).exists());
+    assert!(!signature::get_signature_bypass_pak_path(&game_dir).exists());
+    assert!(!signature::get_loader_pak_path(&game_dir).exists());
 
     // 2. Deploy Method 1 (Resource Mount)
     let mount_pak = game_dir.join("mock_mount.pak");
@@ -82,29 +83,41 @@ fn test_app_patch_status_evaluation_all_methods() {
     remove_all_owned_artifacts(&game_dir);
     assert!(!plan.pak_path.exists());
 
-    let m2_pak = signature::get_method2_pak_path(&game_dir);
-    let m2_loader = signature::get_method2_loader_path(&game_dir);
-    release_like_pak(&m2_pak);
-    fs::write(&m2_loader, b"LOADER_DLL").unwrap();
+    let loader_pak = signature::get_loader_pak_path(&game_dir);
+    let loader_dll = signature::get_loader_dll_path(&game_dir);
+    release_like_pak(&loader_pak);
+    fs::write(&loader_dll, b"LOADER_DLL").unwrap();
     fs::write(
-        signature::get_method2_marker_path(&game_dir),
-        "wuwaid-managed-method2",
+        signature::get_loader_marker_path(&game_dir),
+        format!(
+            "wuwaid-managed-loader:pak-sha256={};loader-sha256={}",
+            downloader::compute_sha256(&loader_pak).unwrap(),
+            downloader::compute_sha256(&loader_dll).unwrap()
+        ),
     )
     .unwrap();
-    assert!(m2_pak.exists() && m2_loader.exists());
+    assert!(loader_pak.exists() && loader_dll.exists());
 
     // 4. Switch to Method 3 (Sig Bypass)
     remove_all_owned_artifacts(&game_dir);
-    assert!(!m2_pak.exists());
-    assert!(!m2_loader.exists());
+    assert!(!loader_pak.exists());
+    assert!(!loader_dll.exists());
 
-    let m1_pak = signature::get_method1_pak_path(&game_dir);
-    release_like_pak(&m1_pak);
-    assert!(m1_pak.exists());
+    let bypass_pak = signature::get_signature_bypass_pak_path(&game_dir);
+    release_like_pak(&bypass_pak);
+    fs::write(
+        signature::get_signature_bypass_marker_path(&game_dir),
+        format!(
+            "wuwaid-managed-signature-bypass:sha256={}",
+            downloader::compute_sha256(&bypass_pak).unwrap()
+        ),
+    )
+    .unwrap();
+    assert!(bypass_pak.exists());
 
     // 5. Cleanup
     remove_all_owned_artifacts(&game_dir);
-    assert!(!m1_pak.exists());
+    assert!(!bypass_pak.exists());
 }
 
 #[test]
@@ -171,30 +184,34 @@ fn test_app_method_switching_command_cleans_and_updates_cache() {
     let versions_file = appdata_dir.join("versions.json");
 
     // Initially deploy Method 2
-    let m2_pak = signature::get_method2_pak_path(&game_dir);
-    let m2_loader = signature::get_method2_loader_path(&game_dir);
-    release_like_pak(&m2_pak);
-    fs::write(&m2_loader, b"LOADER_DLL").unwrap();
+    let loader_pak = signature::get_loader_pak_path(&game_dir);
+    let loader_dll = signature::get_loader_dll_path(&game_dir);
+    release_like_pak(&loader_pak);
+    fs::write(&loader_dll, b"LOADER_DLL").unwrap();
     fs::write(
-        signature::get_method2_marker_path(&game_dir),
-        "wuwaid-managed-method2",
+        signature::get_loader_marker_path(&game_dir),
+        format!(
+            "wuwaid-managed-loader:pak-sha256={};loader-sha256={}",
+            downloader::compute_sha256(&loader_pak).unwrap(),
+            downloader::compute_sha256(&loader_dll).unwrap()
+        ),
     )
     .unwrap();
 
     // Switch method command cleans previous artifacts
     remove_all_owned_artifacts(&game_dir);
-    assert!(!m2_pak.exists());
-    assert!(!m2_loader.exists());
+    assert!(!loader_pak.exists());
+    assert!(!loader_dll.exists());
 
     // Update versions.json with new method
     let mut map = serde_json::Map::new();
     map.insert(
         "_installMethod".to_string(),
-        serde_json::Value::String("method3".to_string()),
+        serde_json::Value::String("resource_mount".to_string()),
     );
     fs::write(&versions_file, serde_json::to_string(&map).unwrap()).unwrap();
 
     let read_back: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&versions_file).unwrap()).unwrap();
-    assert_eq!(read_back["_installMethod"], "method3");
+    assert_eq!(read_back["_installMethod"], "resource_mount");
 }

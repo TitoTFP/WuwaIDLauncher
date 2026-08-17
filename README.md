@@ -29,15 +29,35 @@ Rebuild dari arsitektur terdahulu (.NET 8 WPF) ke Tauri v2 memberikan keunggulan
 
 ---
 
+## ✅ Status Implementasi & Release Gate
+
+Kontrak utama launcher sudah diimplementasikan dan diverifikasi melalui test suite Rust, Svelte check, frontend production build, serta packaging Windows. Status yang masih membutuhkan mesin game Windows release ditandai sebagai **partial/manual**; ini bukan asumsi bahwa smoke test game nyata sudah lulus.
+
+| Area | Status | Bukti / batasan |
+| :--- | :--- | :--- |
+| Path game, tiga metode, ownership marker, transaksi, rollback, switch, uninstall | **Implemented** | src-tauri/tests/milestone1_contract_tests.rs, milestone2_contract_tests.rs, installer safety |
+| Launch, external process, signature restore, force quit, error event | **Implemented + manual game smoke** | Contract tests lulus; perlu executable game nyata untuk taskkill dan lifecycle Windows |
+| Home, Settings, Logs, About, navigation lock, progress/error/reset state | **Implemented** | Svelte check 0 error/0 warning |
+| Media cache hash, offline fallback, staged replacement, release-note sanitization | **Implemented** | milestone5_contract_tests.rs, media event tests |
+| Self-update checksum, ZIP validation, staging, rollback handoff, cleanup | **Implemented + manual restart smoke** | Checksum/ZIP/handoff tests; valid release asset diperlukan untuk restart end-to-end |
+| Diagnostics consent, redaction, bounded retry, local bundle fallback, telemetry opt-in | **Implemented** | milestone6_contract_tests.rs; raw game log content tetap perlu ditinjau sebelum dibagikan |
+| EXE, MSI, NSIS packaging | **Implemented** | Artifact tercatat di docs/acceptance/windows-game-matrix.md |
+| Real game/admin/read-only/tray/offline/restart acceptance | **Partial / manual** | Jalankan matrix acceptance pada Windows release machine |
+| Future features di luar WUT-5 sampai WUT-29 | **Planned** | Tidak menjadi bagian release gate ini |
+
+Dokumen acceptance lengkap berada di docs/acceptance/windows-game-matrix.md.
+
+---
+
 ## ✨ Fitur Utama
 
 ### 🛠️ Manajemen Patch & Engine Mod Terpadu
 
 - **Instalasi & Perbaruan Sekali Klik:** Mengunduh, memverifikasi integritas hash SHA-256, dan menerapkan patch Bahasa Indonesia secara otomatis.
-- **Tiga Metode Instalasi Fleksibel (`Method 1 / 2 / 3`):**
-  - **Metode 1 (Resource Mount):** Deploy file PAK + signature + berkas mount ke folder resource game aktif (`Client/Saved/Resources/<ver>/Mount/`) tanpa menyentuh signature utama game. Dilengkapi proteksi rollback transaksional dan verifikasi integritas struktur Unreal PAK.
-  - **Metode 2 (Loader):** Menempatkan loader `winhttp.dll` dan folder `wuwaIndonesia/` pada direktori binaries game (`Client/Binaries/Win64/`).
-  - **Metode 3 (Signature Bypass):** Deploy PAK ke `Client/Content/Paks/` dengan siklus hidup pencadangan `.sig` dan pemulihan otomatis saat game dijalankan.
+- **Tiga Metode Instalasi Fleksibel:** mapping internal selalu memakai identifier semantik berikut; `method1/2/3` hanya alias legacy yang dimigrasikan saat membaca settings lama.
+  - **Metode 1 — `resource_mount` (Resource Mount):** Deploy file PAK + signature + berkas mount ke folder resource game aktif (`Client/Saved/Resources/<ver>/Mount/`) tanpa menyentuh signature utama game. Dilengkapi proteksi rollback transaksional dan verifikasi integritas struktur Unreal PAK.
+  - **Metode 2 — `loader` (Loader):** Menempatkan loader `winhttp.dll` dan folder `wuwaIndonesia/` pada direktori binaries game (`Client/Binaries/Win64/`).
+  - **Metode 3 — `signature_bypass` (Signature Bypass):** Deploy PAK ke `Client/Content/Paks/` dengan siklus hidup pencadangan `.sig` dan pemulihan otomatis saat game dijalankan.
 - **Dynamic Method Switcher:** Berpindah metode instalasi secara instan dengan pembersihan artefak metode sebelumnya secara otomatis dan aman.
 - **Deteksi Folder Game Otomatis:** Mendeteksi lokasi direktori game melalui Windows Registry dan jalur default sistem.
 - **Engine PAK Packer & FNV64:** Modul Rust murni untuk pembuatan paket PAK Unreal Engine kompatibel dengan hashing FNV64 & index SHA-1.
@@ -51,7 +71,7 @@ Rebuild dari arsitektur terdahulu (.NET 8 WPF) ke Tauri v2 memberikan keunggulan
 ### ⚡ Mode Tray & Penghematan Resource Ekstrem
 
 - **Window Minimization ke System Tray:** Launcher otomatis menyembunyikan jendela ke system tray saat game berjalan dengan footprint RAM ultra-rendah (<15MB Working Set).
-- **Heartbeat Pemain Aktif Anonim:** Telemetri anonim ringan untuk menghitung jumlah pemain aktif secara berkala tanpa membebani koneksi jaringan.
+- **Heartbeat Pemain Aktif Anonim (opt-in):** Telemetri default nonaktif dan hanya dikirim setelah pengguna mengaktifkannya di Settings.
 - **High Performance Mode:** Manajemen konfigurasi `Engine.ini` untuk optimasi performa grafis dan kelancaran frametime game.
 
 ### 🛡️ Keamanan, Diagnostik & Menu Cepat (8 Hamburger Actions)
@@ -60,7 +80,7 @@ Rebuild dari arsitektur terdahulu (.NET 8 WPF) ke Tauri v2 memberikan keunggulan
 - **Perbarui Patch ID & Perbarui Launcher:** Validasi ulang integritas file mod lokal dan pengecekan rilis versi terbaru launcher.
 - **Paksa Tutup Game:** Terminasi proses `Client-Win64-Shipping.exe` secara aman jika terjadi crash/hang.
 - **Jalankan sebagai Admin:** Alur restart aplikasi dengan elevasi hak akses Administrator Windows (`runas`).
-- **Kirim Log Diagnostik:** Pengumpul dan pengarsip log game serta launcher ke berkas ZIP untuk bantuan teknis.
+- **Kirim Log Diagnostik (opt-in):** Pengumpul dan pengarsip log game serta launcher ke berkas ZIP; settings/versions disensor, retry dibatasi dua kali, dan bundle lokal tetap tersedia saat upload gagal.
 - **Reset Cache Tampilan:** Pembersihan data cache webview dan media cache lokal.
 - **Hapus Patch ID:** Penghapusan bersih seluruh artefak mod yang dikelola launcher dan pemulihan signature asli.
 
@@ -83,6 +103,27 @@ Rebuild dari arsitektur terdahulu (.NET 8 WPF) ke Tauri v2 memberikan keunggulan
 1. Pilih metode instalasi yang diinginkan di pengaturan / launcher.
 2. Klik tombol **Instal Patch ID** (atau **Perbarui Patch**).
 3. Setelah selesai, klik **Mainkan** untuk langsung masuk ke Sol3 dalam Bahasa Indonesia!
+
+### Mapping Metode dan Recovery
+
+Gunakan identifier canonical berikut pada settings atau command bridge:
+
+- resource_mount — resource mount tanpa signature bypass.
+- loader — winhttp.dll loader.
+- signature_bypass — bypass signature sementara ketika game berjalan.
+
+method1, method2, dan method3 hanya alias legacy saat migrasi settings lama. Launcher menolak path yang tidak mengandung executable game, menjaga artefak asing tanpa owner marker, dan menulis metadata hanya setelah cleanup berhasil. Jika instalasi atau update gagal, jangan hapus file game manual: simpan diagnostics lokal, jalankan pemeriksaan status, dan ulangi setelah penyebab permission/network diperbaiki.
+
+Lokasi artefak runtime:
+
+- Settings dan versions: %LOCALAPPDATA%/WuwaIDLauncher/.
+- Media cache: %LOCALAPPDATA%/WuwaIDLauncher/Cache/.
+- Bundle diagnostics: %LOCALAPPDATA%/WuwaIDLauncher/Diagnostics/.
+- Update staging/handoff sementara: .staging/, update.zip, dan update-handoff.cmd di appdata; artifact gagal dibersihkan otomatis.
+
+### Privacy dan Consent
+
+Upload diagnostics dan telemetry keduanya **default nonaktif**. Upload hanya dimulai dari aksi pengguna setelah toggle diagnostics aktif. settings.json dan versions.json disensor untuk path game, install path, client ID, dan username sebelum masuk ZIP. Bundle lokal dipertahankan agar pengguna dapat memeriksa atau menghapusnya sendiri. Isi raw game log dapat membawa data yang ditulis oleh game, jadi tinjau bundle sebelum membagikannya.
 
 ---
 
@@ -123,7 +164,7 @@ Rebuild dari arsitektur terdahulu (.NET 8 WPF) ke Tauri v2 memberikan keunggulan
 3. Jalankan aplikasi mode pengembangan (Live Reload):
 
    ```bash
-   npm run tauri dev
+   npm run tauri -- dev
    ```
 
 ### Pengujian & Validasi Kualitas
@@ -136,15 +177,35 @@ npm run check
 npm run build
 
 # Menjalankan seluruh unit test, mock HTTP, command integration, dan installer safety tests
-cargo test --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1
+& 'C:\Users\Gipar\.cargo\bin\cargo.exe' test --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1
 ```
 
 ### Kompilasi Rilis Distribusi (Windows MSVC)
 
 ```bash
-# Build binary rilis produksi via Tauri
-npm run tauri build
+# Build binary rilis produksi via Tauri (PowerShell; Cargo harus berada di PATH)
+$env:Path = "C:\Users\Gipar\.cargo\bin;$env:Path"
+npm run tauri -- build
 ```
+
+Artifact release yang diharapkan:
+
+- src-tauri/target/release/wuwaid-launcher.exe
+- src-tauri/target/release/bundle/msi/WuwaIDLauncher_2.6.1_x64_en-US.msi
+- src-tauri/target/release/bundle/nsis/WuwaIDLauncher_2.6.1_x64-setup.exe
+- src-tauri/target/release/bundle/release/WuwaIDLauncher_2.6.1_x64.zip
+- src-tauri/target/release/bundle/release/SHA256sums.txt
+
+Checklist sebelum publish:
+
+- [ ] npm run check dan npm run build lulus.
+- [ ] cargo test --all-targets lulus dengan fixture deterministic.
+- [ ] EXE, MSI, NSIS, updater ZIP, dan SHA256sums.txt ada serta versinya 2.6.1.
+- [ ] Jalankan docs/acceptance/windows-game-matrix.md pada Windows dengan fixture reversible.
+- [ ] Uji read-only/admin, tray, force quit, offline media, dan self-update restart pada mesin release.
+- [ ] Tinjau bundle diagnostics dan konfirmasi consent sebelum mengirimnya.
+
+Bukti gate lokal terbaru tersimpan di `docs/acceptance/windows-game-matrix-results-2026-08-18.md`.
 
 ---
 

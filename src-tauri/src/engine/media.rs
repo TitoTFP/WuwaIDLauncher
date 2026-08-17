@@ -60,6 +60,80 @@ pub fn get_cached_media_paths(cache_dir: &Path) -> (Option<PathBuf>, Option<Path
     (bgm_opt, video_opt)
 }
 
+pub fn cached_manifest_path(cache_dir: &Path) -> PathBuf {
+    cache_dir.join("assets-manifest.json")
+}
+
+pub fn read_cached_manifest(cache_dir: &Path) -> Result<Option<AssetManifest>, String> {
+    let path = cached_manifest_path(cache_dir);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let data = std::fs::read_to_string(&path)
+        .map_err(|error| format!("Gagal membaca manifest media cache: {error}"))?;
+    serde_json::from_str(&data)
+        .map(Some)
+        .map_err(|error| format!("Manifest media cache tidak valid: {error}"))
+}
+
+pub fn write_cached_manifest(cache_dir: &Path, manifest: &AssetManifest) -> Result<(), String> {
+    std::fs::create_dir_all(cache_dir)
+        .map_err(|error| format!("Gagal membuat folder cache media: {error}"))?;
+    let path = cached_manifest_path(cache_dir);
+    let temp = path.with_extension("tmp");
+    let data = serde_json::to_vec(manifest)
+        .map_err(|error| format!("Gagal menyusun manifest media cache: {error}"))?;
+    std::fs::write(&temp, data)
+        .map_err(|error| format!("Gagal menulis manifest media cache: {error}"))?;
+    if path.exists() {
+        std::fs::remove_file(&path)
+            .map_err(|error| format!("Gagal mengganti manifest media cache: {error}"))?;
+    }
+    std::fs::rename(&temp, &path)
+        .map_err(|error| format!("Gagal mengaktifkan manifest media cache: {error}"))
+}
+
+pub fn validate_cached_media(
+    cache_dir: &Path,
+    manifest: &AssetManifest,
+) -> Result<bool, String> {
+    for name in ["bgm.mp3", "bg-video.mp4"] {
+        let Some(asset) = manifest.assets.iter().find(|asset| asset.name == name) else {
+            return Ok(false);
+        };
+        if asset.sha256.trim().is_empty() {
+            return Ok(false);
+        }
+        let path = cache_dir.join(name);
+        if !path.is_file() || !verify_sha256(&path, &asset.sha256).unwrap_or(false) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn replace_verified_asset(candidate: &Path, destination: &Path) -> Result<(), String> {
+    if destination.exists() && !destination.is_file() {
+        return Err(format!("Target media bukan file: {:?}", destination));
+    }
+    let backup = destination.with_extension("previous");
+    if backup.exists() {
+        let _ = std::fs::remove_file(&backup);
+    }
+    if destination.exists() {
+        std::fs::rename(destination, &backup)
+            .map_err(|error| format!("Gagal menyimpan media lama: {error}"))?;
+    }
+    if let Err(error) = std::fs::rename(candidate, destination) {
+        if backup.exists() {
+            let _ = std::fs::rename(&backup, destination);
+        }
+        return Err(format!("Gagal mengaktifkan media baru: {error}"));
+    }
+    let _ = std::fs::remove_file(backup);
+    Ok(())
+}
+
 pub async fn sync_media<F>(
     cache_dir: &Path,
     manifest: &AssetManifest,
@@ -103,26 +177,27 @@ where
         if dest.exists() {
             if verify_sha256(&dest, &asset.sha256).unwrap_or(false) {
                 needs_download = false;
-            } else {
-                let _ = std::fs::remove_file(&dest);
             }
         }
 
         if needs_download {
             let asset_name = asset.name.clone();
             let cb = Arc::clone(&on_progress);
-            download_file(&asset.url, &dest, move |p| {
+            let candidate = cache_dir.join(format!(".{}.candidate", asset.name));
+            let _ = std::fs::remove_file(&candidate);
+            download_file(&asset.url, &candidate, move |p| {
                 cb(&asset_name, p);
             })
             .await?;
 
-            if !verify_sha256(&dest, &asset.sha256).unwrap_or(false) {
-                let _ = std::fs::remove_file(&dest);
+            if !verify_sha256(&candidate, &asset.sha256).unwrap_or(false) {
+                let _ = std::fs::remove_file(&candidate);
                 return Err(format!(
                     "Integritas hash SHA-256 untuk aset {} tidak valid. File dibersihkan.",
                     asset.name
                 ));
             }
+            replace_verified_asset(&candidate, &dest)?;
         }
 
         let local_str = dest.to_string_lossy().to_string();
@@ -136,6 +211,8 @@ where
     if bgm_local.is_empty() || video_local.is_empty() {
         return Err("Aset media tidak lengkap setelah sinkronisasi.".to_string());
     }
+
+    write_cached_manifest(cache_dir, manifest)?;
 
     Ok(MediaReadyPayload {
         bgm_url: bgm_local,

@@ -1,6 +1,7 @@
 pub mod engine;
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::Duration;
 use tauri::http::{Request, Response};
 use tauri::menu::{Menu, MenuItem};
@@ -54,6 +55,132 @@ fn get_settings_path() -> PathBuf {
     get_appdata_dir().join("settings.json")
 }
 
+#[derive(Default)]
+struct RuntimeCoordinator {
+    launcher_pid: Mutex<Option<u32>>,
+    game_path: Mutex<Option<PathBuf>>,
+}
+
+fn coordinator_launcher_pid<R: Runtime>(app: &AppHandle<R>) -> Option<u32> {
+    app.try_state::<RuntimeCoordinator>().and_then(|state| {
+        state.launcher_pid.lock().ok().and_then(|value| *value)
+    })
+}
+
+fn set_launcher_process<R: Runtime>(app: &AppHandle<R>, pid: Option<u32>, path: Option<PathBuf>) {
+    if let Some(state) = app.try_state::<RuntimeCoordinator>() {
+        if let Ok(mut value) = state.launcher_pid.lock() {
+            *value = pid;
+        }
+        if let Ok(mut value) = state.game_path.lock() {
+            *value = path;
+        }
+    }
+}
+
+fn restore_tracked_signature<R: Runtime>(app: &AppHandle<R>) {
+    if engine::runtime::is_game_running() {
+        return;
+    }
+    if let Some(state) = app.try_state::<RuntimeCoordinator>() {
+        if let Ok(mut game_path) = state.game_path.lock() {
+            if let Some(path) = game_path.take() {
+                let _ = engine::signature::restore_sig(&path);
+            }
+        }
+        if let Ok(mut launcher_pid) = state.launcher_pid.lock() {
+            *launcher_pid = None;
+        }
+    }
+}
+
+fn emit_runtime_state<R: Runtime>(app: &AppHandle<R>, state: engine::runtime::RuntimeState) {
+    let origin = match state.origin {
+        engine::runtime::ProcessOrigin::Launcher => "launcher",
+        engine::runtime::ProcessOrigin::External => "external",
+    };
+    let _ = app.emit(
+        "onGameRuntimeState",
+        serde_json::json!({"active": state.active, "origin": origin}),
+    );
+}
+
+fn emit_telemetry_status<R: Runtime>(
+    app: &AppHandle<R>,
+    status: &str,
+    message: impl Into<String>,
+) {
+    let _ = app.emit(
+        "onTelemetryStatus",
+        serde_json::json!({
+            "status": status,
+            "message": message.into()
+        }),
+    );
+}
+
+async fn send_telemetry_if_enabled<R: Runtime>(
+    app: &AppHandle<R>,
+    install_method: &str,
+    event: &str,
+) {
+    let enabled = load_settings()
+        .map(|result| result.settings.telemetry_enabled)
+        .unwrap_or(false);
+    if !engine::telemetry::should_send_telemetry(enabled) {
+        emit_telemetry_status(app, "disabled", "Telemetry nonaktif.");
+        return;
+    }
+
+    let appdata = get_appdata_dir();
+    let client_id = engine::telemetry::get_or_create_client_id(&appdata);
+    match engine::telemetry::send_heartbeat(
+        &client_id,
+        env!("CARGO_PKG_VERSION"),
+        install_method,
+        event,
+    )
+    .await
+    {
+        Ok(true) => emit_telemetry_status(app, "sent", "Telemetry anonim terkirim."),
+        Ok(false) => emit_telemetry_status(
+            app,
+            "error",
+            "Server telemetry menolak request.",
+        ),
+        Err(error) => emit_telemetry_status(
+            app,
+            "error",
+            format!("Telemetry tidak dapat dikirim: {error}"),
+        ),
+    }
+}
+
+fn spawn_runtime_monitor<R: Runtime>(app: AppHandle<R>) {
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(2));
+        let mut previous = None;
+        loop {
+            interval.tick().await;
+            if app.get_webview_window("main").is_none() {
+                break;
+            }
+            let detected_pid = engine::runtime::find_game_process_id();
+            let state = engine::runtime::reconcile_runtime_state(
+                coordinator_launcher_pid(&app),
+                detected_pid,
+            );
+            if previous != Some(state) {
+                emit_runtime_state(&app, state);
+                previous = Some(state);
+            }
+            if detected_pid.is_none() && coordinator_launcher_pid(&app).is_some() {
+                set_launcher_process(&app, None, None);
+            }
+        }
+    });
+}
+
 pub fn parse_range_header(range_header: &str, total_len: u64) -> Option<(u64, u64)> {
     if total_len == 0 {
         return None;
@@ -98,6 +225,7 @@ fn close_window<R: Runtime>(window: WebviewWindow<R>) {
     if engine::runtime::is_game_running() {
         let _ = window.hide();
     } else {
+        restore_tracked_signature(&window.app_handle());
         window.app_handle().exit(0);
     }
 }
@@ -134,23 +262,47 @@ async fn browse_game_folder<R: Runtime>(app: AppHandle<R>) -> Result<String, Str
 
 #[tauri::command]
 fn save_settings(settings_json: String) -> Result<(), String> {
+    let normalized = engine::settings::normalize_settings_json(&settings_json);
     let path = get_settings_path();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    std::fs::write(&path, settings_json).map_err(|e| format!("Failed to save settings: {}", e))?;
+    for diagnostic in &normalized.diagnostics {
+        log::warn!("Settings normalized while saving: {}", diagnostic);
+    }
+    let serialized = serde_json::to_string(&normalized.settings)
+        .map_err(|e| format!("Failed to serialize settings: {e}"))?;
+    std::fs::write(&path, serialized)
+        .map_err(|e| format!("Failed to save settings: {e}"))?;
     log::info!("Settings saved to {:?}", path);
     Ok(())
 }
 
 #[tauri::command]
-fn load_settings() -> Result<String, String> {
+fn load_settings() -> Result<engine::settings::SettingsLoadResult, String> {
     let path = get_settings_path();
-    if path.exists() {
-        std::fs::read_to_string(&path).map_err(|e| format!("Failed to read settings: {}", e))
+    let result = if path.exists() {
+        let raw = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read settings: {e}"))?;
+        engine::settings::normalize_settings_json(&raw)
     } else {
-        Ok(String::new())
+        engine::settings::SettingsLoadResult {
+            settings: engine::settings::LauncherSettings::default(),
+            repaired: false,
+            diagnostics: Vec::new(),
+        }
+    };
+
+    if result.repaired || !path.exists() {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let serialized = serde_json::to_string(&result.settings)
+            .map_err(|e| format!("Failed to serialize default settings: {e}"))?;
+        std::fs::write(&path, serialized)
+            .map_err(|e| format!("Failed to repair settings: {e}"))?;
     }
+    Ok(result)
 }
 
 pub fn app_version_value() -> String {
@@ -253,19 +405,68 @@ fn get_vh_version() -> String {
         .unwrap_or_default()
 }
 
+fn get_installed_patch_version() -> Option<String> {
+    let path = get_appdata_dir().join("versions.json");
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+        .and_then(|json| {
+            json.get("_vhVersion")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        })
+        .filter(|version| !version.trim().is_empty())
+}
+
+async fn get_latest_patch_version() -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .ok()?;
+    engine::atom_feed::fetch_latest_release_notes(&client, engine::atom_feed::ATOM_FEED_URL)
+        .await
+        .ok()
+        .map(|entry| entry.tag)
+        .filter(|version| !version.trim().is_empty())
+}
+
 #[tauri::command]
 fn check_launcher_update<R: Runtime>(app: AppHandle<R>) {
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
         let current_version = env!("CARGO_PKG_VERSION");
-        if let Ok(Some(release)) = engine::updater::check_latest_release(current_version).await {
-            if let Some(zip) = release.zip_url {
-                let _ = app_handle.emit("onLauncherUpdateAvailable", serde_json::json!({
-                    "version": release.version,
-                    "tag": release.tag_name,
-                    "body": release.body,
-                    "zipUrl": zip
-                }));
+        match engine::updater::check_latest_release(current_version).await {
+            Ok(Some(release)) => {
+                if let (Some(zip), Some(checksums)) = (release.zip_url, release.checksums_url) {
+                    if !engine::updater::is_safe_download_url(&zip)
+                        || !engine::updater::is_safe_download_url(&checksums)
+                    {
+                        let _ = app_handle.emit(
+                            "onLauncherUpdateError",
+                            "Asset update memakai URL yang tidak aman.".to_string(),
+                        );
+                        return;
+                    }
+                    let _ = app_handle.emit("onLauncherUpdateAvailable", serde_json::json!({
+                        "version": release.version,
+                        "tag": release.tag_name,
+                        "body": release.body,
+                        "zipUrl": zip,
+                        "checksumsUrl": checksums
+                    }));
+                } else {
+                    let _ = app_handle.emit(
+                        "onLauncherUpdateError",
+                        "Update launcher ditemukan tetapi ZIP atau checksum asset tidak tersedia.".to_string(),
+                    );
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let _ = app_handle.emit(
+                    "onLauncherUpdateError",
+                    format!("Gagal memeriksa update launcher: {error}"),
+                );
             }
         }
     });
@@ -276,20 +477,24 @@ fn check_and_sync_media<R: Runtime>(app: AppHandle<R>) {
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
         let cache_dir = get_appdata_dir().join("Cache");
-
-        // 1. Immediately emit onMediaReady if valid cached assets already exist locally
-        let (cached_bgm, cached_video) = engine::media::get_cached_media_paths(&cache_dir);
-        if cached_bgm.is_some() && cached_video.is_some() {
-            let _ = app_handle.emit("onMediaReady", serde_json::json!({
-                "bgmUrl": "media://localhost/bgm.mp3",
-                "videoUrl": "media://localhost/bg-video.mp4"
-            }));
-        }
+        let cached_valid = engine::media::read_cached_manifest(&cache_dir)
+            .ok()
+            .flatten()
+            .map(|manifest| {
+                engine::media::validate_cached_media(&cache_dir, &manifest).unwrap_or(false)
+            })
+            .unwrap_or(false);
 
         let _ = app_handle.emit("onMediaStatus", serde_json::json!({
             "status": "checking",
             "message": "Memeriksa aset media..."
         }));
+        if cached_valid {
+            let _ = app_handle.emit("onMediaReady", serde_json::json!({
+                "bgmUrl": "media://localhost/bgm.mp3",
+                "videoUrl": "media://localhost/bg-video.mp4"
+            }));
+        }
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(20))
@@ -325,9 +530,15 @@ fn check_and_sync_media<R: Runtime>(app: AppHandle<R>) {
                     }
                     Err(e) => {
                         log::warn!("Media sync error: {}", e);
+                        let status = if cached_valid { "offline" } else { "error" };
+                        let message = if cached_valid {
+                            format!("Media baru gagal diverifikasi; memakai cache valid. Detail: {e}")
+                        } else {
+                            e
+                        };
                         let _ = app_handle.emit("onMediaStatus", serde_json::json!({
-                            "status": "error",
-                            "message": e
+                            "status": status,
+                            "message": message
                         }));
                     }
                 }
@@ -336,7 +547,11 @@ fn check_and_sync_media<R: Runtime>(app: AppHandle<R>) {
                 log::warn!("Failed to fetch media manifest: {}", e);
                 let _ = app_handle.emit("onMediaStatus", serde_json::json!({
                     "status": "offline",
-                    "message": e
+                    "message": if cached_valid {
+                        format!("Tidak terhubung; media cache tetap digunakan. Detail: {e}")
+                    } else {
+                        e
+                    }
                 }));
             }
         }
@@ -354,8 +569,18 @@ fn get_vh_release_notes<R: Runtime>(app: AppHandle<R>) {
         if let Ok(content) = std::fs::read_to_string(&versions_path) {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
                 if let Some(cached) = json.get("_cachedReleaseNotes") {
-                    let _ = app_handle.emit("onVHReleaseNotes", cached.clone());
-                    had_cached = true;
+                    if let Some(entry) = serde_json::from_value::<engine::atom_feed::ReleaseNoteEntry>(cached.clone())
+                        .ok()
+                        .and_then(|entry| engine::atom_feed::validate_release_note(&entry).ok())
+                    {
+                        let _ = app_handle.emit(
+                            "onVHReleaseNotes",
+                            serde_json::to_value(entry).unwrap_or_default(),
+                        );
+                        had_cached = true;
+                    } else {
+                        log::warn!("Cached release notes rejected by validation");
+                    }
                 }
             }
         }
@@ -367,6 +592,13 @@ fn get_vh_release_notes<R: Runtime>(app: AppHandle<R>) {
 
         match engine::atom_feed::fetch_latest_release_notes(&client, engine::atom_feed::ATOM_FEED_URL).await {
             Ok(entry) => {
+                let entry = match engine::atom_feed::validate_release_note(&entry) {
+                    Ok(entry) => entry,
+                    Err(error) => {
+                        log::warn!("Fetched release notes rejected by validation: {error}");
+                        return;
+                    }
+                };
                 let note_json = serde_json::json!({
                     "tag": entry.tag,
                     "date": entry.date,
@@ -403,12 +635,50 @@ fn get_vh_release_notes<R: Runtime>(app: AppHandle<R>) {
     });
 }
 
+fn cleanup_update_artifacts(temp_zip: &Path, staging: &Path, handoff: &Path) {
+    let _ = std::fs::remove_file(temp_zip);
+    let _ = std::fs::remove_dir_all(staging);
+    let _ = std::fs::remove_file(handoff);
+}
+
 #[tauri::command]
-fn perform_launcher_update<R: Runtime>(app: AppHandle<R>, version: String, zip_url: String) {
+fn perform_launcher_update<R: Runtime>(
+    app: AppHandle<R>,
+    version: String,
+    zip_url: String,
+    checksums_url: Option<String>,
+) {
     log::info!("Perform launcher update requested: {} -> {}", version, zip_url);
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
         let temp_zip = get_appdata_dir().join("update.zip");
+        if !engine::updater::is_newer_version(env!("CARGO_PKG_VERSION"), &version) {
+            let _ = app_handle.emit(
+                "onLauncherUpdateError",
+                "Versi update tidak lebih baru dari launcher saat ini.".to_string(),
+            );
+            return;
+        }
+        if !engine::updater::is_safe_download_url(&zip_url) {
+            let _ = app_handle.emit(
+                "onLauncherUpdateError",
+                "URL ZIP update tidak aman.".to_string(),
+            );
+            return;
+        }
+        let checksums_url = match checksums_url {
+            Some(url) if engine::updater::is_safe_download_url(&url) => url,
+            _ => {
+                let _ = app_handle.emit(
+                    "onLauncherUpdateError",
+                    "Checksum update wajib tersedia dari URL HTTPS.".to_string(),
+                );
+                return;
+            }
+        };
+        let staging = get_appdata_dir().join(".staging");
+        let handoff_path = get_appdata_dir().join("update-handoff.cmd");
+        cleanup_update_artifacts(&temp_zip, &staging, &handoff_path);
         let app_progress = app_handle.clone();
 
         let res = engine::downloader::download_file(&zip_url, &temp_zip, move |p| {
@@ -418,50 +688,186 @@ fn perform_launcher_update<R: Runtime>(app: AppHandle<R>, version: String, zip_u
             }));
         }).await;
 
-        if let Ok(()) = res {
-            let staging = get_appdata_dir().join(".staging");
-            if let Ok(zip_data) = std::fs::read(&temp_zip) {
-                if let Ok(exe_path) = engine::updater::extract_zip_update(&zip_data, &staging) {
-                    let _ = app_handle.emit("onLauncherUpdateRestarting", ());
-                    log::info!("Update staged at {:?}", exe_path);
+        match res {
+            Ok(()) => {
+                let verified_zip = async {
+                    let zip_data = std::fs::read(&temp_zip)
+                        .map_err(|error| format!("Gagal membaca ZIP update: {error}"))?;
+                    let client = reqwest::Client::builder()
+                        .timeout(Duration::from_secs(15))
+                        .build()
+                        .map_err(|error| format!("Gagal membuat client checksum: {error}"))?;
+                    let checksums = client
+                        .get(&checksums_url)
+                        .send()
+                        .await
+                        .map_err(|error| format!("Gagal mengambil checksum update: {error}"))?
+                        .text()
+                        .await
+                        .map_err(|error| format!("Gagal membaca checksum update: {error}"))?;
+                    let file_name = zip_url
+                        .split('?')
+                        .next()
+                        .and_then(|url| Path::new(url).file_name())
+                        .and_then(|name| name.to_str())
+                        .filter(|name| !name.is_empty())
+                        .ok_or_else(|| "Nama file ZIP update tidak valid.".to_string())?;
+                    let expected = engine::updater::parse_checksum_manifest(&checksums)
+                        .get(file_name)
+                        .cloned()
+                        .ok_or_else(|| format!("Checksum untuk {file_name} tidak ditemukan."))?;
+                    let actual = engine::downloader::compute_sha256(&temp_zip)
+                        .map_err(|error| format!("Gagal menghitung checksum update: {error}"))?;
+                    if actual != expected {
+                        return Err("Checksum ZIP update tidak cocok.".to_string());
+                    }
+                    Ok::<Vec<u8>, String>(zip_data)
+                }.await;
+                match verified_zip.and_then(|zip_data| {
+                    if staging.exists() {
+                        std::fs::remove_dir_all(&staging)
+                            .map_err(|error| format!("Gagal membersihkan staging lama: {error}"))?;
+                    }
+                    engine::updater::extract_zip_update(&zip_data, &staging)
+                }) {
+                    Ok(exe_path) => {
+                        let current_exe = match std::env::current_exe() {
+                            Ok(path) => path,
+                            Err(error) => {
+                                cleanup_update_artifacts(&temp_zip, &staging, &handoff_path);
+                                let _ = app_handle.emit(
+                                    "onLauncherUpdateError",
+                                    format!("Executable launcher saat ini tidak ditemukan: {error}"),
+                                );
+                                return;
+                            }
+                        };
+                        let handoff_path = get_appdata_dir().join("update-handoff.cmd");
+                        if let Err(error) = engine::updater::create_update_handoff(
+                            &staging,
+                            &current_exe,
+                            &handoff_path,
+                        ) {
+                            cleanup_update_artifacts(&temp_zip, &staging, &handoff_path);
+                            let _ = app_handle.emit(
+                                "onLauncherUpdateError",
+                                format!("Gagal menyiapkan restart update: {error}"),
+                            );
+                            return;
+                        }
+                        let _ = app_handle.emit("onLauncherUpdateProgress", serde_json::json!({
+                            "percent": 100,
+                            "status": "Update terverifikasi dan siap diterapkan."
+                        }));
+                        log::info!("Update staged at {:?}", exe_path);
+                        let _ = app_handle.emit("onLauncherUpdateStaged", ());
+                        #[cfg(windows)]
+                        {
+                            use std::os::windows::process::CommandExt;
+                            let handoff_arg = handoff_path.to_string_lossy().to_string();
+                            match std::process::Command::new("cmd")
+                                .args(["/C", handoff_arg.as_str()])
+                                .creation_flags(0x08000000)
+                                .spawn()
+                            {
+                                Ok(_) => {
+                                    let _ = app_handle.emit("onLauncherUpdateRestarting", ());
+                                    app_handle.exit(0);
+                                }
+                                Err(error) => {
+                                    cleanup_update_artifacts(&temp_zip, &staging, &handoff_path);
+                                    let _ = app_handle.emit(
+                                        "onLauncherUpdateError",
+                                        format!("Gagal menjalankan restart update: {error}"),
+                                    );
+                                }
+                            }
+                        }
+                        #[cfg(not(windows))]
+                        {
+                            cleanup_update_artifacts(&temp_zip, &staging, &handoff_path);
+                            let _ = app_handle.emit(
+                                "onLauncherUpdateError",
+                                "Self-update handoff hanya tersedia pada Windows.".to_string(),
+                            );
+                        }
+                        #[cfg(windows)]
+                        let _ = std::fs::remove_file(&temp_zip);
+                    }
+                    Err(error) => {
+                        cleanup_update_artifacts(&temp_zip, &staging, &handoff_path);
+                        let _ = app_handle.emit(
+                            "onLauncherUpdateError",
+                            format!("Gagal menyiapkan update launcher: {error}"),
+                        );
+                    }
                 }
+            }
+            Err(error) => {
+                cleanup_update_artifacts(&temp_zip, &staging, &handoff_path);
+                let _ = app_handle.emit(
+                    "onLauncherUpdateError",
+                    format!("Gagal mengunduh update launcher: {error}"),
+                );
             }
         }
     });
 }
 
 #[tauri::command]
-fn check_patch_status<R: Runtime>(app: AppHandle<R>, game_path: String, install_method: String) {
-    let p = Path::new(&game_path);
-    if !game_path.is_empty() && engine::path::validate_game_path(p).is_some() {
-        let is_installed = match install_method.as_str() {
-            "method1" => engine::signature::get_method1_pak_path(p).exists(),
-            "method2" => {
-                engine::signature::get_method2_pak_path(p).exists()
-                    && engine::signature::get_method2_loader_path(p).exists()
-            }
-            _ => {
-                if let Ok(plan) = engine::installer::probe_resource_mount(p) {
-                    plan.pak_path.exists() && plan.owner_marker_path.exists()
-                } else {
-                    false
-                }
-            }
-        };
+async fn check_patch_status<R: Runtime>(
+    app: AppHandle<R>,
+    game_path: String,
+    install_method: String,
+) -> Result<(), String> {
+    let method = match engine::method::InstallMethod::parse(&install_method) {
+        Ok(method) => method,
+        Err(error) => {
+            let _ = app.emit("onPatchStatus", serde_json::json!({
+                "status": "invalid",
+                "gamePath": game_path,
+                "installMethod": install_method,
+                "message": error
+            }));
+            return Ok(());
+        }
+    };
 
-        let status = if is_installed { "ready" } else { "not_installed" };
-        let _ = app.emit("onPatchStatus", serde_json::json!({
-            "status": status,
-            "gamePath": game_path,
-            "installMethod": install_method
-        }));
+    let normalized_path = match engine::path::normalize_game_path(&game_path) {
+        Some(path) => path,
+        None => {
+            let _ = app.emit("onPatchStatus", serde_json::json!({
+                "status": "invalid",
+                "gamePath": game_path,
+                "installMethod": method.as_str(),
+                "message": "Folder game tidak valid atau executable game tidak ditemukan."
+            }));
+            return Ok(());
+        }
+    };
+
+    let local = engine::patch_status::classify_installation(&normalized_path, method)
+        .map_err(|error| format!("Gagal memeriksa instalasi patch: {error}"))?;
+    let current_version = get_installed_patch_version();
+    let latest_version = if matches!(local, engine::patch_status::LocalPatchState::Ready) {
+        get_latest_patch_version().await
     } else {
-        let _ = app.emit("onPatchStatus", serde_json::json!({
-            "status": "not_installed",
-            "gamePath": game_path,
-            "installMethod": install_method
-        }));
-    }
+        None
+    };
+    let status = engine::patch_status::resolve_patch_status(
+        local,
+        current_version.as_deref(),
+        latest_version.as_deref(),
+    );
+
+    let _ = app.emit("onPatchStatus", serde_json::json!({
+        "status": status.as_str(),
+        "gamePath": normalized_path,
+        "installMethod": method.as_str(),
+        "currentVersion": current_version,
+        "latestVersion": latest_version
+    }));
+    Ok(())
 }
 
 #[tauri::command]
@@ -470,42 +876,62 @@ fn notify_ui_interactive<R: Runtime>(_app: AppHandle<R>) {
 }
 
 #[tauri::command]
-fn reset_webview_cache<R: Runtime>(_app: AppHandle<R>) {
+fn reset_webview_cache<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     log::info!("Reset webview cache requested");
     let cache_dir = get_appdata_dir().join("Cache");
     if cache_dir.exists() {
-        let _ = std::fs::remove_dir_all(&cache_dir);
+        std::fs::remove_dir_all(&cache_dir)
+            .map_err(|error| format!("Gagal menghapus cache WebView: {error}"))?;
     }
+    let _ = app.emit(
+        "onMediaStatus",
+        serde_json::json!({"status": "checking", "message": "Cache direset; memulai sinkronisasi media..."}),
+    );
+    check_and_sync_media(app);
+    Ok(())
 }
 
 #[tauri::command]
 fn get_log_upload_enabled() -> bool {
-    true
+    load_settings()
+        .map(|result| result.settings.diagnostics_upload_enabled)
+        .unwrap_or(false)
 }
 
 #[tauri::command]
-fn upload_logs<R: Runtime>(app: AppHandle<R>, game_path: String) {
-    log::info!("Upload logs requested for path: {}", game_path);
+fn upload_logs<R: Runtime>(app: AppHandle<R>, game_path: String) -> Result<(), String> {
+    let settings = load_settings()
+        .map_err(|error| format!("diagnostics_settings_failed: {error}"))?;
+    if !settings.settings.diagnostics_upload_enabled {
+        return Err("diagnostics_upload_disabled: aktifkan izin upload di Pengaturan.".to_string());
+    }
+    let normalized_game_path = engine::path::normalize_game_path(&game_path)
+        .ok_or_else(|| "invalid_game_path: folder game tidak valid.".to_string())?;
+
+    log::info!("Upload logs requested for validated game path.");
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
         let _ = app_handle.emit("onLogUploadStarted", ());
-        let p = Path::new(&game_path);
         let appdata = get_appdata_dir();
 
-        match engine::log_collector::collect_logs_to_zip(p, &appdata) {
+        match engine::log_collector::collect_logs_to_zip(&normalized_game_path, &appdata) {
             Ok(zip_bytes) => {
+                let local_path =
+                    engine::log_collector::save_logs_bundle(&zip_bytes, &appdata).ok();
                 let client_id = engine::telemetry::get_or_create_client_id(&appdata);
                 match engine::log_collector::upload_logs_zip(zip_bytes, &client_id).await {
                     Ok(msg) => {
                         let _ = app_handle.emit("onLogUploadFinished", serde_json::json!({
                             "success": true,
-                            "message": msg
+                            "message": msg,
+                            "localPath": local_path.as_ref().map(|path| path.to_string_lossy().to_string())
                         }));
                     }
                     Err(e) => {
                         let _ = app_handle.emit("onLogUploadFinished", serde_json::json!({
                             "success": false,
-                            "message": e
+                            "message": e,
+                            "localPath": local_path.as_ref().map(|path| path.to_string_lossy().to_string())
                         }));
                     }
                 }
@@ -518,6 +944,7 @@ fn upload_logs<R: Runtime>(app: AppHandle<R>, game_path: String) {
             }
         }
     });
+    Ok(())
 }
 
 #[tauri::command]
@@ -528,21 +955,33 @@ fn start_installation<R: Runtime>(
     backup: bool,
     install_method: String,
 ) {
+    let method = match engine::method::InstallMethod::parse(&install_method) {
+        Ok(method) => method,
+        Err(error) => {
+            let _ = app.emit("onInstallError", error);
+            return;
+        }
+    };
+    let normalized_game_path = match engine::installer::validate_installation_preconditions(
+        &game_path,
+        method,
+    ) {
+        Ok(path) => path.to_string_lossy().to_string(),
+        Err(error) => {
+            let _ = app.emit("onInstallError", error);
+            return;
+        }
+    };
+    let canonical_method = method.as_str().to_string();
     log::info!(
         "Start installation: path={}, method={}",
-        game_path, install_method
+        normalized_game_path, canonical_method
     );
 
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
+        let game_path = normalized_game_path;
         let p = Path::new(&game_path);
-
-        if backup {
-            let _ = engine::signature::backup_sig(p);
-        }
-
-        // Clean artifacts from any previously installed methods before deploying
-        engine::installer::remove_all_owned_artifacts(p);
 
         let _ = app_handle.emit("onProgressUpdate", serde_json::json!({
             "percent": 5,
@@ -561,6 +1000,9 @@ fn start_installation<R: Runtime>(
             }
             _ => std::collections::HashMap::new(),
         };
+        let patch_version = get_latest_patch_version()
+            .await
+            .unwrap_or_else(|| "unknown".to_string());
 
         let cache_pak = get_appdata_dir().join("Cache").join(engine::path::PAK_FILE_NAME);
         if let Some(parent) = cache_pak.parent() {
@@ -602,7 +1044,10 @@ fn start_installation<R: Runtime>(
                 move |prog| {
                     let _ = app_progress.emit("onProgressUpdate", serde_json::json!({
                         "percent": (prog.percent as f32 * 0.85) as u8,
-                        "status": format!("Mengunduh patch... {}", prog.status)
+                        "status": format!("Mengunduh patch... {}", prog.status),
+                        "downloadedBytes": prog.downloaded_bytes,
+                        "totalBytes": prog.total_bytes,
+                        "speedMbps": prog.speed_mbps
                     }));
                 },
             ).await;
@@ -620,101 +1065,124 @@ fn start_installation<R: Runtime>(
             }
         }
 
+        let loader_cache = if method == engine::method::InstallMethod::Loader {
+            let loader_cache = get_appdata_dir().join("Cache").join("winhttp.dll");
+            let loader_hash = checksums.get("winhttp.dll").cloned().unwrap_or_default();
+            if loader_hash.is_empty() {
+                let _ = app_handle.emit(
+                    "onInstallError",
+                    "Checksum SHA-256 untuk loader winhttp.dll tidak ditemukan pada manifest rilis."
+                        .to_string(),
+                );
+                return;
+            }
+
+            let mut need_loader_download = true;
+            if loader_cache.exists()
+                && engine::downloader::verify_sha256(&loader_cache, &loader_hash)
+                    .unwrap_or(false)
+            {
+                need_loader_download = false;
+            }
+            if need_loader_download {
+                let loader_url = format!("{}{}", WUWAID_LATEST_DOWNLOAD_BASE_URL, "winhttp.dll");
+                let loader_len = match engine::downloader::get_asset_content_length(&loader_url).await
+                {
+                    Ok(len) => len,
+                    Err(error) => {
+                        let _ = app_handle.emit(
+                            "onInstallError",
+                            format!("Gagal memeriksa metadata loader winhttp.dll: {error}"),
+                        );
+                        return;
+                    }
+                };
+                if let Err(error) = engine::downloader::download_file_with_expected_size(
+                    &loader_url,
+                    &loader_cache,
+                    Some(loader_len),
+                    |_| {},
+                )
+                .await
+                {
+                    let _ = app_handle.emit(
+                        "onInstallError",
+                        format!("Gagal mengunduh loader winhttp.dll: {error}"),
+                    );
+                    return;
+                }
+                if !engine::downloader::verify_sha256(&loader_cache, &loader_hash).unwrap_or(false)
+                {
+                    let _ = std::fs::remove_file(&loader_cache);
+                    let _ = app_handle.emit(
+                        "onInstallError",
+                        "Integritas hash winhttp.dll gagal diverifikasi (SHA-256 mismatch)."
+                            .to_string(),
+                    );
+                    return;
+                }
+            }
+            Some(loader_cache)
+        } else {
+            None
+        };
+
+        if backup {
+            if let Err(error) = engine::signature::backup_sig(p) {
+                let _ = app_handle.emit(
+                    "onInstallError",
+                    format!("Gagal membuat backup signature: {error}"),
+                );
+                return;
+            }
+        }
+
         let _ = app_handle.emit("onProgressUpdate", serde_json::json!({
             "percent": 90,
             "status": "Memasang file mod..."
         }));
 
-        // Execute Deployment based on method
-        match install_method.as_str() {
-            "method1" => {
-                // Method 3 (Sig Bypass in UI): Deploy to Client/Content/Paks
-                let target_pak = engine::signature::get_method1_pak_path(p);
-                if let Some(parent) = target_pak.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                if let Err(e) = std::fs::copy(&cache_pak, &target_pak) {
-                    let _ = app_handle.emit("onInstallError", format!("Gagal menyalin file mod PAK: {}", e));
-                    return;
-                }
-                let _ = engine::signature::backup_sig(p);
-            }
-            "method2" => {
-                // Method 2 (Loader): Deploy to Client/Binaries/Win64/wuwaIndonesia
-                let target_pak = engine::signature::get_method2_pak_path(p);
-                if let Some(parent) = target_pak.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                if let Err(e) = std::fs::copy(&cache_pak, &target_pak) {
-                    let _ = app_handle.emit("onInstallError", format!("Gagal menyalin file mod PAK: {}", e));
-                    return;
-                }
-                let method2_marker = engine::signature::get_method2_marker_path(p);
-                if let Err(e) = std::fs::write(&method2_marker, "wuwaid-managed-method2") {
-                    let _ = std::fs::remove_file(&target_pak);
-                    let _ = app_handle.emit("onInstallError", format!("Gagal menandai instalasi Method 2: {}", e));
-                    return;
-                }
-
-                // Download / copy winhttp.dll loader with mandatory SHA-256 validation
-                let loader_path = engine::signature::get_method2_loader_path(p);
-                let loader_hash = checksums.get("winhttp.dll").cloned().unwrap_or_default();
-                if loader_hash.is_empty() {
-                    engine::installer::remove_all_owned_artifacts(p);
-                    let _ = app_handle.emit("onInstallError", "Checksum SHA-256 untuk loader winhttp.dll tidak ditemukan pada manifest rilis.".to_string());
-                    return;
-                }
-
-                let mut need_loader_dl = true;
-                if loader_path.exists() && engine::downloader::verify_sha256(&loader_path, &loader_hash).unwrap_or(false) {
-                    need_loader_dl = false;
-                }
-
-                if need_loader_dl {
-                    let loader_url = format!("{}{}", WUWAID_LATEST_DOWNLOAD_BASE_URL, "winhttp.dll");
-                    let loader_len = match engine::downloader::get_asset_content_length(&loader_url).await {
-                        Ok(len) => len,
-                        Err(e) => {
-                            engine::installer::remove_all_owned_artifacts(p);
-                            let _ = app_handle.emit("onInstallError", format!("Gagal memeriksa metadata loader winhttp.dll: {}", e));
-                            return;
-                        }
-                    };
-                    if let Err(e) = engine::downloader::download_file_with_expected_size(&loader_url, &loader_path, Some(loader_len), |_| {}).await {
-                        engine::installer::remove_all_owned_artifacts(p);
-                        let _ = app_handle.emit("onInstallError", format!("Gagal mengunduh loader winhttp.dll: {}", e));
-                        return;
-                    }
-                    if !engine::downloader::verify_sha256(&loader_path, &loader_hash).unwrap_or(false) {
-                        engine::installer::remove_all_owned_artifacts(p);
-                        let _ = app_handle.emit("onInstallError", "Integritas hash winhttp.dll gagal diverifikasi (SHA-256 mismatch).".to_string());
-                        return;
-                    }
-                }
-            }
-            _ => {
-                // Method 1 (Resource Mount / method3 / default): Deploy to Saved/Resources
-                match engine::installer::probe_resource_mount(p) {
-                    Ok(plan) => {
-                        if let Err(e) = engine::installer::deploy_resource_mount(&plan, &cache_pak, p) {
-                            let _ = app_handle.emit("onInstallError", format!("Gagal deploy resource mount: {}", e));
-                            return;
-                        }
-                    }
-                    Err(e) => {
-                        let _ = app_handle.emit("onInstallError", e);
-                        return;
-                    }
-                }
-            }
+        if let Err(error) = engine::installer::install_patch_transaction(
+            p,
+            method,
+            &cache_pak,
+            loader_cache.as_deref(),
+        ) {
+            let _ = app_handle.emit("onInstallError", error);
+            return;
         }
 
         // Save metadata to versions.json
         let mut ver_map = serde_json::Map::new();
-        ver_map.insert("_vhVersion".to_string(), serde_json::Value::String("latest".to_string()));
-        ver_map.insert("_installMethod".to_string(), serde_json::Value::String(install_method.clone()));
+        ver_map.insert(
+            "_vhVersion".to_string(),
+            serde_json::Value::String(patch_version),
+        );
+        ver_map.insert(
+            "_installMethod".to_string(),
+            serde_json::Value::String(canonical_method),
+        );
         let versions_path = get_appdata_dir().join("versions.json");
-        let _ = std::fs::write(&versions_path, serde_json::to_string(&ver_map).unwrap_or_default());
+        if let Some(parent) = versions_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let serialized = match serde_json::to_string(&ver_map) {
+            Ok(serialized) => serialized,
+            Err(error) => {
+                let _ = app_handle.emit(
+                    "onInstallError",
+                    format!("Gagal menyusun metadata instalasi: {error}"),
+                );
+                return;
+            }
+        };
+        if let Err(error) = std::fs::write(&versions_path, serialized) {
+            let _ = app_handle.emit(
+                "onInstallError",
+                format!("Gagal menyimpan metadata instalasi: {error}"),
+            );
+            return;
+        }
 
         let _ = app_handle.emit("onProgressUpdate", serde_json::json!({
             "percent": 100,
@@ -727,19 +1195,20 @@ fn start_installation<R: Runtime>(
 #[tauri::command]
 fn check_game_folder_write_access(
     game_path: String,
-    _install_method: String,
+    install_method: String,
     _for_installation: bool,
 ) -> String {
-    let p = Path::new(&game_path);
-    if !p.exists() {
-        return "invalid_path".to_string();
-    }
-    let test_file = p.join(".wuwaid_write_test");
-    if std::fs::write(&test_file, b"test").is_ok() {
-        let _ = std::fs::remove_file(test_file);
-        "ok".to_string()
-    } else {
-        "needs_admin".to_string()
+    let method = match engine::method::InstallMethod::parse(&install_method) {
+        Ok(method) => method,
+        Err(_) => return "invalid_method".to_string(),
+    };
+    match engine::installer::validate_installation_preconditions(&game_path, method) {
+        Ok(_) => "ok".to_string(),
+        Err(error) => error
+            .split(':')
+            .next()
+            .unwrap_or("needs_admin")
+            .to_string(),
     }
 }
 
@@ -749,25 +1218,54 @@ fn launch_game<R: Runtime>(
     game_path: String,
     dx11: bool,
     install_method: String,
-) {
-    log::info!("Launch game: path={}, dx11={}, method={}", game_path, dx11, install_method);
+) -> Result<(), String> {
+    let method = match engine::method::InstallMethod::parse(&install_method) {
+        Ok(method) => method,
+        Err(error) => {
+            let _ = app.emit("onLaunchError", error.clone());
+            return Err(error);
+        }
+    };
+    let normalized_game_path = match engine::runtime::validate_launch_preconditions(&game_path, method)
+    {
+        Ok(path) => path,
+        Err(error) => {
+            let _ = app.emit("onLaunchError", error.clone());
+            return Err(error);
+        }
+    };
+    let canonical_method = method.as_str().to_string();
+    log::info!(
+        "Launch game: path={}, dx11={}, method={}",
+        normalized_game_path.display(),
+        dx11,
+        canonical_method
+    );
     let app_handle = app.clone();
-    let p = PathBuf::from(game_path.clone());
+    let p = normalized_game_path;
 
     tauri::async_runtime::spawn(async move {
         let _ = app_handle.emit("onGameLaunchStarted", ());
 
-        // If Method 3 (Sig Bypass / method1), bypass signature before launching
-        if install_method == "method1" {
-            let _ = engine::signature::bypass_sig(&p);
+        if method == engine::method::InstallMethod::SignatureBypass {
+            if let Err(error) = engine::signature::bypass_sig(&p) {
+                let _ = app_handle.emit("onLaunchError", format!("signature_bypass_failed: {error}"));
+                let _ = app_handle.emit("onGameLaunchFinished", ());
+                return;
+            }
         }
 
         match engine::runtime::launch_game(&p, dx11) {
             Ok(mut child) => {
-                let _ = app_handle.emit("onGameRuntimeState", serde_json::json!({
-                    "active": true,
-                    "origin": "launcher"
-                }));
+                let child_pid = child.id();
+                set_launcher_process(&app_handle, Some(child_pid), Some(p.clone()));
+                emit_runtime_state(
+                    &app_handle,
+                    engine::runtime::RuntimeState {
+                        active: true,
+                        origin: engine::runtime::ProcessOrigin::Launcher,
+                    },
+                );
 
                 // Auto-minimize window and trim memory
                 if let Some(window) = app_handle.get_webview_window("main") {
@@ -775,17 +1273,33 @@ fn launch_game<R: Runtime>(
                 }
                 engine::runtime::trim_memory_working_set();
 
-                // Send telemetry launch event
-                let appdata = get_appdata_dir();
-                let client_id = engine::telemetry::get_or_create_client_id(&appdata);
-                let _ = engine::telemetry::send_heartbeat(&client_id, env!("CARGO_PKG_VERSION"), &install_method, "launch").await;
+                // Send telemetry launch event only after explicit opt-in.
+                send_telemetry_if_enabled(&app_handle, &canonical_method, "launch").await;
 
-                // If Method 3, schedule auto-restore after 150 seconds
-                if install_method == "method1" {
+                // A safety fallback is allowed to restore only after the
+                // process is gone; it can never restore the signature while
+                // the game is still running.
+                let (restore_tx, restore_rx) = tokio::sync::watch::channel(false);
+                if method == engine::method::InstallMethod::SignatureBypass {
                     let p_auto_restore = p.clone();
+                    let mut restore_rx = restore_rx;
                     tauri::async_runtime::spawn(async move {
-                        tokio::time::sleep(Duration::from_secs(150)).await;
-                        let _ = engine::signature::restore_sig(&p_auto_restore);
+                        loop {
+                            tokio::select! {
+                                changed = restore_rx.changed() => {
+                                    if changed.is_ok() && *restore_rx.borrow() {
+                                        break;
+                                    }
+                                }
+                                _ = tokio::time::sleep(Duration::from_secs(150)) => {
+                                    let running = engine::runtime::find_game_process_id() == Some(child_pid);
+                                    if engine::runtime::should_restore_signature(running, true) {
+                                        let _ = engine::signature::restore_sig(&p_auto_restore);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                     });
                 }
 
@@ -797,11 +1311,16 @@ fn launch_game<R: Runtime>(
 
                     // Restore signature when game exits
                     let _ = engine::signature::restore_sig(&p_for_monitor);
+                    let _ = restore_tx.send(true);
+                    set_launcher_process(&app_for_monitor, None, None);
 
-                    let _ = app_for_monitor.emit("onGameRuntimeState", serde_json::json!({
-                        "active": false,
-                        "origin": "launcher"
-                    }));
+                    emit_runtime_state(
+                        &app_for_monitor,
+                        engine::runtime::RuntimeState {
+                            active: false,
+                            origin: engine::runtime::ProcessOrigin::Launcher,
+                        },
+                    );
                     let _ = app_for_monitor.emit("onGameLaunchFinished", ());
 
                     // Show window back
@@ -813,50 +1332,112 @@ fn launch_game<R: Runtime>(
             }
             Err(e) => {
                 // If launch failed, restore signature immediately
-                if install_method == "method1" {
+                if method == engine::method::InstallMethod::SignatureBypass {
                     let _ = engine::signature::restore_sig(&p);
                 }
-                let _ = app_handle.emit("onInstallError", e);
+                let _ = app_handle.emit("onLaunchError", format!("spawn_failed: {e}"));
                 let _ = app_handle.emit("onGameLaunchFinished", ());
             }
         }
     });
-}
-
-#[tauri::command]
-fn force_quit_game() {
-    engine::runtime::force_quit_game();
-    log::info!("Force quit game requested");
-}
-
-#[tauri::command]
-fn switch_method(game_path: String, new_method: String) -> Result<(), String> {
-    let p = Path::new(&game_path);
-    log::info!("Switching method for {} to {}", game_path, new_method);
-    engine::installer::remove_all_owned_artifacts(p);
-
-    let versions_path = get_appdata_dir().join("versions.json");
-    if versions_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&versions_path) {
-            if let Ok(mut json) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&content) {
-                json.insert("_installMethod".to_string(), serde_json::Value::String(new_method));
-                let _ = std::fs::write(&versions_path, serde_json::to_string(&json).unwrap_or_default());
-            }
-        }
-    }
     Ok(())
 }
 
 #[tauri::command]
-fn uninstall(game_path: String) -> String {
-    let p = Path::new(&game_path);
-    engine::installer::remove_all_owned_artifacts(p);
+fn force_quit_game<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    let active_path = app
+        .try_state::<RuntimeCoordinator>()
+        .and_then(|state| state.game_path.lock().ok().and_then(|value| value.clone()));
+    let result = engine::runtime::force_quit_game();
+    if let Err(error) = result {
+        if engine::runtime::find_game_process_id().is_none() {
+            if let Some(path) = active_path {
+                let _ = engine::signature::restore_sig(&path);
+            }
+            set_launcher_process(&app, None, None);
+        }
+        let _ = app.emit("onLaunchError", format!("force_quit_failed: {error}"));
+        return Err(error);
+    }
+    if let Some(path) = active_path {
+        let _ = engine::signature::restore_sig(&path);
+    }
+    set_launcher_process(&app, None, None);
+    emit_runtime_state(
+        &app,
+        engine::runtime::RuntimeState {
+            active: false,
+            origin: engine::runtime::ProcessOrigin::External,
+        },
+    );
+    let _ = app.emit("onGameLaunchFinished", ());
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    log::info!("Force quit game requested");
+    Ok(())
+}
+
+#[tauri::command]
+fn switch_method(
+    game_path: String,
+    new_method: String,
+) -> Result<engine::installer::CleanupReport, String> {
+    let method = engine::method::InstallMethod::parse(&new_method)?;
+    let normalized = engine::installer::validate_installation_preconditions(&game_path, method)?;
+    log::info!("Switching method for {} to {}", normalized.display(), method);
+    let report = engine::installer::cleanup_owned_artifacts(&normalized)?;
+    if !report.failures.is_empty() || !report.preserved.is_empty() {
+        return Err(format!(
+            "cleanup_partial_failure: failures=[{}]; preserved=[{}]",
+            report.failures.join("; "),
+            report.preserved.join("; ")
+        ));
+    }
+
     let versions_path = get_appdata_dir().join("versions.json");
     if versions_path.exists() {
-        let _ = std::fs::remove_file(versions_path);
+        let content = std::fs::read_to_string(&versions_path)
+            .map_err(|error| format!("metadata_read_failed: {error}"))?;
+        let mut json = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&content)
+            .map_err(|error| format!("metadata_parse_failed: {error}"))?;
+        json.insert(
+            "_installMethod".to_string(),
+            serde_json::Value::String(method.as_str().to_string()),
+        );
+        std::fs::write(
+            &versions_path,
+            serde_json::to_string(&json).map_err(|error| format!("metadata_encode_failed: {error}"))?,
+        )
+        .map_err(|error| format!("metadata_write_failed: {error}"))?;
     }
-    log::info!("Uninstall patch completed for: {}", game_path);
-    "ok".to_string()
+    Ok(report)
+}
+
+#[tauri::command]
+fn uninstall(game_path: String) -> Result<String, String> {
+    let method = engine::method::InstallMethod::ResourceMount;
+    let normalized = engine::installer::validate_installation_preconditions(&game_path, method)
+        .or_else(|_| {
+            engine::path::normalize_game_path(&game_path)
+                .ok_or_else(|| "invalid_game_path: executable game tidak ditemukan".to_string())
+        })?;
+    let report = engine::installer::cleanup_owned_artifacts(&normalized)?;
+    if !report.failures.is_empty() || !report.preserved.is_empty() {
+        return Err(format!(
+            "cleanup_partial_failure: failures=[{}]; preserved=[{}]",
+            report.failures.join("; "),
+            report.preserved.join("; ")
+        ));
+    }
+    let versions_path = get_appdata_dir().join("versions.json");
+    if versions_path.exists() {
+        std::fs::remove_file(&versions_path)
+            .map_err(|error| format!("metadata_remove_failed: {error}"))?;
+    }
+    log::info!("Uninstall patch completed for: {}", normalized.display());
+    Ok("ok".to_string())
 }
 
 #[tauri::command]
@@ -872,11 +1453,13 @@ fn restart_as_admin() {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(RuntimeCoordinator::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .register_uri_scheme_protocol("media", media_protocol_handler)
         .setup(|app| {
             let app_handle = app.handle().clone();
+            spawn_runtime_monitor(app_handle.clone());
 
             // Tray icon setup
             let quit_i = MenuItem::with_id(app, "quit", "Keluar", true, None::<&str>)?;
@@ -889,7 +1472,18 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {
-                        app.exit(0);
+                        if engine::runtime::is_game_running() {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                            let _ = app.emit(
+                                "onLaunchError",
+                                "Launcher tetap aktif sampai game dihentikan.".to_string(),
+                            );
+                        } else {
+                            app.exit(0);
+                        }
                     }
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
@@ -919,19 +1513,11 @@ pub fn run() {
             let app_telemetry = app_handle.clone();
             tauri::async_runtime::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(300));
-                let appdata = get_appdata_dir();
-                let client_id = engine::telemetry::get_or_create_client_id(&appdata);
 
                 loop {
                     interval.tick().await;
                     if engine::runtime::is_game_running() {
-                        let _ = engine::telemetry::send_heartbeat(
-                            &client_id,
-                            env!("CARGO_PKG_VERSION"),
-                            "active",
-                            "heartbeat",
-                        )
-                        .await;
+                        send_telemetry_if_enabled(&app_telemetry, "active", "heartbeat").await;
                     }
                     let _ = app_telemetry.emit("onHeartbeatTick", ());
                 }
@@ -965,8 +1551,13 @@ pub fn run() {
             uninstall,
             restart_as_admin,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running wuwaid launcher application");
+        .build(tauri::generate_context!())
+        .expect("error while building wuwaid launcher application")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                restore_tracked_signature(app);
+            }
+        });
 }
 
 #[cfg(test)]
@@ -1008,11 +1599,22 @@ mod tests {
 
         assert_ipc_response(&window, ipc_request("get_app_version", serde_json::json!({})), Ok(env!("CARGO_PKG_VERSION").to_string()));
         let tmp = tempfile::tempdir().unwrap();
+        let exe_dir = tmp.path().join("Client").join("Binaries").join("Win64");
+        let resource_dir = tmp
+            .path()
+            .join("Client")
+            .join("Saved")
+            .join("Resources")
+            .join("2.6.0");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+        std::fs::create_dir_all(&resource_dir).unwrap();
+        std::fs::write(exe_dir.join("Client-Win64-Shipping.exe"), b"mock exe").unwrap();
+        std::fs::write(resource_dir.join("ResManifest"), b"manifest").unwrap();
         assert_ipc_response(
             &window,
             ipc_request("check_game_folder_write_access", serde_json::json!({
                 "gamePath": tmp.path().to_string_lossy(),
-                "installMethod": "method3",
+                "installMethod": "resource_mount",
                 "forInstallation": true,
             })),
             Ok("ok".to_string()),
@@ -1084,6 +1686,29 @@ mod tests {
         std::fs::create_dir_all(&cache_dir).unwrap();
         std::fs::write(cache_dir.join("bgm.mp3"), b"mock-bgm-audio").unwrap();
         std::fs::write(cache_dir.join("bg-video.mp4"), b"mock-bg-video").unwrap();
+        engine::media::write_cached_manifest(
+            &cache_dir,
+            &engine::media::AssetManifest {
+                update_date: None,
+                assets: vec![
+                    engine::media::AssetEntry {
+                        name: "bgm.mp3".to_string(),
+                        url: "http://127.0.0.1/bgm.mp3".to_string(),
+                        sha256: engine::downloader::compute_sha256(&cache_dir.join("bgm.mp3"))
+                            .unwrap(),
+                    },
+                    engine::media::AssetEntry {
+                        name: "bg-video.mp4".to_string(),
+                        url: "http://127.0.0.1/bg-video.mp4".to_string(),
+                        sha256: engine::downloader::compute_sha256(
+                            &cache_dir.join("bg-video.mp4"),
+                        )
+                        .unwrap(),
+                    },
+                ],
+            },
+        )
+        .unwrap();
 
         std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
         std::env::set_var("WUWAID_ASSETS_URL", "http://127.0.0.1:9/unreachable");
@@ -1158,5 +1783,315 @@ mod tests {
         assert_eq!(parse_range_header("bytes=1000-1200", total), None);
         assert_eq!(parse_range_header("bytes=1-2,4-5", total), None);
         assert_eq!(parse_range_header("bytes=0-0", 0), None);
+    }
+
+    #[test]
+    fn settings_commands_persist_only_normalized_canonical_values() {
+        let appdata = tempfile::tempdir().unwrap();
+        std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
+
+        save_settings(
+            r#"{"installMethod":"method2","bgmVolume":4,"launcherVisualMode":"invalid"}"#
+                .to_string(),
+        )
+        .unwrap();
+        let saved = std::fs::read_to_string(appdata.path().join("settings.json")).unwrap();
+        assert!(saved.contains("loader"));
+        assert!(!saved.contains("method2"));
+        assert!(saved.contains("\"bgmVolume\":1.0"));
+
+        std::fs::write(appdata.path().join("settings.json"), b"{").unwrap();
+        let repaired = load_settings().unwrap();
+        assert!(repaired.repaired);
+        assert_eq!(
+            repaired.settings.install_method,
+            engine::method::InstallMethod::ResourceMount
+        );
+        assert!(std::fs::read_to_string(appdata.path().join("settings.json"))
+            .unwrap()
+            .contains("resource_mount"));
+
+        std::env::remove_var("WUWAID_E2E_APPDATA");
+    }
+
+    #[tokio::test]
+    async fn invalid_patch_method_emits_visible_invalid_status() {
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let (tx, rx) = sync_channel(1);
+        let listener = app.listen_any("onPatchStatus", move |event| {
+            let _ = tx.send(event.payload().to_string());
+        });
+
+        check_patch_status(app.handle().clone(), String::new(), "bogus".to_string())
+            .await
+            .unwrap();
+        let payload = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(json["status"], "invalid");
+        assert!(json["message"].as_str().unwrap().contains("tidak dikenal"));
+        app.unlisten(listener);
+    }
+
+    #[test]
+    fn switch_method_rejects_invalid_game_path_before_metadata_mutation() {
+        let appdata = tempfile::tempdir().unwrap();
+        std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
+        std::fs::write(
+            appdata.path().join("versions.json"),
+            br#"{"_vhVersion":"3.0.0","_installMethod":"loader"}"#,
+        )
+        .unwrap();
+
+        let error = switch_method(
+            appdata.path().join("not-a-game").to_string_lossy().to_string(),
+            "signature_bypass".to_string(),
+        )
+        .unwrap_err();
+        assert!(error.contains("invalid_game_path"));
+        assert_eq!(
+            std::fs::read_to_string(appdata.path().join("versions.json")).unwrap(),
+            r#"{"_vhVersion":"3.0.0","_installMethod":"loader"}"#
+        );
+        std::env::remove_var("WUWAID_E2E_APPDATA");
+    }
+
+    #[test]
+    fn switch_method_keeps_metadata_when_foreign_artifact_is_preserved() {
+        let appdata = tempfile::tempdir().unwrap();
+        let game = tempfile::tempdir().unwrap();
+        std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
+
+        let exe_dir = game.path().join("Client").join("Binaries").join("Win64");
+        let pak_dir = game.path().join("Client").join("Content").join("Paks");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+        std::fs::create_dir_all(&pak_dir).unwrap();
+        std::fs::write(exe_dir.join("Client-Win64-Shipping.exe"), b"mock exe").unwrap();
+        let foreign = engine::signature::get_signature_bypass_pak_path(game.path());
+        std::fs::write(&foreign, b"foreign artifact").unwrap();
+        let versions = appdata.path().join("versions.json");
+        std::fs::write(&versions, br#"{"_installMethod":"loader"}"#).unwrap();
+
+        let error = switch_method(
+            game.path().to_string_lossy().to_string(),
+            "signature_bypass".to_string(),
+        )
+        .unwrap_err();
+        assert!(error.contains("preserved"));
+        assert_eq!(std::fs::read_to_string(&versions).unwrap(), r#"{"_installMethod":"loader"}"#);
+        assert!(foreign.exists());
+        std::env::remove_var("WUWAID_E2E_APPDATA");
+    }
+
+    #[test]
+    fn uninstall_keeps_metadata_when_foreign_artifact_prevents_cleanup() {
+        let appdata = tempfile::tempdir().unwrap();
+        let game = tempfile::tempdir().unwrap();
+        std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
+
+        let exe_dir = game.path().join("Client").join("Binaries").join("Win64");
+        let pak_dir = game.path().join("Client").join("Content").join("Paks");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+        std::fs::create_dir_all(&pak_dir).unwrap();
+        std::fs::write(exe_dir.join("Client-Win64-Shipping.exe"), b"mock exe").unwrap();
+        let foreign = engine::signature::get_signature_bypass_pak_path(game.path());
+        std::fs::write(&foreign, b"foreign artifact").unwrap();
+        let versions = appdata.path().join("versions.json");
+        std::fs::write(&versions, br#"{"_vhVersion":"3.0.0"}"#).unwrap();
+
+        let result = uninstall(game.path().to_string_lossy().to_string());
+        assert!(result.is_err());
+        assert!(foreign.exists());
+        assert!(versions.exists());
+        std::env::remove_var("WUWAID_E2E_APPDATA");
+    }
+
+    #[test]
+    fn core_commands_run_through_mock_ipc_with_deterministic_results() {
+        let appdata = tempfile::tempdir().unwrap();
+        let game = tempfile::tempdir().unwrap();
+        std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
+
+        let exe_dir = game.path().join("Client").join("Binaries").join("Win64");
+        let pak_dir = game.path().join("Client").join("Content").join("Paks");
+        let resources = game
+            .path()
+            .join("Client")
+            .join("Saved")
+            .join("Resources")
+            .join("2.6.0");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+        std::fs::create_dir_all(&pak_dir).unwrap();
+        std::fs::create_dir_all(&resources).unwrap();
+        std::fs::write(exe_dir.join("Client-Win64-Shipping.exe"), b"mock exe").unwrap();
+        std::fs::write(resources.join("ResManifest"), b"manifest").unwrap();
+        let versions = appdata.path().join("versions.json");
+        std::fs::write(&versions, br#"{"_installMethod":"loader"}"#).unwrap();
+
+        let app = tauri::test::mock_builder()
+            .invoke_handler(tauri::generate_handler![
+                get_log_upload_enabled,
+                upload_logs,
+                start_installation,
+                launch_game,
+                check_patch_status,
+                switch_method,
+                uninstall,
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        assert_ipc_response(
+            &window,
+            ipc_request("get_log_upload_enabled", serde_json::json!({})),
+            Ok(false),
+        );
+        assert_ipc_response(
+            &window,
+            ipc_request(
+                "upload_logs",
+                serde_json::json!({"gamePath": game.path().to_string_lossy()}),
+            ),
+            Err("diagnostics_upload_disabled: aktifkan izin upload di Pengaturan.".to_string()),
+        );
+        assert_ipc_response(
+            &window,
+            ipc_request(
+                "launch_game",
+                serde_json::json!({
+                    "gamePath": game.path().parent().unwrap().join("missing-game").to_string_lossy(),
+                    "dx11": false,
+                    "installMethod": "loader",
+                }),
+            ),
+            Err("invalid_game_path: executable game tidak ditemukan".to_string()),
+        );
+
+        let (install_error_tx, install_error_rx) = sync_channel(1);
+        let install_error_listener = app.listen_any("onInstallError", move |event| {
+            let _ = install_error_tx.send(event.payload().to_string());
+        });
+        assert_ipc_response(
+            &window,
+            ipc_request(
+                "start_installation",
+                serde_json::json!({
+                    "gamePath": game.path().to_string_lossy(),
+                    "vhMode": "standard",
+                    "backup": true,
+                    "installMethod": "unknown",
+                }),
+            ),
+            Ok(()),
+        );
+        assert!(install_error_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .contains("tidak dikenal"));
+        app.unlisten(install_error_listener);
+
+        let (event_tx, event_rx) = sync_channel(1);
+        let listener = app.listen_any("onPatchStatus", move |event| {
+            let _ = event_tx.send(event.payload().to_string());
+        });
+        assert_ipc_response(
+            &window,
+            ipc_request(
+                "check_patch_status",
+                serde_json::json!({"gamePath": "", "installMethod": "unknown"}),
+            ),
+            Ok(()),
+        );
+        let event: serde_json::Value =
+            serde_json::from_str(&event_rx.recv_timeout(Duration::from_secs(1)).unwrap()).unwrap();
+        assert_eq!(event["status"], "invalid");
+        app.unlisten(listener);
+
+        let foreign = engine::signature::get_signature_bypass_pak_path(game.path());
+        std::fs::write(&foreign, b"foreign").unwrap();
+        let foreign_response = tauri::test::get_ipc_response(
+            &window,
+            ipc_request(
+                "switch_method",
+                serde_json::json!({
+                    "gamePath": game.path().to_string_lossy(),
+                    "newMethod": "signature_bypass",
+                }),
+            ),
+        )
+        .unwrap_err();
+        assert!(foreign_response
+            .as_str()
+            .unwrap()
+            .starts_with("cleanup_partial_failure: failures=[]; preserved=["));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &std::fs::read_to_string(&versions).unwrap()
+            )
+            .unwrap()["_installMethod"],
+            "loader"
+        );
+        std::fs::remove_file(&foreign).unwrap();
+
+        assert_ipc_response(
+            &window,
+            ipc_request(
+                "switch_method",
+                serde_json::json!({
+                    "gamePath": game.path().to_string_lossy(),
+                    "newMethod": "signature_bypass",
+                }),
+            ),
+            Ok(serde_json::json!({
+                "removed": [],
+                "preserved": [],
+                "failures": [],
+            })),
+        );
+        assert_ipc_response(
+            &window,
+            ipc_request(
+                "switch_method",
+                serde_json::json!({
+                    "gamePath": game.path().to_string_lossy(),
+                    "newMethod": "signature_bypass",
+                }),
+            ),
+            Ok(serde_json::json!({
+                "removed": [],
+                "preserved": [],
+                "failures": [],
+            })),
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &std::fs::read_to_string(&versions).unwrap()
+            )
+            .unwrap()["_installMethod"],
+            "signature_bypass"
+        );
+
+        assert_ipc_response(
+            &window,
+            ipc_request(
+                "uninstall",
+                serde_json::json!({"gamePath": game.path().to_string_lossy()}),
+            ),
+            Ok("ok".to_string()),
+        );
+        assert_ipc_response(
+            &window,
+            ipc_request(
+                "uninstall",
+                serde_json::json!({"gamePath": game.path().to_string_lossy()}),
+            ),
+            Ok("ok".to_string()),
+        );
+        assert!(!versions.exists());
+        std::env::remove_var("WUWAID_E2E_APPDATA");
     }
 }

@@ -14,6 +14,26 @@ pub struct ReleaseNoteEntry {
     pub author: String,
 }
 
+pub fn validate_release_note(entry: &ReleaseNoteEntry) -> Result<ReleaseNoteEntry, String> {
+    if entry.tag.trim().is_empty() || entry.title.trim().is_empty() {
+        return Err("Release note cache tidak memiliki tag atau title.".to_string());
+    }
+    if entry.tag.len() > 128
+        || entry.title.len() > 512
+        || entry.author.len() > 256
+        || entry.body.len() > 2_000_000
+    {
+        return Err("Release note cache melebihi batas ukuran.".to_string());
+    }
+    let body = entry.body.to_ascii_lowercase();
+    for marker in ["<script", "javascript:", "onerror=", "onload=", "onmouseover="] {
+        if body.contains(marker) {
+            return Err(format!("Release note memuat marker HTML tidak aman: {marker}"));
+        }
+    }
+    Ok(entry.clone())
+}
+
 fn unescape_text(bytes: &quick_xml::events::BytesText) -> Result<String, String> {
     let s = String::from_utf8_lossy(bytes);
     quick_xml::escape::unescape(&s)
@@ -116,7 +136,7 @@ pub async fn fetch_latest_release_notes(client: &reqwest::Client, url: &str) -> 
         .await
         .map_err(|e| format!("Gagal membaca response Atom feed: {}", e))?;
 
-    parse_atom_feed(&text)
+    parse_atom_feed(&text).and_then(|entry| validate_release_note(&entry))
 }
 
 #[cfg(test)]
@@ -142,5 +162,17 @@ mod tests {
         assert_eq!(entry.title, "Wuthering Waves Lokalisasi Bahasa Indonesia v.3.5.1-id.3");
         assert_eq!(entry.author, "TitoTFP");
         assert!(entry.body.contains("<h1>Judul</h1>"));
+    }
+
+    #[test]
+    fn test_release_note_validation_rejects_unsafe_cached_body() {
+        let entry = ReleaseNoteEntry {
+            tag: "v1.0.0".to_string(),
+            date: String::new(),
+            title: "Release".to_string(),
+            body: "<script>alert(1)</script>".to_string(),
+            author: "team".to_string(),
+        };
+        assert!(validate_release_note(&entry).is_err());
     }
 }

@@ -10,24 +10,28 @@ pub fn get_sig_backup_path(game_path: &Path) -> PathBuf {
     get_pak_dir(game_path).join(SIG_BACKUP_NAME)
 }
 
-pub fn get_method1_pak_path(game_path: &Path) -> PathBuf {
+pub fn get_signature_bypass_pak_path(game_path: &Path) -> PathBuf {
     get_pak_dir(game_path).join(PAK_FILE_NAME)
 }
 
-pub fn get_method2_folder(game_path: &Path) -> PathBuf {
+pub fn get_loader_folder(game_path: &Path) -> PathBuf {
     get_binary_dir(game_path).join(MOD_FOLDER_NAME)
 }
 
-pub fn get_method2_pak_path(game_path: &Path) -> PathBuf {
-    get_method2_folder(game_path).join(PAK_FILE_NAME)
+pub fn get_loader_pak_path(game_path: &Path) -> PathBuf {
+    get_loader_folder(game_path).join(PAK_FILE_NAME)
 }
 
-pub fn get_method2_loader_path(game_path: &Path) -> PathBuf {
+pub fn get_loader_dll_path(game_path: &Path) -> PathBuf {
     get_binary_dir(game_path).join(WINHTTP_LOADER_NAME)
 }
 
-pub fn get_method2_marker_path(game_path: &Path) -> PathBuf {
-    get_method2_folder(game_path).join(".wuwaid-managed-method2")
+pub fn get_loader_marker_path(game_path: &Path) -> PathBuf {
+    get_loader_folder(game_path).join(".wuwaid-managed-loader")
+}
+
+pub fn get_signature_bypass_marker_path(game_path: &Path) -> PathBuf {
+    get_pak_dir(game_path).join(".wuwaid-managed-signature-bypass")
 }
 
 /// Creates a backup of the original signature file.

@@ -30,6 +30,8 @@
 
   function handleVideoError() {
     videoLoaded = false;
+    appState.videoUrl = '';
+    appState.setStatus('Video latar tidak dapat diputar. Launcher tetap dapat digunakan.');
   }
 
   onMount(() => {

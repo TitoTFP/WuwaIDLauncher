@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  CleanupReport,
+  InstallMethod,
   LauncherUpdatePayload,
   LogUploadResult,
   MediaProgressPayload,
@@ -9,6 +11,8 @@ import type {
   PatchStatusPayload,
   ProgressPayload,
   ReleaseNotePayload,
+  SettingsLoadResult,
+  TelemetryStatusPayload,
 } from "./types";
 
 export const bridge = {
@@ -21,7 +25,7 @@ export const bridge = {
   browseGameFolder: (): Promise<string> => invoke("browse_game_folder"),
   saveSettings: (settingsJson: string): Promise<void> =>
     invoke("save_settings", { settingsJson }),
-  loadSettings: (): Promise<string> => invoke("load_settings"),
+  loadSettings: (): Promise<SettingsLoadResult> => invoke("load_settings"),
   getAppVersion: (): Promise<string> => invoke("get_app_version"),
   getVhVersion: (): Promise<string> => invoke("get_vh_version"),
 
@@ -31,24 +35,24 @@ export const bridge = {
   // Update & Release Notes
   checkLauncherUpdate: (): Promise<void> => invoke("check_launcher_update"),
   getVhReleaseNotes: (): Promise<void> => invoke("get_vh_release_notes"),
-  performLauncherUpdate: (version: string, zipUrl: string): Promise<void> =>
-    invoke("perform_launcher_update", { version, zipUrl }),
+  performLauncherUpdate: (version: string, zipUrl: string, checksumsUrl?: string): Promise<void> =>
+    invoke("perform_launcher_update", { version, zipUrl, checksumsUrl }),
 
   // Patch Management
-  checkPatchStatus: (gamePath: string, installMethod: string): Promise<void> =>
+  checkPatchStatus: (gamePath: string, installMethod: InstallMethod): Promise<void> =>
     invoke("check_patch_status", { gamePath, installMethod }),
-  switchMethod: (gamePath: string, newMethod: string): Promise<void> =>
+  switchMethod: (gamePath: string, newMethod: InstallMethod): Promise<CleanupReport> =>
     invoke("switch_method", { gamePath, newMethod }),
   startInstallation: (
     gamePath: string,
     vhMode: string,
     backup: boolean,
-    installMethod: string,
+    installMethod: InstallMethod,
   ): Promise<void> =>
     invoke("start_installation", { gamePath, vhMode, backup, installMethod }),
   checkGameFolderWriteAccess: (
     gamePath: string,
-    installMethod: string,
+    installMethod: InstallMethod,
     forInstallation: boolean,
   ): Promise<string> =>
     invoke("check_game_folder_write_access", {
@@ -63,7 +67,7 @@ export const bridge = {
   launchGame: (
     gamePath: string,
     dx11: boolean,
-    installMethod: string,
+    installMethod: InstallMethod,
   ): Promise<void> => invoke("launch_game", { gamePath, dx11, installMethod }),
   forceQuitGame: (): Promise<void> => invoke("force_quit_game"),
   restartAsAdmin: (): Promise<void> => invoke("restart_as_admin"),
@@ -86,12 +90,17 @@ export interface EventBridgeCallbacks {
   onProgressUpdate?: (payload: ProgressPayload) => void;
   onInstallComplete?: () => void;
   onInstallError?: (error: string) => void;
+  onLaunchError?: (error: string) => void;
   onGameLaunchStarted?: () => void;
   onGameLaunchFinished?: () => void;
   onLogUploadStarted?: () => void;
   onLogUploadFinished?: (result: LogUploadResult) => void;
+  onTelemetryStatus?: (payload: TelemetryStatusPayload) => void;
   onLauncherUpdateProgress?: (percent: number, statusText: string) => void;
   onLauncherUpdateAvailable?: (payload: LauncherUpdatePayload) => void;
+  onLauncherUpdateStaged?: () => void;
+  onLauncherUpdateRestarting?: () => void;
+  onLauncherUpdateError?: (error: string) => void;
   onMediaReady?: (payload: MediaReadyPayload) => void;
   onMediaStatus?: (payload: MediaStatusPayload) => void;
   onMediaProgress?: (payload: MediaProgressPayload) => void;
@@ -130,6 +139,9 @@ export async function setupEventBridge(
     addListener<string>("onInstallError", (err) =>
       callbacks.onInstallError?.(err),
     ),
+    addListener<string>("onLaunchError", (err) =>
+      callbacks.onLaunchError?.(err),
+    ),
     addListener<void>("onGameLaunchStarted", () =>
       callbacks.onGameLaunchStarted?.(),
     ),
@@ -142,8 +154,24 @@ export async function setupEventBridge(
     addListener<LogUploadResult>("onLogUploadFinished", (res) =>
       callbacks.onLogUploadFinished?.(res),
     ),
+    addListener<TelemetryStatusPayload>("onTelemetryStatus", (payload) =>
+      callbacks.onTelemetryStatus?.(payload),
+    ),
+    addListener<{ percent: number; status: string }>(
+      "onLauncherUpdateProgress",
+      (p) => callbacks.onLauncherUpdateProgress?.(p.percent, p.status),
+    ),
     addListener<LauncherUpdatePayload>("onLauncherUpdateAvailable", (p) =>
       callbacks.onLauncherUpdateAvailable?.(p),
+    ),
+    addListener<void>("onLauncherUpdateStaged", () =>
+      callbacks.onLauncherUpdateStaged?.(),
+    ),
+    addListener<void>("onLauncherUpdateRestarting", () =>
+      callbacks.onLauncherUpdateRestarting?.(),
+    ),
+    addListener<string>("onLauncherUpdateError", (error) =>
+      callbacks.onLauncherUpdateError?.(error),
     ),
     addListener<MediaReadyPayload>("onMediaReady", (p) =>
       callbacks.onMediaReady?.(p),

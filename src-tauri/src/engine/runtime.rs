@@ -1,8 +1,64 @@
-use crate::engine::path::*;
+use crate::engine::{
+    method::InstallMethod,
+    patch_status::{self, LocalPatchState},
+    path::{self, get_binary_dir, GAME_EXE_RELATIVE},
+};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-pub fn is_game_running() -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProcessOrigin {
+    Launcher,
+    External,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeState {
+    pub active: bool,
+    pub origin: ProcessOrigin,
+}
+
+pub fn reconcile_runtime_state(
+    launcher_pid: Option<u32>,
+    detected_pid: Option<u32>,
+) -> RuntimeState {
+    RuntimeState {
+        active: detected_pid.is_some(),
+        origin: if detected_pid.is_some() && launcher_pid == detected_pid {
+            ProcessOrigin::Launcher
+        } else {
+            ProcessOrigin::External
+        },
+    }
+}
+
+pub fn should_restore_signature(process_running: bool, timeout_elapsed: bool) -> bool {
+    timeout_elapsed && !process_running
+}
+
+pub fn validate_launch_preconditions(
+    game_path: &str,
+    method: InstallMethod,
+) -> Result<std::path::PathBuf, String> {
+    let normalized = path::normalize_game_path(game_path)
+        .ok_or_else(|| "invalid_game_path: executable game tidak ditemukan".to_string())?;
+    let local = patch_status::classify_installation(&normalized, method)
+        .map_err(|error| format!("patch_status_failed: {error}"))?;
+    if !matches!(local, LocalPatchState::Ready) {
+        return Err(format!(
+            "patch_not_ready: status patch lokal adalah {:?}",
+            local
+        ));
+    }
+    let executable = normalized.join(GAME_EXE_RELATIVE);
+    if !executable.is_file() {
+        return Err(format!("executable_missing: {:?}", executable));
+    }
+    Ok(normalized)
+}
+
+pub fn find_game_process_id() -> Option<u32> {
     #[cfg(windows)]
     {
         use windows::Win32::Foundation::CloseHandle;
@@ -39,7 +95,7 @@ pub fn is_game_running() -> bool {
                             if name.eq_ignore_ascii_case("Client-Win64-Shipping.exe")
                                 || name.eq_ignore_ascii_case("WutheringWaves.exe")
                             {
-                                return true;
+                                return Some(pid);
                             }
                         }
                     }
@@ -48,7 +104,11 @@ pub fn is_game_running() -> bool {
         }
     }
 
-    false
+    None
+}
+
+pub fn is_game_running() -> bool {
+    find_game_process_id().is_some()
 }
 
 pub fn launch_game(game_path: &Path, dx11: bool) -> Result<std::process::Child, String> {
@@ -71,17 +131,36 @@ pub fn launch_game(game_path: &Path, dx11: bool) -> Result<std::process::Child, 
         .map_err(|e| format!("Failed to spawn game process: {}", e))
 }
 
-pub fn force_quit_game() {
+pub fn force_quit_game() -> Result<bool, String> {
     #[cfg(windows)]
     {
         let names = ["Client-Win64-Shipping.exe", "WutheringWaves.exe"];
+        let mut found = false;
+        let mut errors = Vec::new();
         for name in names {
-            let _ = Command::new("taskkill")
+            match Command::new("taskkill")
                 .args(["/F", "/IM", name])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .status();
+                .status()
+            {
+                Ok(status) if status.success() => found = true,
+                Ok(_) => {}
+                Err(error) => errors.push(format!("{name}: {error}")),
+            }
         }
+        if !errors.is_empty() {
+            return Err(errors.join("; "));
+        }
+        if !found && find_game_process_id().is_some() {
+            return Err("taskkill tidak menghentikan proses game.".to_string());
+        }
+        return Ok(found);
+    }
+
+    #[cfg(not(windows))]
+    {
+        Ok(false)
     }
 }
 

@@ -1,6 +1,7 @@
 use std::fs::{self, File};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 
 pub const GITHUB_API_LATEST_RELEASE: &str = "https://api.github.com/repos/TitoTFP/WuwaID/releases/latest";
 
@@ -11,6 +12,117 @@ pub struct ReleaseInfo {
     pub body: String,
     pub zip_url: Option<String>,
     pub checksums_url: Option<String>,
+}
+
+pub const RELEASE_EXECUTABLE_NAME: &str = "wuwaid-launcher.exe";
+
+fn is_release_executable(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name.eq_ignore_ascii_case(RELEASE_EXECUTABLE_NAME)
+                || name == "WuwaIDLauncher.exe"
+        })
+}
+
+pub fn is_valid_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+pub fn is_safe_download_url(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.starts_with("https://")
+        && trimmed
+            .strip_prefix("https://")
+            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|character| !character.is_whitespace()))
+}
+
+pub fn parse_checksum_manifest(content: &str) -> HashMap<String, String> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 2 {
+                return None;
+            }
+            let hash = parts[0].trim().trim_start_matches('*').to_ascii_lowercase();
+            let file = parts[1].trim().trim_start_matches('*');
+            (is_valid_sha256(&hash) && !file.is_empty()).then(|| (file.to_string(), hash))
+        })
+        .collect()
+}
+
+pub fn validate_update_archive(zip_data: &[u8], expected_executable: &str) -> Result<(), String> {
+    if expected_executable.is_empty() || Path::new(expected_executable).file_name().is_none() {
+        return Err("Nama executable update tidak valid.".to_string());
+    }
+    let mut archive = zip::ZipArchive::new(Cursor::new(zip_data))
+        .map_err(|error| format!("Invalid ZIP archive: {error}"))?;
+    let mut found_expected = false;
+    for index in 0..archive.len() {
+        let file = archive
+            .by_index(index)
+            .map_err(|error| format!("Gagal membaca entry ZIP: {error}"))?;
+        let Some(path) = file.enclosed_name() else {
+            return Err("ZIP update memiliki path traversal atau path absolut.".to_string());
+        };
+        if !file.is_dir() && path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("exe")) {
+            if path.file_name().and_then(|name| name.to_str()) == Some(expected_executable) {
+                found_expected = true;
+            } else {
+                return Err(format!("ZIP memuat executable tak dikenal: {:?}", path));
+            }
+        }
+    }
+    if !found_expected {
+        return Err(format!(
+            "ZIP update tidak memuat executable {}.",
+            expected_executable
+        ));
+    }
+    Ok(())
+}
+
+pub fn create_update_handoff(
+    staging_dir: &Path,
+    current_executable: &Path,
+    handoff_path: &Path,
+) -> Result<PathBuf, String> {
+    let staged_executable = staging_dir.join(
+        current_executable
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("WuwaIDLauncher.exe"),
+    );
+    let backup = current_executable.with_extension("old");
+    let quote = |path: &Path| format!("\"{}\"", path.to_string_lossy());
+    let script = format!(
+        "@echo off\r\n\
+         setlocal\r\n\
+         rem WuwaID updater handoff with rollback\r\n\
+         timeout /t 1 /nobreak >nul\r\n\
+         move /Y {current} {backup} >nul\r\n\
+         move /Y {staged} {current} >nul\r\n\
+         if errorlevel 1 (\r\n\
+           rem rollback\r\n\
+           move /Y {backup} {current} >nul\r\n\
+           exit /b 1\r\n\
+         )\r\n\
+         start \"\" {current}\r\n\
+         rmdir /S /Q {staging} >nul 2>nul\r\n\
+         del \"%~f0\"\r\n",
+        current = quote(current_executable),
+        backup = quote(&backup),
+        staged = quote(&staged_executable),
+        staging = quote(staging_dir),
+    );
+    if let Some(parent) = handoff_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("Gagal membuat folder handoff update: {error}"))?;
+    }
+    fs::write(handoff_path, script)
+        .map_err(|error| format!("Gagal menulis handoff update: {error}"))?;
+    Ok(handoff_path.to_path_buf())
 }
 
 pub fn parse_version(tag: &str) -> Vec<u32> {
@@ -110,24 +222,37 @@ pub fn extract_zip_update(zip_data: &[u8], target_dir: &Path) -> Result<PathBuf,
             None => continue,
         };
 
+        if !file.is_dir()
+            && outpath.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+            && !is_release_executable(&outpath)
+        {
+            return Err(format!("ZIP memuat executable tak dikenal: {:?}", outpath));
+        }
+        let release_executable = is_release_executable(&outpath);
+
         if file.is_dir() {
             fs::create_dir_all(&outpath).map_err(|e| format!("Failed to create dir: {}", e))?;
         } else {
-            if let Some(p) = outpath.parent() {
+            let normalized_outpath = if release_executable {
+                target_dir.join(RELEASE_EXECUTABLE_NAME)
+            } else {
+                outpath
+            };
+            if let Some(p) = normalized_outpath.parent() {
                 if !p.exists() {
                     fs::create_dir_all(p).map_err(|e| format!("Failed to create parent dir: {}", e))?;
                 }
             }
-            let mut outfile = File::create(&outpath).map_err(|e| format!("Failed to create file: {}", e))?;
+            let mut outfile = File::create(&normalized_outpath).map_err(|e| format!("Failed to create file: {}", e))?;
             std::io::copy(&mut file, &mut outfile).map_err(|e| format!("Failed to extract file: {}", e))?;
 
-            if outpath.extension().is_some_and(|ext| ext == "exe") {
-                main_exe_path = Some(outpath.clone());
+            if release_executable {
+                main_exe_path = Some(normalized_outpath);
             }
         }
     }
 
-    main_exe_path.ok_or_else(|| "No executable found in update ZIP".to_string())
+    main_exe_path.ok_or_else(|| format!("No executable {} found in update ZIP", RELEASE_EXECUTABLE_NAME))
 }
 
 #[cfg(test)]
@@ -160,6 +285,6 @@ mod tests {
 
         let exe_path = extract_zip_update(&buf.into_inner(), &target).unwrap();
         assert!(exe_path.exists());
-        assert_eq!(exe_path.file_name().unwrap(), "WuwaIDLauncher.exe");
+        assert_eq!(exe_path.file_name().unwrap(), RELEASE_EXECUTABLE_NAME);
     }
 }

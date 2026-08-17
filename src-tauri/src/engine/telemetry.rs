@@ -4,6 +4,10 @@ use std::time::Duration;
 
 pub const DEFAULT_HEARTBEAT_ENDPOINT: &str = "https://wuwa-active.titofp.workers.dev";
 
+pub fn should_send_telemetry(enabled: bool) -> bool {
+    enabled
+}
+
 pub fn get_or_create_client_id(appdata_dir: &Path) -> String {
     let client_id_path = appdata_dir.join("active-client-id.txt");
     if let Ok(existing) = fs::read_to_string(&client_id_path) {
@@ -92,10 +96,10 @@ mod tests {
 
     #[test]
     fn test_build_heartbeat_payload() {
-        let payload = build_heartbeat_payload("test-client", "2.6.1", "method3", "launch");
+        let payload = build_heartbeat_payload("test-client", "2.6.1", "resource_mount", "launch");
         assert_eq!(payload["client_id"], "test-client");
         assert_eq!(payload["launcher_version"], "2.6.1");
-        assert_eq!(payload["install_method"], "method3");
+        assert_eq!(payload["install_method"], "resource_mount");
         assert_eq!(payload["event"], "launch");
     }
 }
