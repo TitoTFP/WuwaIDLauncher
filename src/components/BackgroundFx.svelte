@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { appState } from '../lib/launcherState.svelte';
+  import type { VisualMode } from '../lib/types';
 
   let videoElement: HTMLVideoElement | null = $state(null);
   let canvasElement: HTMLCanvasElement | null = $state(null);
   let videoLoaded = $state(false);
 
-  let visualMode = $derived(appState.config.launcherVisualMode || 'full');
+  let visualMode = $derived<VisualMode>(appState.config.launcherVisualMode || 'full');
   let isVideoAllowed = $derived(visualMode === 'full' && !appState.gameRunning);
 
   $effect(() => {
@@ -86,8 +87,7 @@
 
     function render() {
       if (!ctx) return;
-      const mode = appState.config.launcherVisualMode || 'full';
-      if (appState.gameRunning || mode === 'off') {
+      if (appState.gameRunning || (visualMode as string) === 'off') {
         ctx.clearRect(0, 0, width, height);
         animFrameId = requestAnimationFrame(render);
         return;

@@ -48,7 +48,7 @@ export class LauncherState implements ILauncherState {
   config: LauncherConfig = $state<LauncherConfig>({
     gamePath: "",
     installMethod: "method3",
-    launcherVisualMode: "full",
+    launcherVisualMode: "full" as VisualMode,
     dx11: false,
     autoCheckUpdate: true,
     bgmVolume: 0.35,
