@@ -984,7 +984,12 @@ mod tests {
             cmd: command.to_string(),
             callback: CallbackFn(0),
             error: CallbackFn(1),
-            url: tauri::Url::parse("tauri://localhost").unwrap(),
+            url: tauri::Url::parse(if cfg!(any(windows, target_os = "android")) {
+                "http://tauri.localhost"
+            } else {
+                "tauri://localhost"
+            })
+            .unwrap(),
             body: InvokeBody::Json(args),
             headers: Default::default(),
             invoke_key: INVOKE_KEY.to_string(),
@@ -995,7 +1000,7 @@ mod tests {
     fn test_real_tauri_command_path_and_event_delivery() {
         let app = tauri::test::mock_builder()
             .invoke_handler(tauri::generate_handler![get_app_version, check_game_folder_write_access])
-            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .build(tauri::generate_context!())
             .unwrap();
         let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
