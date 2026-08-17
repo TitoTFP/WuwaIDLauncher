@@ -160,7 +160,7 @@ Hasil perbandingan antara arsitektur lama (.NET 8 WPF) dan arsitektur baru (Taur
 | **RAM (Tray Mode)**         | ~42 MB            | ~9.5 MB                | **~77% lebih hemat**   |
 | **CPU Usage (Background)**  | ~0.8%             | 0.0%                   | **Beban nol**        |
 
-*Lihat dokumentasi lengkap di `docs/benchmark-rebuild.md`.*
+_Lihat dokumentasi lengkap di `docs/benchmark-rebuild.md`._
 
 ---
 

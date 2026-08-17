@@ -277,6 +277,15 @@ fn check_and_sync_media<R: Runtime>(app: AppHandle<R>) {
     tauri::async_runtime::spawn(async move {
         let cache_dir = get_appdata_dir().join("Cache");
 
+        // 1. Immediately emit onMediaReady if valid cached assets already exist locally
+        let (cached_bgm, cached_video) = engine::media::get_cached_media_paths(&cache_dir);
+        if cached_bgm.is_some() && cached_video.is_some() {
+            let _ = app_handle.emit("onMediaReady", serde_json::json!({
+                "bgmUrl": "media://localhost/bgm.mp3",
+                "videoUrl": "media://localhost/bg-video.mp4"
+            }));
+        }
+
         let _ = app_handle.emit("onMediaStatus", serde_json::json!({
             "status": "checking",
             "message": "Memeriksa aset media..."
@@ -1058,6 +1067,35 @@ mod tests {
         assert!(ready_rx.recv_timeout(Duration::from_millis(100)).is_err());
 
         app.unlisten(status_listener);
+        app.unlisten(ready_listener);
+        std::env::remove_var("WUWAID_ASSETS_URL");
+        std::env::remove_var("WUWAID_E2E_APPDATA");
+    }
+
+    #[tokio::test]
+    async fn test_media_command_emits_ready_immediately_when_cached() {
+        let appdata = tempfile::tempdir().unwrap();
+        let cache_dir = appdata.path().join("Cache");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        std::fs::write(cache_dir.join("bgm.mp3"), b"mock-bgm-audio").unwrap();
+        std::fs::write(cache_dir.join("bg-video.mp4"), b"mock-bg-video").unwrap();
+
+        std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
+        std::env::set_var("WUWAID_ASSETS_URL", "http://127.0.0.1:9/unreachable");
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let (ready_tx, ready_rx) = sync_channel(1);
+        let ready_listener = app.listen_any("onMediaReady", move |event| {
+            let _ = ready_tx.send(event.payload().to_string());
+        });
+
+        check_and_sync_media(app.handle().clone());
+        let payload = ready_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(json["bgmUrl"], "media://localhost/bgm.mp3");
+        assert_eq!(json["videoUrl"], "media://localhost/bg-video.mp4");
+
         app.unlisten(ready_listener);
         std::env::remove_var("WUWAID_ASSETS_URL");
         std::env::remove_var("WUWAID_E2E_APPDATA");

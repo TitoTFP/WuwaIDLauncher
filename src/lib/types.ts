@@ -2,7 +2,7 @@ export type PageId = "home" | "settings" | "logs" | "about";
 
 export type InstallMethod = "method1" | "method2" | "method3";
 
-export type VisualMode = "full";
+export type VisualMode = "full" | "light" | "off";
 
 export type PatchState =
   | "unchecked"

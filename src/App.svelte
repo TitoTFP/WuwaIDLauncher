@@ -17,7 +17,7 @@
   });
 </script>
 
-<div class="app-root" class:game-running={appState.gameRunning} data-visual-mode="full">
+<div class="app-root" class:game-running={appState.gameRunning} data-visual-mode={appState.config.launcherVisualMode || 'full'}>
   <BackgroundFx />
   <TopBar />
   <SidePanel />
