@@ -46,17 +46,16 @@ pub fn backup_sig(game_path: &Path) -> std::io::Result<bool> {
     Ok(false)
 }
 
-/// Bypasses signature checking by moving the active .sig file to backup.
+/// Bypasses signature checking by moving the current .sig file to backup.
 pub fn bypass_sig(game_path: &Path) -> std::io::Result<bool> {
     let sig = get_sig_path(game_path);
     let backup = get_sig_backup_path(game_path);
 
+    // Match the release launcher: discard a stale backup when both files are
+    // present, then move the current official signature into the backup.
+    let _ = restore_sig(game_path)?;
     if sig.exists() {
-        if !backup.exists() {
-            fs::copy(&sig, &backup)?;
-        }
-        // Remove active signature file so UE4 skips verification for mod PAKs
-        fs::remove_file(&sig)?;
+        fs::rename(&sig, &backup)?;
         return Ok(true);
     }
     Ok(backup.exists())
@@ -68,10 +67,13 @@ pub fn restore_sig(game_path: &Path) -> std::io::Result<bool> {
     let backup = get_sig_backup_path(game_path);
 
     if backup.exists() {
-        if !sig.exists() {
-            fs::copy(&backup, &sig)?;
+        if sig.exists() {
+            // An active signature is already restored; never overwrite it
+            // with an older backup.
+            fs::remove_file(&backup)?;
+        } else {
+            fs::rename(&backup, &sig)?;
         }
-        let _ = fs::remove_file(&backup);
         return Ok(true);
     }
     Ok(false)
@@ -162,6 +164,40 @@ mod tests {
         assert!(sig_path.exists());
         assert_eq!(fs::read_to_string(&sig_path).unwrap(), "SIG_DATA_ORIGINAL");
         assert!(!is_sig_bypassed(game_dir));
+    }
+
+    #[test]
+    fn test_bypass_moves_current_sig_over_stale_backup() {
+        let tmp = tempdir().unwrap();
+        let game_dir = tmp.path();
+        let pak_dir = get_pak_dir(game_dir);
+        fs::create_dir_all(&pak_dir).unwrap();
+
+        let sig_path = get_sig_path(game_dir);
+        let backup_path = get_sig_backup_path(game_dir);
+        fs::write(&sig_path, b"CURRENT_SIG").unwrap();
+        fs::write(&backup_path, b"STALE_SIG").unwrap();
+
+        assert!(bypass_sig(game_dir).unwrap());
+        assert!(!sig_path.exists());
+        assert_eq!(fs::read(&backup_path).unwrap(), b"CURRENT_SIG");
+    }
+
+    #[test]
+    fn test_restore_does_not_overwrite_active_sig_when_both_exist() {
+        let tmp = tempdir().unwrap();
+        let game_dir = tmp.path();
+        let pak_dir = get_pak_dir(game_dir);
+        fs::create_dir_all(&pak_dir).unwrap();
+
+        let sig_path = get_sig_path(game_dir);
+        let backup_path = get_sig_backup_path(game_dir);
+        fs::write(&sig_path, b"ACTIVE_SIG").unwrap();
+        fs::write(&backup_path, b"STALE_SIG").unwrap();
+
+        assert!(restore_sig(game_dir).unwrap());
+        assert_eq!(fs::read(&sig_path).unwrap(), b"ACTIVE_SIG");
+        assert!(!backup_path.exists());
     }
 
     #[test]

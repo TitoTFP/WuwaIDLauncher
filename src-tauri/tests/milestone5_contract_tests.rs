@@ -95,16 +95,23 @@ fn update_archive_extraction_does_not_escape_staging_directory() {
 }
 
 #[test]
-fn update_archive_accepts_and_normalizes_packaged_executable_name() {
+fn update_archive_preserves_canonical_packaged_executable_name() {
     let staging = tempfile::tempdir().unwrap();
-    let payload = zip_with(&[("wuwaid-launcher.exe", b"exe")]);
+    let payload = zip_with(&[("WuwaIDLauncher.exe", b"exe")]);
     let extracted = updater::extract_zip_update(&payload, staging.path()).unwrap();
-    assert_eq!(extracted.file_name().and_then(|name| name.to_str()), Some("wuwaid-launcher.exe"));
+    assert_eq!(extracted.file_name().and_then(|name| name.to_str()), Some("WuwaIDLauncher.exe"));
     assert!(extracted.exists());
 }
 
 #[test]
-fn update_handoff_script_contains_atomic_replace_and_rollback_steps() {
+fn update_archive_rejects_legacy_packaged_executable_name() {
+    let staging = tempfile::tempdir().unwrap();
+    let payload = zip_with(&[("wuwaid-launcher.exe", b"exe")]);
+    assert!(updater::extract_zip_update(&payload, staging.path()).is_err());
+}
+
+#[test]
+fn update_handoff_script_overwrites_without_rollback_steps() {
     let temp = tempfile::tempdir().unwrap();
     let staging = temp.path().join("staging");
     let current = temp.path().join("WuwaIDLauncher.exe");
@@ -113,7 +120,9 @@ fn update_handoff_script_contains_atomic_replace_and_rollback_steps() {
     let result = updater::create_update_handoff(&staging, &current, &handoff).unwrap();
     assert_eq!(result, handoff);
     let script = std::fs::read_to_string(handoff).unwrap();
-    assert!(script.contains("move /Y"));
-    assert!(script.contains("rollback"));
+    assert!(script.contains("copy /Y"));
+    assert!(!script.contains(".old"));
+    assert!(!script.contains("rollback"));
+    assert!(!script.contains("move /Y"));
     assert!(script.contains("WuwaIDLauncher.exe"));
 }

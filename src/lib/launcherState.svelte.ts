@@ -20,6 +20,7 @@ export class LauncherState implements ILauncherState {
   installing: boolean = $state<boolean>(false);
   installed: boolean = $state<boolean>(false);
   launching: boolean = $state<boolean>(false);
+  signatureRestoreCountdown: number | null = $state<number | null>(null);
   gameRunning: boolean = $state<boolean>(false);
   gameOrigin: "launcher" | "external" = $state<"launcher" | "external">(
     "external",
@@ -224,6 +225,11 @@ export class LauncherState implements ILauncherState {
       },
       onGameLaunchFinished: () => {
         this.launching = false;
+      },
+      onSignatureRestoreCountdown: (remainingSeconds, active) => {
+        this.signatureRestoreCountdown = active && remainingSeconds > 0
+          ? remainingSeconds
+          : null;
       },
       onLogUploadStarted: () => {
         this.logUploadActive = true;

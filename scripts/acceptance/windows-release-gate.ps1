@@ -201,8 +201,8 @@ function Set-ReleaseArtifactPaths {
     $nsisName = "WuwaIDLauncher_{0}_x64-setup.exe" -f $Version
     $script:Artifacts = [ordered]@{
         executable = Find-ArtifactFile -RelativePaths @(
-            "wuwaid-launcher.exe",
-            "bundle/release/wuwaid-launcher.exe"
+            "WuwaIDLauncher.exe",
+            "bundle/release/WuwaIDLauncher.exe"
         )
         zip = Find-ArtifactFile -RelativePaths @(
             "bundle/release/$zipName",
@@ -376,7 +376,7 @@ function Invoke-ArtifactGate {
             $_.StartsWith("\\", [StringComparison]::Ordinal) -or
             $_.Split("/", [StringSplitOptions]::RemoveEmptyEntries) -contains ".."
         })
-        $launcherEntry = @($archive.Entries | Where-Object { $_.FullName.Equals("wuwaid-launcher.exe", [StringComparison]::OrdinalIgnoreCase) })
+        $launcherEntry = @($archive.Entries | Where-Object { $_.FullName.Equals("WuwaIDLauncher.exe", [StringComparison]::Ordinal) })
         Write-JsonFile -Value ([ordered]@{
             archive = $script:Artifacts.zip
             entries = $entries
@@ -384,7 +384,7 @@ function Invoke-ArtifactGate {
             launcherEntry = $launcherEntry.Count -gt 0
         }) -Path $zipEvidencePath
         if ($unsafeEntries.Count -gt 0 -or $launcherEntry.Count -eq 0) {
-            throw "ZIP harus berisi wuwaid-launcher.exe dan tidak boleh memiliki path traversal."
+            throw "ZIP harus berisi WuwaIDLauncher.exe dan tidak boleh memiliki path traversal."
         }
         Add-Scenario -Name "artifact-zip-contents" -Status "PASS" -Message "Updater ZIP berisi executable packaged yang aman." -Evidence @($zipEvidencePath)
     } catch {
@@ -459,8 +459,8 @@ function Assert-Input {
     if (-not (Test-Path -LiteralPath $script:ArtifactRootPath -PathType Container)) {
         throw "ArtifactRoot harus berupa folder yang ada: $script:ArtifactRootPath"
     }
-    if (-not (Test-Path -LiteralPath (Join-Path $script:ArtifactRootPath "wuwaid-launcher.exe") -PathType Leaf)) {
-        throw "ArtifactRoot tidak memiliki wuwaid-launcher.exe: $script:ArtifactRootPath"
+    if (-not (Test-Path -LiteralPath (Join-Path $script:ArtifactRootPath "WuwaIDLauncher.exe") -PathType Leaf)) {
+        throw "ArtifactRoot tidak memiliki WuwaIDLauncher.exe: $script:ArtifactRootPath"
     }
     if (Test-Path -LiteralPath $script:OutputRootPath -PathType Leaf) {
         throw "OutputRoot menunjuk ke file: $script:OutputRootPath"

@@ -64,7 +64,7 @@ Artifact gate mencari executable standalone dan bundle release pada root atau
 `src-tauri/Cargo.toml`, dan `src-tauri/tauri.conf.json`. Lima configured icon
 files wajib tersedia. `SHA256sums.txt` wajib cocok untuk ZIP, MSI, dan NSIS;
 hash executable standalone juga dihitung dan dicatat. ZIP wajib berisi
-`wuwaid-launcher.exe` dan tidak boleh memiliki path traversal.
+`WuwaIDLauncher.exe` dan tidak boleh memiliki path traversal.
 
 Contract test runner:
 
@@ -107,7 +107,7 @@ Contract test runner:
 
 Packaging menghasilkan:
 
-- src-tauri/target/release/wuwaid-launcher.exe
+- src-tauri/target/release/WuwaIDLauncher.exe
 - src-tauri/target/release/bundle/msi/WuwaIDLauncher_2.6.1_x64_en-US.msi
 - src-tauri/target/release/bundle/nsis/WuwaIDLauncher_2.6.1_x64-setup.exe
 

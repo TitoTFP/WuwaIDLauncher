@@ -96,6 +96,7 @@ export interface EventBridgeCallbacks {
   onLaunchError?: (error: string) => void;
   onGameLaunchStarted?: () => void;
   onGameLaunchFinished?: () => void;
+  onSignatureRestoreCountdown?: (remainingSeconds: number, active: boolean) => void;
   onLogUploadStarted?: () => void;
   onLogUploadFinished?: (result: LogUploadResult) => void;
   onTelemetryStatus?: (payload: TelemetryStatusPayload) => void;
@@ -151,6 +152,10 @@ export async function setupEventBridge(
     ),
     addListener<void>("onGameLaunchFinished", () =>
       callbacks.onGameLaunchFinished?.(),
+    ),
+    addListener<{ remainingSeconds: number; active: boolean }>(
+      "onSignatureRestoreCountdown",
+      (p) => callbacks.onSignatureRestoreCountdown?.(p.remainingSeconds, p.active),
     ),
     addListener<void>("onLogUploadStarted", () =>
       callbacks.onLogUploadStarted?.(),

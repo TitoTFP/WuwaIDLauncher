@@ -58,8 +58,19 @@ fn launch_preconditions_reject_invalid_and_uninstalled_patch() {
 }
 
 #[test]
-fn signature_restore_fallback_only_triggers_after_process_exit() {
-    assert!(!runtime::should_restore_signature(true, true));
-    assert!(!runtime::should_restore_signature(true, false));
-    assert!(runtime::should_restore_signature(false, true));
+fn signature_restore_deadline_triggers_even_while_process_is_running() {
+    assert!(runtime::should_restore_signature(true));
+    assert!(!runtime::should_restore_signature(false));
+}
+
+#[test]
+fn signature_bypass_does_not_create_backup_during_installation() {
+    let source = include_str!("../src/lib.rs");
+    let installation = source
+        .split_once("fn start_installation")
+        .and_then(|(_, remainder)| remainder.split_once("\n#[tauri::command]"))
+        .map(|(body, _)| body)
+        .expect("start_installation body must be present");
+
+    assert!(!installation.contains("engine::signature::backup_sig"));
 }

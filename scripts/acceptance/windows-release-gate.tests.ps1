@@ -73,7 +73,7 @@ function Initialize-Artifact {
     if ($IncludeExecutable) {
         $bundleRelease = Join-Path $Path "bundle\release"
         New-Item -ItemType Directory -Force -Path $bundleRelease | Out-Null
-        $executable = Join-Path $Path "wuwaid-launcher.exe"
+        $executable = Join-Path $Path "WuwaIDLauncher.exe"
         Set-Content -LiteralPath $executable -Value "fixture executable" -NoNewline
 
         $zip = Join-Path $bundleRelease "WuwaIDLauncher_2.6.1_x64.zip"
@@ -98,7 +98,7 @@ function Set-UnsafeArtifactZip {
     Remove-Item -LiteralPath $Path -Force
     $archive = [IO.Compression.ZipFile]::Open($Path, [IO.Compression.ZipArchiveMode]::Create)
     try {
-        foreach ($entryName in @("../escape.txt", "wuwaid-launcher.exe")) {
+        foreach ($entryName in @("../escape.txt", "WuwaIDLauncher.exe")) {
             $entry = $archive.CreateEntry($entryName)
             $writer = [IO.StreamWriter]::new($entry.Open())
             try {

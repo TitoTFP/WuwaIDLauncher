@@ -64,11 +64,48 @@ fn get_settings_path() -> PathBuf {
     get_appdata_dir().join("settings.json")
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowMinimizeAction {
+    Minimize,
+    Hide,
+}
+
+fn window_minimize_action(tray_mode: bool) -> WindowMinimizeAction {
+    if tray_mode {
+        WindowMinimizeAction::Hide
+    } else {
+        WindowMinimizeAction::Minimize
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloseAction {
+    Exit,
+    Blocked(u64),
+}
+
+fn close_action(signature_restore_remaining: Option<u64>) -> CloseAction {
+    match signature_restore_remaining {
+        Some(remaining) if remaining > 0 => CloseAction::Blocked(remaining),
+        _ => CloseAction::Exit,
+    }
+}
+
+fn remaining_signature_restore_seconds(deadline: Instant, now: Instant) -> Option<u64> {
+    let remaining = deadline.saturating_duration_since(now);
+    if remaining.is_zero() {
+        return None;
+    }
+    Some(remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0))
+}
+
 #[derive(Default)]
 struct RuntimeCoordinator {
     launcher_pid: Mutex<Option<u32>>,
     game_path: Mutex<Option<PathBuf>>,
     force_quit_requested: Mutex<bool>,
+    tray_mode: Mutex<bool>,
+    signature_restore_deadline: Mutex<Option<Instant>>,
 }
 
 fn coordinator_launcher_pid<R: Runtime>(app: &AppHandle<R>) -> Option<u32> {
@@ -89,6 +126,106 @@ fn set_launcher_process<R: Runtime>(app: &AppHandle<R>, pid: Option<u32>, path: 
             if let Ok(mut value) = state.force_quit_requested.lock() {
                 *value = false;
             }
+        }
+    }
+}
+
+fn set_tray_mode<R: Runtime>(app: &AppHandle<R>, tray_mode: bool) {
+    if let Some(state) = app.try_state::<RuntimeCoordinator>() {
+        if let Ok(mut value) = state.tray_mode.lock() {
+            *value = tray_mode;
+        }
+    }
+}
+
+fn is_tray_mode<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.try_state::<RuntimeCoordinator>()
+        .and_then(|state| state.tray_mode.lock().ok().map(|value| *value))
+        .unwrap_or(false)
+}
+
+fn set_signature_restore_deadline<R: Runtime>(app: &AppHandle<R>, deadline: Option<Instant>) {
+    if let Some(state) = app.try_state::<RuntimeCoordinator>() {
+        if let Ok(mut value) = state.signature_restore_deadline.lock() {
+            *value = deadline;
+        }
+    }
+}
+
+fn signature_restore_remaining<R: Runtime>(app: &AppHandle<R>) -> Option<u64> {
+    let state = app.try_state::<RuntimeCoordinator>()?;
+    let mut deadline = state.signature_restore_deadline.lock().ok()?;
+    let remaining = deadline
+        .map(|value| remaining_signature_restore_seconds(value, Instant::now()))
+        .flatten();
+    if remaining.is_none() {
+        *deadline = None;
+    }
+    remaining
+}
+
+fn clear_signature_restore_deadline<R: Runtime>(app: &AppHandle<R>, expected: Instant) {
+    if let Some(state) = app.try_state::<RuntimeCoordinator>() {
+        if let Ok(mut value) = state.signature_restore_deadline.lock() {
+            if *value == Some(expected) {
+                *value = None;
+            }
+        }
+    }
+}
+
+fn emit_signature_restore_countdown<R: Runtime>(app: &AppHandle<R>, remaining: Option<u64>) {
+    let _ = app.emit(
+        "onSignatureRestoreCountdown",
+        serde_json::json!({
+            "active": remaining.is_some(),
+            "remainingSeconds": remaining.unwrap_or(0),
+        }),
+    );
+}
+
+fn spawn_signature_restore_timer<R: Runtime>(
+    app: AppHandle<R>,
+    game_path: PathBuf,
+    deadline: Instant,
+) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let remaining = remaining_signature_restore_seconds(deadline, Instant::now());
+            if let Some(remaining) = remaining {
+                emit_signature_restore_countdown(&app, Some(remaining));
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
+            }
+
+            if let Err(error) = engine::signature::restore_sig(&game_path) {
+                log::error!("Signature restore at 150s failed: {error}");
+            }
+            clear_signature_restore_deadline(&app, deadline);
+            emit_signature_restore_countdown(&app, None);
+            break;
+        }
+    });
+}
+
+fn notify_close_blocked<R: Runtime>(app: &AppHandle<R>, remaining: u64) {
+    emit_signature_restore_countdown(app, Some(remaining));
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+fn request_close<R: Runtime>(app: &AppHandle<R>) {
+    match close_action(signature_restore_remaining(app)) {
+        CloseAction::Blocked(remaining) => {
+            log::info!("Close blocked while Method 3 signature guard has {remaining}s left");
+            notify_close_blocked(app, remaining);
+        }
+        CloseAction::Exit => {
+            set_tray_mode(app, false);
+            restore_tracked_signature(app);
+            app.exit(0);
         }
     }
 }
@@ -155,6 +292,7 @@ fn finish_launch_lifecycle<R: Runtime>(
         let _ = engine::signature::restore_sig(game_path);
     }
     set_launcher_process(app, None, None);
+    set_tray_mode(app, false);
     emit_runtime_state(
         app,
         engine::runtime::RuntimeState {
@@ -335,21 +473,21 @@ pub fn parse_range_header(range_header: &str, total_len: u64) -> Option<(u64, u6
 
 #[tauri::command]
 fn minimize_window<R: Runtime>(window: WebviewWindow<R>) {
-    if engine::runtime::is_game_running() {
-        let _ = window.hide();
-    } else {
-        let _ = window.minimize();
+    let app = window.app_handle();
+    match window_minimize_action(is_tray_mode(&app)) {
+        WindowMinimizeAction::Minimize => {
+            let _ = window.minimize();
+        }
+        WindowMinimizeAction::Hide => {
+            set_tray_mode(&app, true);
+            let _ = window.hide();
+        }
     }
 }
 
 #[tauri::command]
 fn close_window<R: Runtime>(window: WebviewWindow<R>) {
-    if engine::runtime::is_game_running() {
-        let _ = window.hide();
-    } else {
-        restore_tracked_signature(&window.app_handle());
-        window.app_handle().exit(0);
-    }
+    request_close(&window.app_handle());
 }
 
 #[tauri::command]
@@ -1146,6 +1284,9 @@ fn start_installation<R: Runtime>(
         }
     };
     let canonical_method = method.as_str().to_string();
+    // Keep the IPC argument for compatibility. SignatureBypass creates its
+    // temporary backup only at launch, matching the release launcher.
+    let _ = backup;
     log::info!(
         "Start installation: path={}, method={}",
         normalized_game_path, canonical_method
@@ -1300,16 +1441,6 @@ fn start_installation<R: Runtime>(
             None
         };
 
-        if backup {
-            if let Err(error) = engine::signature::backup_sig(p) {
-                let _ = app_handle.emit(
-                    "onInstallError",
-                    format!("Gagal membuat backup signature: {error}"),
-                );
-                return;
-            }
-        }
-
         let _ = app_handle.emit("onProgressUpdate", serde_json::json!({
             "percent": 90,
             "status": "Memasang file mod..."
@@ -1422,22 +1553,45 @@ fn launch_game<R: Runtime>(
         let command = engine::runtime::build_launch_command(&p, dx11);
 
         if method == engine::method::InstallMethod::SignatureBypass {
-            if let Err(error) = engine::signature::bypass_sig(&p) {
-                let mut evidence = engine::runtime::LaunchEvidence::for_failure(
-                    command,
-                    engine::runtime::SpawnFailureKind::SpawnFailed,
-                    None,
-                );
-                evidence.error = Some(format!("signature_bypass_failed: {error}"));
-                evidence.game_log_tail = engine::runtime::collect_game_log_tail(&p);
-                let _ = app_handle.emit("onLaunchError", launch_error_message(evidence));
-                finish_launch_lifecycle(&app_handle, &p, true);
-                return;
+            match engine::signature::bypass_sig(&p) {
+                Ok(true) => {}
+                Ok(false) => {
+                    let mut evidence = engine::runtime::LaunchEvidence::for_failure(
+                        command,
+                        engine::runtime::SpawnFailureKind::SpawnFailed,
+                        None,
+                    );
+                    evidence.error = Some(
+                        "signature_bypass_failed: signature file tidak ditemukan".to_string(),
+                    );
+                    evidence.game_log_tail = engine::runtime::collect_game_log_tail(&p);
+                    let _ = app_handle.emit("onLaunchError", launch_error_message(evidence));
+                    finish_launch_lifecycle(&app_handle, &p, true);
+                    return;
+                }
+                Err(error) => {
+                    let mut evidence = engine::runtime::LaunchEvidence::for_failure(
+                        command,
+                        engine::runtime::SpawnFailureKind::SpawnFailed,
+                        None,
+                    );
+                    evidence.error = Some(format!("signature_bypass_failed: {error}"));
+                    evidence.game_log_tail = engine::runtime::collect_game_log_tail(&p);
+                    let _ = app_handle.emit("onLaunchError", launch_error_message(evidence));
+                    finish_launch_lifecycle(&app_handle, &p, true);
+                    return;
+                }
             }
         }
 
         match engine::runtime::launch_game(&p, dx11) {
             Ok(mut process) => {
+                if method == engine::method::InstallMethod::SignatureBypass {
+                    let deadline = Instant::now() + Duration::from_secs(150);
+                    set_signature_restore_deadline(&app_handle, Some(deadline));
+                    emit_signature_restore_countdown(&app_handle, Some(150));
+                    spawn_signature_restore_timer(app_handle.clone(), p.clone(), deadline);
+                }
                 let mut evidence = engine::runtime::LaunchEvidence::for_process(
                     command,
                     process.mode,
@@ -1486,40 +1640,13 @@ fn launch_game<R: Runtime>(
 
                 // Auto-minimize window and trim memory only after process detection.
                 if let Some(window) = app_handle.get_webview_window("main") {
+                    set_tray_mode(&app_handle, true);
                     let _ = window.hide();
                 }
                 engine::runtime::trim_memory_working_set();
 
                 // Send telemetry launch event only after explicit opt-in.
                 send_telemetry_if_enabled(&app_handle, &canonical_method, "launch").await;
-
-                // A safety fallback is allowed to restore only after the
-                // process is gone; it can never restore the signature while
-                // the game is still running.
-                let (restore_tx, restore_rx) = tokio::sync::watch::channel(false);
-                if method == engine::method::InstallMethod::SignatureBypass {
-                    let p_auto_restore = p.clone();
-                    let child_pid = process.id();
-                    let mut restore_rx = restore_rx;
-                    tauri::async_runtime::spawn(async move {
-                        loop {
-                            tokio::select! {
-                                changed = restore_rx.changed() => {
-                                    if changed.is_ok() && *restore_rx.borrow() {
-                                        break;
-                                    }
-                                }
-                                _ = tokio::time::sleep(Duration::from_secs(150)) => {
-                                    let running = engine::runtime::find_game_process_id() == Some(child_pid);
-                                    if engine::runtime::should_restore_signature(running, true) {
-                                        let _ = engine::signature::restore_sig(&p_auto_restore);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    });
-                }
 
                 // Monitor process in background and persist final evidence.
                 let app_for_monitor = app_handle.clone();
@@ -1562,7 +1689,6 @@ fn launch_game<R: Runtime>(
                             );
                         }
                     }
-                    let _ = restore_tx.send(true);
                     finish_launch_lifecycle(&app_for_monitor, &p_for_monitor, restore_signature);
                 });
             }
@@ -1605,6 +1731,7 @@ fn force_quit_game<R: Runtime>(app: AppHandle<R>) -> Result<bool, String> {
         let _ = engine::signature::restore_sig(&path);
     }
     set_launcher_process(&app, None, None);
+    set_tray_mode(&app, false);
     emit_runtime_state(
         &app,
         engine::runtime::RuntimeState {
@@ -1713,21 +1840,9 @@ pub fn run() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "quit" => {
-                        if engine::runtime::is_game_running() {
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
-                            let _ = app.emit(
-                                "onLaunchError",
-                                "Launcher tetap aktif sampai game dihentikan.".to_string(),
-                            );
-                        } else {
-                            app.exit(0);
-                        }
-                    }
+                    "quit" => request_close(app),
                     "show" => {
+                        set_tray_mode(app, true);
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
@@ -1743,6 +1858,7 @@ pub fn run() {
                     } = event
                     {
                         let app = tray.app_handle();
+                        set_tray_mode(&app, true);
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
@@ -1836,6 +1952,34 @@ mod tests {
             headers: Default::default(),
             invoke_key: INVOKE_KEY.to_string(),
         }
+    }
+
+    #[test]
+    fn window_minimize_action_distinguishes_normal_and_tray_modes() {
+        assert_eq!(window_minimize_action(false), WindowMinimizeAction::Minimize);
+        assert_eq!(window_minimize_action(true), WindowMinimizeAction::Hide);
+    }
+
+    #[test]
+    fn close_action_is_blocked_only_while_signature_guard_has_time_left() {
+        assert_eq!(close_action(Some(42)), CloseAction::Blocked(42));
+        assert_eq!(close_action(Some(1)), CloseAction::Blocked(1));
+        assert_eq!(close_action(Some(0)), CloseAction::Exit);
+        assert_eq!(close_action(None), CloseAction::Exit);
+    }
+
+    #[test]
+    fn signature_restore_countdown_rounds_up_until_deadline() {
+        let now = Instant::now();
+        assert_eq!(remaining_signature_restore_seconds(now + Duration::from_secs(150), now), Some(150));
+        assert_eq!(
+            remaining_signature_restore_seconds(
+                now + Duration::from_millis(1_500),
+                now + Duration::from_millis(600),
+            ),
+            Some(1)
+        );
+        assert_eq!(remaining_signature_restore_seconds(now, now), None);
     }
 
     #[test]

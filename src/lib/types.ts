@@ -216,6 +216,7 @@ export interface ILauncherState {
   installing: boolean;
   installed: boolean;
   launching: boolean;
+  signatureRestoreCountdown: number | null;
   gameRunning: boolean;
   gameOrigin: "launcher" | "external";
   gamePath: string;

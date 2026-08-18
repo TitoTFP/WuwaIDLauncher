@@ -604,8 +604,8 @@ pub fn reconcile_runtime_state(
     }
 }
 
-pub fn should_restore_signature(process_running: bool, timeout_elapsed: bool) -> bool {
-    timeout_elapsed && !process_running
+pub fn should_restore_signature(timeout_elapsed: bool) -> bool {
+    timeout_elapsed
 }
 
 pub fn validate_launch_preconditions(

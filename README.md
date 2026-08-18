@@ -189,7 +189,7 @@ npm run tauri -- build
 
 Artifact release yang diharapkan:
 
-- src-tauri/target/release/wuwaid-launcher.exe
+- src-tauri/target/release/WuwaIDLauncher.exe
 - src-tauri/target/release/bundle/msi/WuwaIDLauncher_2.6.1_x64_en-US.msi
 - src-tauri/target/release/bundle/nsis/WuwaIDLauncher_2.6.1_x64-setup.exe
 - src-tauri/target/release/bundle/release/WuwaIDLauncher_2.6.1_x64.zip

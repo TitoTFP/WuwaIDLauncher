@@ -14,15 +14,12 @@ pub struct ReleaseInfo {
     pub checksums_url: Option<String>,
 }
 
-pub const RELEASE_EXECUTABLE_NAME: &str = "wuwaid-launcher.exe";
+pub const RELEASE_EXECUTABLE_NAME: &str = "WuwaIDLauncher.exe";
 
 fn is_release_executable(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| {
-            name.eq_ignore_ascii_case(RELEASE_EXECUTABLE_NAME)
-                || name == "WuwaIDLauncher.exe"
-        })
+        .is_some_and(|name| name.eq_ignore_ascii_case(RELEASE_EXECUTABLE_NAME))
 }
 
 pub fn is_valid_sha256(value: &str) -> bool {
@@ -53,7 +50,9 @@ pub fn parse_checksum_manifest(content: &str) -> HashMap<String, String> {
 }
 
 pub fn validate_update_archive(zip_data: &[u8], expected_executable: &str) -> Result<(), String> {
-    if expected_executable.is_empty() || Path::new(expected_executable).file_name().is_none() {
+    if !expected_executable.eq_ignore_ascii_case(RELEASE_EXECUTABLE_NAME)
+        || Path::new(expected_executable).file_name().is_none()
+    {
         return Err("Nama executable update tidak valid.".to_string());
     }
     let mut archive = zip::ZipArchive::new(Cursor::new(zip_data))
@@ -94,25 +93,20 @@ pub fn create_update_handoff(
             .and_then(|name| name.to_str())
             .unwrap_or("WuwaIDLauncher.exe"),
     );
-    let backup = current_executable.with_extension("old");
     let quote = |path: &Path| format!("\"{}\"", path.to_string_lossy());
     let script = format!(
         "@echo off\r\n\
          setlocal\r\n\
-         rem WuwaID updater handoff with rollback\r\n\
+         rem WuwaID updater handoff with direct overwrite\r\n\
          timeout /t 1 /nobreak >nul\r\n\
-         move /Y {current} {backup} >nul\r\n\
-         move /Y {staged} {current} >nul\r\n\
+         copy /Y {staged} {current} >nul\r\n\
          if errorlevel 1 (\r\n\
-           rem rollback\r\n\
-           move /Y {backup} {current} >nul\r\n\
            exit /b 1\r\n\
          )\r\n\
          start \"\" {current}\r\n\
          rmdir /S /Q {staging} >nul 2>nul\r\n\
          del \"%~f0\"\r\n",
         current = quote(current_executable),
-        backup = quote(&backup),
         staged = quote(&staged_executable),
         staging = quote(staging_dir),
     );
