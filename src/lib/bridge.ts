@@ -75,7 +75,8 @@ export const bridge = {
   openSupport: (): Promise<void> => invoke("open_support"),
 
   // Local UI maintenance
-  notifyUiInteractive: (): Promise<void> => invoke("notify_ui_interactive"),
+  notifyUiInteractive: (installMethod: InstallMethod): Promise<void> =>
+    invoke("notify_ui_interactive", { installMethod }),
   resetWebViewCache: (): Promise<void> => invoke("reset_webview_cache"),
 
 };

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, for example v2.6.2"
+        description: "Release tag, for example v2.8.0"
         required: true
         type: string
 
@@ -62,6 +62,17 @@ jobs:
           "tag=$tag" >> $env:GITHUB_OUTPUT
           "version=$version" >> $env:GITHUB_OUTPUT
 
+      - name: Validate curated release notes
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          $notes = ".github/release-notes/$env:RELEASE_TAG.md"
+          if (-not (Test-Path -LiteralPath $notes)) {
+            throw "Curated release notes tidak ditemukan: $notes"
+          }
+          Write-Host "Using curated release notes: $notes"
+
       - name: Check frontend
         run: npm run check
 
@@ -101,6 +112,7 @@ jobs:
           name: WuwaID Launcher ${{ steps.release.outputs.tag }}
           draft: false
           prerelease: false
+          body_path: .github/release-notes/${{ steps.release.outputs.tag }}.md
           generate_release_notes: true
           files: |
             ${{ steps.package.outputs.zip }}

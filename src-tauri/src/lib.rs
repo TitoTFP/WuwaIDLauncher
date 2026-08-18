@@ -1216,7 +1216,19 @@ async fn check_patch_status<R: Runtime>(
 }
 
 #[tauri::command]
-fn notify_ui_interactive<R: Runtime>(_app: AppHandle<R>) {
+fn notify_ui_interactive<R: Runtime>(app: AppHandle<R>, install_method: String) {
+    let method = match engine::method::InstallMethod::parse(&install_method) {
+        Ok(method) => method,
+        Err(error) => {
+            log::warn!(
+                "Install method active player tidak valid ({error}); memakai resource_mount"
+            );
+            engine::method::InstallMethod::ResourceMount
+        }
+    };
+    if let Some(service) = app.try_state::<engine::active_player::ActivePlayerService>() {
+        service.start(method);
+    }
     log::info!("UI interactive milestone reached");
 }
 
@@ -1564,6 +1576,11 @@ fn launch_game<R: Runtime>(
 
         match engine::runtime::launch_game(&p, dx11) {
             Ok(mut process) => {
+                if let Some(service) = app_handle
+                    .try_state::<engine::active_player::ActivePlayerService>()
+                {
+                    service.send_launch(method);
+                }
                 if method == engine::method::InstallMethod::SignatureBypass {
                     let deadline = Instant::now() + Duration::from_secs(150);
                     set_signature_restore_deadline(&app_handle, Some(deadline));
@@ -1799,6 +1816,7 @@ fn restart_as_admin() {
 pub fn run() {
     tauri::Builder::default()
         .manage(RuntimeCoordinator::default())
+        .manage(engine::active_player::ActivePlayerService::new(get_appdata_dir()))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
@@ -1876,6 +1894,11 @@ pub fn run() {
         .expect("error while building wuwaid launcher application")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                if let Some(service) = app
+                    .try_state::<engine::active_player::ActivePlayerService>()
+                {
+                    service.stop();
+                }
                 restore_tracked_signature(app);
             }
         });

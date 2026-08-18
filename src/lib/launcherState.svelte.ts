@@ -34,7 +34,7 @@ export class LauncherState implements ILauncherState {
   progressDownloadedBytes: number = $state<number>(0);
   progressTotalBytes: number = $state<number>(0);
   progressSpeedMbps: number = $state<number>(0);
-  appVersion: string = $state<string>("2.6.1");
+  appVersion: string = $state<string>("2.8.0");
   vhVersion: string = $state<string>("");
   statusMessage: string = $state<string>("");
   diagnosticMessage: string = $state<string>("");
@@ -319,7 +319,7 @@ export class LauncherState implements ILauncherState {
 
     // Notify backend that UI is interactive
     try {
-      await bridge.notifyUiInteractive();
+      await bridge.notifyUiInteractive(this.config.installMethod);
     } catch {
       // ignore
     }
