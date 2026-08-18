@@ -1,4 +1,4 @@
-use crate::engine::{downloader, method::InstallMethod, pak, path, signature};
+use crate::engine::{method::InstallMethod, pak, path, signature};
 use sha1::{Digest, Sha1};
 use std::fs;
 use std::io::Read;
@@ -21,6 +21,29 @@ pub struct ResourceMountPlan {
     pub sig_path: PathBuf,
     pub mount_path: PathBuf,
     pub owner_marker_path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+struct ResourceMountArtifacts {
+    version_dir: PathBuf,
+    pak_path: PathBuf,
+    sig_path: PathBuf,
+    mount_path: PathBuf,
+    owner_marker_path: PathBuf,
+}
+
+impl ResourceMountArtifacts {
+    fn from_version_dir(version_dir: PathBuf) -> Self {
+        let mount_dir = version_dir.join("Mount");
+        let patch_dir = version_dir.join("Patch").join(PATCH_FOLDER_NAME);
+        Self {
+            version_dir,
+            pak_path: patch_dir.join(PATCH_PAK_FILE_NAME),
+            sig_path: patch_dir.join(PATCH_SIG_FILE_NAME),
+            mount_path: mount_dir.join(MOUNT_FILE_NAME),
+            owner_marker_path: patch_dir.join(OWNER_MARKER_FILE_NAME),
+        }
+    }
 }
 
 pub fn get_resources_root(game_path: &Path) -> PathBuf {
@@ -139,17 +162,9 @@ pub fn validate_pak_file(pak_path: &Path) -> Result<bool, String> {
     Ok(hasher.finalize().as_slice() == expected)
 }
 
-fn marker_hash(marker: &str) -> Option<&str> {
-    marker
-        .trim()
-        .strip_prefix("WuwaID Resource Mount v1\nsha256=")
-        .filter(|hash| valid_sha256(hash))
-}
-
 pub fn validate_installed_resource_mount(plan: &ResourceMountPlan) -> Result<bool, String> {
     if !plan.pak_path.exists()
         || !plan.sig_path.exists()
-        || !plan.owner_marker_path.exists()
         || !plan.mount_path.exists()
     {
         return Ok(false);
@@ -161,18 +176,6 @@ pub fn validate_installed_resource_mount(plan: &ResourceMountPlan) -> Result<boo
         .map_err(|e| format!("Gagal membaca metadata signature: {}", e))?
         .len()
         == 0
-    {
-        return Ok(false);
-    }
-
-    let marker = fs::read_to_string(&plan.owner_marker_path)
-        .map_err(|e| format!("Gagal membaca owner marker: {}", e))?;
-    let Some(expected_sha256) = marker_hash(&marker) else {
-        return Ok(false);
-    };
-    if downloader::compute_sha256(&plan.pak_path)
-        .map_err(|e| format!("Gagal menghitung SHA-256 PAK: {}", e))?
-        != expected_sha256.to_ascii_lowercase()
     {
         return Ok(false);
     }
@@ -201,24 +204,6 @@ pub fn validate_installed_resource_mount(plan: &ResourceMountPlan) -> Result<boo
         ))
 }
 
-fn is_legacy_resource_mount_owned(plan: &ResourceMountPlan) -> bool {
-    let Ok(marker) = fs::read_to_string(&plan.owner_marker_path) else {
-        return false;
-    };
-    let marker = marker.trim();
-    if marker == "wuwaid-managed-mod" {
-        return true;
-    }
-    let Some(expected_sha1) = marker.strip_prefix("wuwaid-managed-mod:sha1=") else {
-        return false;
-    };
-    valid_sha1(expected_sha1)
-        && plan.pak_path.is_file()
-        && compute_sha1(&plan.pak_path)
-            .map(|actual| actual.eq_ignore_ascii_case(expected_sha1))
-            .unwrap_or(false)
-}
-
 pub fn loader_pak_path(game_path: &Path) -> PathBuf {
     signature::get_loader_pak_path(game_path)
 }
@@ -239,24 +224,10 @@ pub fn signature_bypass_marker_path(game_path: &Path) -> PathBuf {
     signature::get_signature_bypass_marker_path(game_path)
 }
 
-fn valid_sha256(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn marker_value<'a>(marker: &'a str, prefix: &str, key: &str) -> Option<&'a str> {
-    marker
-        .trim()
-        .strip_prefix(prefix)?
-        .split(';')
-        .find_map(|part| part.strip_prefix(key))
-        .filter(|value| valid_sha256(value))
-}
-
 pub fn validate_installed_loader(game_path: &Path) -> Result<bool, String> {
     let pak_path = loader_pak_path(game_path);
     let dll_path = loader_dll_path(game_path);
-    let marker_path = loader_marker_path(game_path);
-    if !pak_path.is_file() || !dll_path.is_file() || !marker_path.is_file() {
+    if !pak_path.is_file() || !dll_path.is_file() {
         return Ok(false);
     }
     if !validate_pak_file(&pak_path)?
@@ -268,39 +239,12 @@ pub fn validate_installed_loader(game_path: &Path) -> Result<bool, String> {
         return Ok(false);
     }
 
-    let marker = fs::read_to_string(&marker_path)
-        .map_err(|e| format!("Gagal membaca marker loader: {e}"))?;
-    let Some(pak_hash) = marker_value(&marker, "wuwaid-managed-loader:", "pak-sha256=") else {
-        return Ok(false);
-    };
-    let Some(dll_hash) = marker_value(&marker, "wuwaid-managed-loader:", "loader-sha256=") else {
-        return Ok(false);
-    };
-    let actual_pak_hash = downloader::compute_sha256(&pak_path)
-        .map_err(|e| format!("Gagal menghitung hash PAK loader: {e}"))?;
-    let actual_dll_hash = downloader::compute_sha256(&dll_path)
-        .map_err(|e| format!("Gagal menghitung hash loader: {e}"))?;
-    Ok(actual_pak_hash == pak_hash && actual_dll_hash == dll_hash)
+    Ok(true)
 }
 
 pub fn validate_installed_signature_bypass(game_path: &Path) -> Result<bool, String> {
     let pak_path = signature_bypass_pak_path(game_path);
-    let marker_path = signature_bypass_marker_path(game_path);
-    if !pak_path.is_file() || !marker_path.is_file() || !validate_pak_file(&pak_path)? {
-        return Ok(false);
-    }
-    let marker = fs::read_to_string(&marker_path)
-        .map_err(|e| format!("Gagal membaca marker signature bypass: {e}"))?;
-    let Some(expected_hash) = marker_value(
-        &marker,
-        "wuwaid-managed-signature-bypass:",
-        "sha256=",
-    ) else {
-        return Ok(false);
-    };
-    let actual_hash = downloader::compute_sha256(&pak_path)
-        .map_err(|e| format!("Gagal menghitung hash PAK signature bypass: {e}"))?;
-    Ok(actual_hash == expected_hash)
+    Ok(pak_path.is_file() && validate_pak_file(&pak_path)?)
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, PartialEq, Eq)]
@@ -340,6 +284,82 @@ fn check_directory_writable(path: &Path) -> Result<(), String> {
         .map_err(|error| format!("needs_admin: probe permission tidak dapat dibersihkan: {error}"))
 }
 
+fn all_resource_mount_artifacts(game_path: &Path) -> Vec<ResourceMountArtifacts> {
+    let root = get_resources_root(game_path);
+    let mut versions = Vec::new();
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let version_dir = entry.path();
+            let version_name = entry.file_name().to_string_lossy().to_string();
+            if version_dir.is_dir() {
+                if let Some(version) = parse_resource_version(&version_name) {
+                    versions.push((version, version_dir));
+                }
+            }
+        }
+    }
+    versions.sort_by_key(|(version, _)| std::cmp::Reverse(*version));
+    versions
+        .into_iter()
+        .map(|(_, version_dir)| ResourceMountArtifacts::from_version_dir(version_dir))
+        .collect()
+}
+
+#[cfg(windows)]
+fn is_reparse_point(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
+fn reject_reparse_ancestors(path: &Path) -> Result<(), String> {
+    let mut current = path.to_path_buf();
+    loop {
+        if let Ok(metadata) = fs::symlink_metadata(&current) {
+            if is_reparse_point(&metadata) {
+                return Err(format!(
+                    "unsafe_reparse_point: canonical target berada di reparse point {:?}",
+                    current
+                ));
+            }
+        }
+        if !current.pop() {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn validate_canonical_paths(game_path: &Path) -> Result<(), String> {
+    let mut paths = vec![
+        signature::get_sig_path(game_path),
+        signature::get_sig_backup_path(game_path),
+        signature::get_signature_bypass_pak_path(game_path),
+        signature::get_signature_bypass_marker_path(game_path),
+        signature::get_loader_pak_path(game_path),
+        signature::get_loader_dll_path(game_path),
+        signature::get_loader_marker_path(game_path),
+    ];
+    for artifacts in all_resource_mount_artifacts(game_path) {
+        paths.extend([
+            artifacts.pak_path,
+            artifacts.sig_path,
+            artifacts.mount_path,
+            artifacts.owner_marker_path,
+        ]);
+    }
+    for path in paths {
+        reject_reparse_ancestors(&path)?;
+    }
+    Ok(())
+}
+
 fn method_target_directory(game_path: &Path, method: InstallMethod) -> Result<PathBuf, String> {
     match method {
         InstallMethod::ResourceMount => Ok(probe_resource_mount(game_path)?.mount_dir),
@@ -360,6 +380,7 @@ pub fn validate_installation_preconditions(
         InstallMethod::ResourceMount => format!("resource_not_ready: {error}"),
         _ => error,
     })?;
+    validate_canonical_paths(&normalized)?;
     check_directory_writable(&target)?;
     Ok(normalized)
 }
@@ -374,12 +395,12 @@ fn known_artifact_paths(game_path: &Path) -> Vec<PathBuf> {
         signature::get_loader_dll_path(game_path),
         signature::get_loader_marker_path(game_path),
     ];
-    if let Ok(plan) = probe_resource_mount(game_path) {
+    for artifacts in all_resource_mount_artifacts(game_path) {
         paths.extend([
-            plan.pak_path,
-            plan.sig_path,
-            plan.mount_path,
-            plan.owner_marker_path,
+            artifacts.pak_path,
+            artifacts.sig_path,
+            artifacts.mount_path,
+            artifacts.owner_marker_path,
         ]);
     }
     paths
@@ -428,56 +449,6 @@ fn restore_files(snapshot: &[FileSnapshot]) -> Result<(), String> {
     Ok(())
 }
 
-fn target_is_available(path: &Path) -> bool {
-    !path.exists()
-}
-
-fn reject_foreign_targets(
-    game_path: &Path,
-    method: InstallMethod,
-) -> Result<(), String> {
-    let targets = match method {
-        InstallMethod::ResourceMount => {
-            let plan = probe_resource_mount(game_path)?;
-            vec![plan.pak_path, plan.sig_path, plan.mount_path, plan.owner_marker_path]
-        }
-        InstallMethod::Loader => vec![
-            signature::get_loader_pak_path(game_path),
-            signature::get_loader_dll_path(game_path),
-            signature::get_loader_marker_path(game_path),
-        ],
-        InstallMethod::SignatureBypass => vec![
-            signature::get_signature_bypass_pak_path(game_path),
-            signature::get_signature_bypass_marker_path(game_path),
-        ],
-    };
-
-    let owned = match method {
-        InstallMethod::ResourceMount => probe_resource_mount(game_path)
-            .ok()
-            .map(|plan| {
-                validate_installed_resource_mount(&plan).unwrap_or(false)
-                    || is_legacy_resource_mount_owned(&plan)
-            })
-            .unwrap_or(false),
-        InstallMethod::Loader => validate_installed_loader(game_path).unwrap_or(false),
-        InstallMethod::SignatureBypass => {
-            validate_installed_signature_bypass(game_path).unwrap_or(false)
-        }
-    };
-    if !owned && targets.iter().any(|target| !target_is_available(target)) {
-        return Err(format!(
-            "target_conflict: artefak pada target {} tidak memiliki ownership marker valid",
-            targets
-                .iter()
-                .find(|target| !target_is_available(target))
-                .map(|target| path_string(target))
-                .unwrap_or_default()
-        ));
-    }
-    Ok(())
-}
-
 fn write_transaction_files(files: &[(PathBuf, Vec<u8>)]) -> Result<(), String> {
     let transaction_dir = files
         .first()
@@ -493,6 +464,7 @@ fn write_transaction_files(files: &[(PathBuf, Vec<u8>)]) -> Result<(), String> {
 
     let result = (|| -> Result<(), String> {
         for (index, (target, contents)) in files.iter().enumerate() {
+            reject_reparse_ancestors(target)?;
             let staged = transaction_dir.join(format!("{}.stage", index));
             fs::write(&staged, contents)
                 .map_err(|error| format!("transaction_stage_failed {:?}: {error}", target))?;
@@ -524,20 +496,12 @@ fn deploy_signature_bypass_transaction(game_path: &Path, pak_source: &Path) -> R
     }
     let pak_contents = fs::read(pak_source)
         .map_err(|error| format!("transaction_source_failed: {error}"))?;
-    let hash = downloader::compute_sha256(pak_source)
-        .map_err(|error| format!("transaction_hash_failed: {error}"))?;
     let target = signature::get_signature_bypass_pak_path(game_path);
-    let marker = signature::get_signature_bypass_marker_path(game_path);
-    write_transaction_files(&[
-        (target, pak_contents),
-        (
-            marker,
-            format!("wuwaid-managed-signature-bypass:sha256={hash}").into_bytes(),
-        ),
-    ])?;
+    write_transaction_files(&[(target, pak_contents)])?;
     if !validate_installed_signature_bypass(game_path)? {
         return Err("transaction_validation_failed: signature bypass tidak valid".to_string());
     }
+    remove_legacy_marker(&signature::get_signature_bypass_marker_path(game_path))?;
     Ok(())
 }
 
@@ -559,28 +523,27 @@ fn deploy_loader_transaction(
     }
     let pak_contents = fs::read(pak_source)
         .map_err(|error| format!("transaction_source_failed: {error}"))?;
-    let pak_hash = downloader::compute_sha256(pak_source)
-        .map_err(|error| format!("transaction_hash_failed: {error}"))?;
-    let loader_hash = downloader::compute_sha256(loader_source)
-        .map_err(|error| format!("loader_hash_failed: {error}"))?;
     let pak_target = signature::get_loader_pak_path(game_path);
     let loader_target = signature::get_loader_dll_path(game_path);
-    let marker_target = signature::get_loader_marker_path(game_path);
     write_transaction_files(&[
         (pak_target, pak_contents),
         (loader_target, loader_contents),
-        (
-            marker_target,
-            format!(
-                "wuwaid-managed-loader:pak-sha256={pak_hash};loader-sha256={loader_hash}"
-            )
-            .into_bytes(),
-        ),
     ])?;
     if !validate_installed_loader(game_path)? {
         return Err("transaction_validation_failed: loader tidak valid".to_string());
     }
+    remove_legacy_marker(&signature::get_loader_marker_path(game_path))?;
     Ok(())
+}
+
+fn remove_legacy_marker(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    if !path.is_file() {
+        return Err(format!("legacy_marker_not_file: {:?}", path));
+    }
+    fs::remove_file(path).map_err(|error| format!("legacy_marker_remove_failed {:?}: {error}", path))
 }
 
 fn remove_if_file(path: &Path, report: &mut CleanupReport) {
@@ -599,76 +562,45 @@ fn remove_if_file(path: &Path, report: &mut CleanupReport) {
     }
 }
 
-fn preserve_paths(paths: &[PathBuf], report: &mut CleanupReport) {
-    for path in paths {
-        if path.exists() {
-            report.preserved.push(path_string(path));
-        }
-    }
-}
-
 fn cleanup_owned_artifacts_except(
     game_path: &Path,
     keep: Option<InstallMethod>,
 ) -> Result<CleanupReport, String> {
+    validate_canonical_paths(game_path)?;
     let mut report = CleanupReport::default();
 
-    if keep != Some(InstallMethod::ResourceMount) {
-        if let Ok(plan) = probe_resource_mount(game_path) {
-            if validate_installed_resource_mount(&plan).unwrap_or(false)
-                || is_legacy_resource_mount_owned(&plan)
-            {
-                for target in [
-                    plan.owner_marker_path,
-                    plan.pak_path,
-                    plan.sig_path,
-                    plan.mount_path,
-                ] {
-                    remove_if_file(&target, &mut report);
-                }
-            } else {
-                preserve_paths(
-                    &[plan.owner_marker_path, plan.pak_path, plan.sig_path, plan.mount_path],
-                    &mut report,
-                );
+    let active_resource_version = if keep == Some(InstallMethod::ResourceMount) {
+        probe_resource_mount(game_path)
+            .ok()
+            .map(|plan| plan.version_dir)
+    } else {
+        None
+    };
+    for artifacts in all_resource_mount_artifacts(game_path) {
+        let keep_active_resource = active_resource_version
+            .as_ref()
+            .is_some_and(|version_dir| version_dir == &artifacts.version_dir);
+        if !keep_active_resource {
+            for target in [artifacts.pak_path, artifacts.sig_path, artifacts.mount_path] {
+                remove_if_file(&target, &mut report);
             }
         }
+        remove_if_file(&artifacts.owner_marker_path, &mut report);
     }
 
     if keep != Some(InstallMethod::SignatureBypass) {
-        if validate_installed_signature_bypass(game_path).unwrap_or(false) {
-            remove_if_file(&signature::get_signature_bypass_pak_path(game_path), &mut report);
-            remove_if_file(
-                &signature::get_signature_bypass_marker_path(game_path),
-                &mut report,
-            );
-        } else {
-            preserve_paths(
-                &[
-                    signature::get_signature_bypass_pak_path(game_path),
-                    signature::get_signature_bypass_marker_path(game_path),
-                ],
-                &mut report,
-            );
-        }
+        remove_if_file(&signature::get_signature_bypass_pak_path(game_path), &mut report);
     }
+    remove_if_file(
+        &signature::get_signature_bypass_marker_path(game_path),
+        &mut report,
+    );
 
     if keep != Some(InstallMethod::Loader) {
-        if validate_installed_loader(game_path).unwrap_or(false) {
-            remove_if_file(&signature::get_loader_pak_path(game_path), &mut report);
-            remove_if_file(&signature::get_loader_dll_path(game_path), &mut report);
-            remove_if_file(&signature::get_loader_marker_path(game_path), &mut report);
-        } else {
-            preserve_paths(
-                &[
-                    signature::get_loader_pak_path(game_path),
-                    signature::get_loader_dll_path(game_path),
-                    signature::get_loader_marker_path(game_path),
-                ],
-                &mut report,
-            );
-        }
+        remove_if_file(&signature::get_loader_pak_path(game_path), &mut report);
+        remove_if_file(&signature::get_loader_dll_path(game_path), &mut report);
     }
+    remove_if_file(&signature::get_loader_marker_path(game_path), &mut report);
 
     if keep != Some(InstallMethod::SignatureBypass)
         && signature::get_sig_backup_path(game_path).is_file()
@@ -685,12 +617,51 @@ fn cleanup_owned_artifacts_except(
     Ok(report)
 }
 
+fn cleanup_report_error(report: &CleanupReport) -> String {
+    format!(
+        "cleanup_partial_failure: failures=[{}]; preserved=[{}]",
+        report.failures.join("; "),
+        report.preserved.join("; ")
+    )
+}
+
+pub fn cleanup_owned_artifacts_with_commit<F>(
+    game_path: &Path,
+    keep: Option<InstallMethod>,
+    commit: F,
+) -> Result<CleanupReport, String>
+where
+    F: FnOnce() -> Result<(), String>,
+{
+    validate_canonical_paths(game_path)?;
+    let snapshot = snapshot_files(game_path);
+    let report = cleanup_owned_artifacts_except(game_path, keep)?;
+    if !report.failures.is_empty() || !report.preserved.is_empty() {
+        let error = cleanup_report_error(&report);
+        return Err(match restore_files(&snapshot) {
+            Ok(()) => error,
+            Err(rollback_error) => format!("{error}; rollback_failed: {rollback_error}"),
+        });
+    }
+
+    if let Err(error) = commit() {
+        return Err(match restore_files(&snapshot) {
+            Ok(()) => format!("metadata_commit_failed: {error}"),
+            Err(rollback_error) => format!(
+                "metadata_commit_failed: {error}; rollback_failed: {rollback_error}"
+            ),
+        });
+    }
+
+    Ok(report)
+}
+
 pub fn cleanup_owned_artifacts(game_path: &Path) -> Result<CleanupReport, String> {
     cleanup_owned_artifacts_except(game_path, None)
 }
 
-/// Installs one method as a filesystem transaction and removes only the other
-/// launcher-owned methods after the new method is fully validated.
+/// Installs one method as a filesystem transaction and removes canonical paths
+/// for the other methods after the new method is fully validated.
 pub fn install_patch_transaction(
     game_path: &Path,
     method: InstallMethod,
@@ -698,7 +669,6 @@ pub fn install_patch_transaction(
     loader_source: Option<&Path>,
 ) -> Result<(), String> {
     validate_installation_preconditions(&path_string(game_path), method)?;
-    reject_foreign_targets(game_path, method)?;
     let snapshot = snapshot_files(game_path);
 
     let deploy_result = match method {
@@ -720,13 +690,17 @@ pub fn install_patch_transaction(
     }
 
     let cleanup = cleanup_owned_artifacts_except(game_path, Some(method))?;
-    if !cleanup.failures.is_empty() {
+    if !cleanup.failures.is_empty() || !cleanup.preserved.is_empty() {
+        let cleanup_error = format!(
+            "cleanup_partial_failure: failures=[{}]; preserved=[{}]",
+            cleanup.failures.join("; "),
+            cleanup.preserved.join("; "),
+        );
         let rollback = restore_files(&snapshot);
         return Err(match rollback {
-            Ok(()) => format!("cleanup_partial_failure: {}", cleanup.failures.join("; ")),
+            Ok(()) => cleanup_error,
             Err(rollback_error) => format!(
-                "cleanup_partial_failure: {}; rollback_failed: {rollback_error}",
-                cleanup.failures.join("; ")
+                "{cleanup_error}; rollback_failed: {rollback_error}",
             ),
         });
     }
@@ -888,13 +862,14 @@ fn is_official_signature(version_dir: &Path, signature_path: &Path) -> bool {
 pub fn deploy_resource_mount(
     plan: &ResourceMountPlan,
     pak_source: &Path,
-    _game_path: &Path,
+    game_path: &Path,
 ) -> Result<(), String> {
     // A downloaded PAK must be a structurally valid Unreal PAK before it can
     // replace anything in the game directory.
     if !validate_pak_file(pak_source)? {
         return Err("File PAK rilis tidak memiliki footer/index Unreal yang valid.".to_string());
     }
+    validate_canonical_paths(game_path)?;
 
     let targets = [
         plan.pak_path.clone(),
@@ -949,14 +924,6 @@ pub fn deploy_resource_mount(
             .map_err(|e| format!("Gagal menyalin signature Resource Mount: {}", e))?;
         let signature_sha1 = compute_sha1(&plan.sig_path)
             .map_err(|e| format!("Gagal menghitung SHA-1 signature: {}", e))?;
-        let pak_sha256 = downloader::compute_sha256(&plan.pak_path)
-            .map_err(|e| format!("Gagal menghitung SHA-256 PAK: {}", e))?;
-
-        fs::write(
-            &plan.owner_marker_path,
-            format!("WuwaID Resource Mount v1\nsha256={}\n", pak_sha256).as_bytes(),
-        )
-        .map_err(|e| format!("Gagal menulis owner marker: {}", e))?;
 
         let mount_content = mount_content(&pak_sha1, &signature_sha1);
         fs::write(&plan.mount_path, mount_content.as_bytes())
@@ -965,6 +932,7 @@ pub fn deploy_resource_mount(
         if !validate_installed_resource_mount(plan)? {
             return Err("Validasi file index mount gagal.".to_string());
         }
+        remove_legacy_marker(&plan.owner_marker_path)?;
         Ok(())
     })();
 
@@ -1114,7 +1082,7 @@ mod tests {
         assert!(deploy_res.is_ok());
         assert!(plan.pak_path.exists());
         assert!(plan.mount_path.exists());
-        assert!(plan.owner_marker_path.exists());
+        assert!(!plan.owner_marker_path.exists());
         assert!(plan.sig_path.exists());
         assert_eq!(
             fs::read_to_string(&plan.sig_path).unwrap(),
@@ -1161,7 +1129,7 @@ mod tests {
         assert!(deploy_resource_mount(&plan, &pak_payload, &game_dir).is_ok());
         assert!(plan.pak_path.exists());
         assert!(plan.mount_path.exists());
-        assert!(plan.owner_marker_path.exists());
+        assert!(!plan.owner_marker_path.exists());
         assert!(plan.sig_path.exists());
 
         let mount_content = fs::read_to_string(&plan.mount_path).unwrap();
@@ -1189,15 +1157,6 @@ mod tests {
         }
         release_like_pak(&loader_pak);
         fs::write(&loader_dll, b"LOADER_DLL_MOCK").unwrap();
-        fs::write(
-            signature::get_loader_marker_path(&game_dir),
-            format!(
-                "wuwaid-managed-loader:pak-sha256={};loader-sha256={}",
-                downloader::compute_sha256(&loader_pak).unwrap(),
-                downloader::compute_sha256(&loader_dll).unwrap()
-            ),
-        )
-        .unwrap();
 
         assert!(loader_pak.exists());
         assert!(loader_dll.exists());
@@ -1215,14 +1174,6 @@ mod tests {
         // 1. Deploy Method 3 (Sig Bypass)
         let bypass_pak = signature::get_signature_bypass_pak_path(&game_dir);
         release_like_pak(&bypass_pak);
-        fs::write(
-            signature::get_signature_bypass_marker_path(&game_dir),
-            format!(
-                "wuwaid-managed-signature-bypass:sha256={}",
-                downloader::compute_sha256(&bypass_pak).unwrap()
-            ),
-        )
-        .unwrap();
         assert!(bypass_pak.exists());
 
         // 2. Signature Bypass & Launch Simulation
@@ -1258,15 +1209,6 @@ mod tests {
         }
         release_like_pak(&loader_pak);
         fs::write(&loader_dll, b"LOADER_DLL").unwrap();
-        fs::write(
-            signature::get_loader_marker_path(&game_dir),
-            format!(
-                "wuwaid-managed-loader:pak-sha256={};loader-sha256={}",
-                downloader::compute_sha256(&loader_pak).unwrap(),
-                downloader::compute_sha256(&loader_dll).unwrap()
-            ),
-        )
-        .unwrap();
         assert!(loader_pak.exists());
 
         // Step 2: Switch to Method 1 (Resource Mount) -> Clean previous method artifacts
@@ -1286,14 +1228,6 @@ mod tests {
 
         let bypass_pak = signature::get_signature_bypass_pak_path(&game_dir);
         release_like_pak(&bypass_pak);
-        fs::write(
-            signature::get_signature_bypass_marker_path(&game_dir),
-            format!(
-                "wuwaid-managed-signature-bypass:sha256={}",
-                downloader::compute_sha256(&bypass_pak).unwrap()
-            ),
-        )
-        .unwrap();
         assert!(bypass_pak.exists());
 
         remove_all_owned_artifacts(&game_dir);

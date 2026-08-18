@@ -121,12 +121,35 @@ fn loader_transaction_requires_loader_and_leaves_no_partial_artifacts() {
 }
 
 #[test]
-fn transaction_switches_owned_artifacts_and_preserves_foreign_targets() {
+fn signature_bypass_migrates_legacy_pak_without_marker() {
+    let (_temp, game) = setup_game();
+    let source = game.join("new.pak");
+    let legacy = signature::get_signature_bypass_pak_path(&game);
+    release_like_pak(&source);
+    release_like_pak(&legacy);
+
+    installer::install_patch_transaction(
+        &game,
+        InstallMethod::SignatureBypass,
+        &source,
+        None,
+    )
+    .expect("canonical legacy target must be replaceable");
+
+    assert!(installer::validate_installed_signature_bypass(&game).unwrap());
+    assert!(!signature::get_signature_bypass_marker_path(&game).exists());
+    assert_eq!(fs::read(&legacy).unwrap(), fs::read(&source).unwrap());
+}
+
+#[test]
+fn transaction_switches_methods_and_replaces_canonical_targets() {
     let (_temp, game) = setup_game();
     let pak_source = game.join("source.pak");
     let loader_source = game.join("source.dll");
+    let unrelated = game.join("Client").join("Content").join("Paks").join("user-file.txt");
     release_like_pak(&pak_source);
     fs::write(&loader_source, b"loader bytes").unwrap();
+    fs::write(&unrelated, b"do not touch").unwrap();
 
     installer::install_patch_transaction(
         &game,
@@ -152,11 +175,70 @@ fn transaction_switches_owned_artifacts_and_preserves_foreign_targets() {
     fs::create_dir_all(foreign.parent().unwrap()).unwrap();
     fs::write(&foreign, b"foreign loader").unwrap();
     let report = installer::cleanup_owned_artifacts(&game).unwrap();
-    assert!(report.preserved.iter().any(|path| path.ends_with("winhttp.dll")));
-    assert_eq!(fs::read(&foreign).unwrap(), b"foreign loader");
+    assert!(report.preserved.is_empty(), "unexpected preserved paths: {report:?}");
+    assert!(!foreign.exists());
+    assert_eq!(fs::read(&unrelated).unwrap(), b"do not touch");
 
     let bypass = signature::get_signature_bypass_pak_path(&game);
     fs::write(&bypass, b"foreign pak").unwrap();
+    installer::install_patch_transaction(
+        &game,
+        InstallMethod::SignatureBypass,
+        &pak_source,
+        None,
+    )
+    .unwrap();
+    assert!(installer::validate_installed_signature_bypass(&game).unwrap());
+    assert_eq!(fs::read(&bypass).unwrap(), fs::read(&pak_source).unwrap());
+}
+
+#[test]
+fn cleanup_removes_resource_artifacts_across_all_versions() {
+    let (_temp, game) = setup_game();
+    let old_version = game
+        .join("Client")
+        .join("Saved")
+        .join("Resources")
+        .join("2.5.0");
+    let old_patch = old_version.join("Patch").join(installer::PATCH_FOLDER_NAME);
+    let old_mount = old_version.join("Mount");
+    fs::create_dir_all(&old_patch).unwrap();
+    fs::create_dir_all(&old_mount).unwrap();
+    let old_pak = old_patch.join(installer::PATCH_PAK_FILE_NAME);
+    let old_sig = old_patch.join(installer::PATCH_SIG_FILE_NAME);
+    let old_marker = old_patch.join(installer::OWNER_MARKER_FILE_NAME);
+    let old_mount_file = old_mount.join(installer::MOUNT_FILE_NAME);
+    fs::write(&old_pak, b"old patch").unwrap();
+    fs::write(&old_sig, b"old signature").unwrap();
+    fs::write(&old_marker, b"legacy marker").unwrap();
+    fs::write(&old_mount_file, b"old mount").unwrap();
+
+    let report = installer::cleanup_owned_artifacts(&game).unwrap();
+
+    assert!(report.failures.is_empty(), "unexpected failures: {report:?}");
+    assert!(report.preserved.is_empty(), "unexpected preserved paths: {report:?}");
+    assert!(!old_pak.exists());
+    assert!(!old_sig.exists());
+    assert!(!old_marker.exists());
+    assert!(!old_mount_file.exists());
+    assert!(game
+        .join("Client")
+        .join("Saved")
+        .join("Resources")
+        .join("2.6.0")
+        .join("ResManifest")
+        .exists());
+}
+
+#[test]
+fn non_file_canonical_target_blocks_install_and_rolls_back() {
+    let (_temp, game) = setup_game();
+    let pak_source = game.join("source.pak");
+    release_like_pak(&pak_source);
+
+    let loader_dll = signature::get_loader_dll_path(&game);
+    fs::create_dir(&loader_dll).unwrap();
+
     let error = installer::install_patch_transaction(
         &game,
         InstallMethod::SignatureBypass,
@@ -164,8 +246,11 @@ fn transaction_switches_owned_artifacts_and_preserves_foreign_targets() {
         None,
     )
     .unwrap_err();
-    assert!(error.contains("target_conflict"));
-    assert_eq!(fs::read(&bypass).unwrap(), b"foreign pak");
+
+    assert!(error.contains("cleanup_partial_failure"));
+    assert!(error.contains("preserved"));
+    assert!(!signature::get_signature_bypass_pak_path(&game).exists());
+    assert!(loader_dll.is_dir());
 }
 
 #[test]

@@ -174,6 +174,7 @@ fn patch_status_distinguishes_missing_corrupt_owned_and_valid_installations() {
         classify_installation(&game, InstallMethod::ResourceMount).unwrap(),
         LocalPatchState::Ready
     );
+    assert!(!resource_plan.owner_marker_path.exists());
 
     fs::write(&resource_plan.pak_path, b"corrupt").unwrap();
     assert!(!validate_pak_file(&resource_plan.pak_path).unwrap());
@@ -184,7 +185,9 @@ fn patch_status_distinguishes_missing_corrupt_owned_and_valid_installations() {
 
     fs::remove_file(&resource_plan.pak_path).unwrap();
     fs::remove_file(&resource_plan.sig_path).unwrap();
-    fs::remove_file(&resource_plan.owner_marker_path).unwrap();
+    if resource_plan.owner_marker_path.exists() {
+        fs::remove_file(&resource_plan.owner_marker_path).unwrap();
+    }
     fs::remove_file(&resource_plan.mount_path).unwrap();
     assert_eq!(
         classify_installation(&game, InstallMethod::Loader).unwrap(),
@@ -195,25 +198,6 @@ fn patch_status_distinguishes_missing_corrupt_owned_and_valid_installations() {
     let loader_dll = signature::get_loader_dll_path(&game);
     release_like_pak(&loader_pak);
     fs::write(&loader_dll, b"loader").unwrap();
-    fs::write(
-        signature::get_loader_marker_path(&game),
-        "wuwaid-managed-loader:pak-sha256=invalid;loader-sha256=invalid",
-    )
-    .unwrap();
-    assert_eq!(
-        classify_installation(&game, InstallMethod::Loader).unwrap(),
-        LocalPatchState::Invalid
-    );
-
-    fs::remove_file(signature::get_loader_marker_path(&game)).unwrap();
-    let loader_pak_hash =
-        wuwaid_launcher_lib::engine::downloader::compute_sha256(&loader_pak).unwrap();
-    let loader_hash = wuwaid_launcher_lib::engine::downloader::compute_sha256(&loader_dll).unwrap();
-    fs::write(
-        signature::get_loader_marker_path(&game),
-        format!("wuwaid-managed-loader:pak-sha256={loader_pak_hash};loader-sha256={loader_hash}"),
-    )
-    .unwrap();
     assert_eq!(
         classify_installation(&game, InstallMethod::Loader).unwrap(),
         LocalPatchState::Ready
@@ -221,19 +205,12 @@ fn patch_status_distinguishes_missing_corrupt_owned_and_valid_installations() {
 
     fs::remove_file(loader_pak).unwrap();
     fs::remove_file(loader_dll).unwrap();
-    fs::remove_file(signature::get_loader_marker_path(&game)).unwrap();
     assert_eq!(
         classify_installation(&game, InstallMethod::SignatureBypass).unwrap(),
         LocalPatchState::NotInstalled
     );
     let bypass_pak = signature::get_signature_bypass_pak_path(&game);
     release_like_pak(&bypass_pak);
-    let bypass_hash = wuwaid_launcher_lib::engine::downloader::compute_sha256(&bypass_pak).unwrap();
-    fs::write(
-        signature::get_signature_bypass_marker_path(&game),
-        format!("wuwaid-managed-signature-bypass:sha256={bypass_hash}"),
-    )
-    .unwrap();
     assert_eq!(
         classify_installation(&game, InstallMethod::SignatureBypass).unwrap(),
         LocalPatchState::Ready

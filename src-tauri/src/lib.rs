@@ -1749,31 +1749,39 @@ fn switch_method(
     let method = engine::method::InstallMethod::parse(&new_method)?;
     let normalized = engine::installer::validate_installation_preconditions(&game_path, method)?;
     log::info!("Switching method for {} to {}", normalized.display(), method);
-    let report = engine::installer::cleanup_owned_artifacts(&normalized)?;
-    if !report.failures.is_empty() || !report.preserved.is_empty() {
-        return Err(format!(
-            "cleanup_partial_failure: failures=[{}]; preserved=[{}]",
-            report.failures.join("; "),
-            report.preserved.join("; ")
-        ));
-    }
-
     let versions_path = get_appdata_dir().join("versions.json");
-    if versions_path.exists() {
-        let content = std::fs::read_to_string(&versions_path)
-            .map_err(|error| format!("metadata_read_failed: {error}"))?;
-        let mut json = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&content)
-            .map_err(|error| format!("metadata_parse_failed: {error}"))?;
-        json.insert(
-            "_installMethod".to_string(),
-            serde_json::Value::String(method.as_str().to_string()),
-        );
-        std::fs::write(
-            &versions_path,
-            serde_json::to_string(&json).map_err(|error| format!("metadata_encode_failed: {error}"))?,
-        )
-        .map_err(|error| format!("metadata_write_failed: {error}"))?;
-    }
+    let report = engine::installer::cleanup_owned_artifacts_with_commit(
+        &normalized,
+        None,
+        || {
+            if versions_path.exists() {
+                let original = std::fs::read(&versions_path)
+                    .map_err(|error| format!("metadata_read_failed: {error}"))?;
+                let content = String::from_utf8(original.clone())
+                    .map_err(|error| format!("metadata_read_failed: {error}"))?;
+                let mut json = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+                    &content,
+                )
+                .map_err(|error| format!("metadata_parse_failed: {error}"))?;
+                json.insert(
+                    "_installMethod".to_string(),
+                    serde_json::Value::String(method.as_str().to_string()),
+                );
+                let serialized = serde_json::to_string(&json)
+                    .map_err(|error| format!("metadata_encode_failed: {error}"))?;
+                if let Err(error) = std::fs::write(&versions_path, serialized) {
+                    let restore = std::fs::write(&versions_path, original);
+                    return Err(match restore {
+                        Ok(()) => format!("metadata_write_failed: {error}"),
+                        Err(restore_error) => format!(
+                            "metadata_write_failed: {error}; metadata_rollback_failed: {restore_error}"
+                        ),
+                    });
+                }
+            }
+            Ok(())
+        },
+    )?;
     Ok(report)
 }
 
@@ -1785,19 +1793,18 @@ fn uninstall(game_path: String) -> Result<String, String> {
             engine::path::normalize_game_path(&game_path)
                 .ok_or_else(|| "invalid_game_path: executable game tidak ditemukan".to_string())
         })?;
-    let report = engine::installer::cleanup_owned_artifacts(&normalized)?;
-    if !report.failures.is_empty() || !report.preserved.is_empty() {
-        return Err(format!(
-            "cleanup_partial_failure: failures=[{}]; preserved=[{}]",
-            report.failures.join("; "),
-            report.preserved.join("; ")
-        ));
-    }
     let versions_path = get_appdata_dir().join("versions.json");
-    if versions_path.exists() {
-        std::fs::remove_file(&versions_path)
-            .map_err(|error| format!("metadata_remove_failed: {error}"))?;
-    }
+    let _report = engine::installer::cleanup_owned_artifacts_with_commit(
+        &normalized,
+        None,
+        || {
+            if versions_path.exists() {
+                std::fs::remove_file(&versions_path)
+                    .map_err(|error| format!("metadata_remove_failed: {error}"))?;
+            }
+            Ok(())
+        },
+    )?;
     log::info!("Uninstall patch completed for: {}", normalized.display());
     Ok("ok".to_string())
 }
@@ -2310,7 +2317,7 @@ mod tests {
     }
 
     #[test]
-    fn switch_method_keeps_metadata_when_foreign_artifact_is_preserved() {
+    fn switch_method_replaces_canonical_artifact_and_cleans_legacy_markers() {
         let _env_lock = lock_test_environment();
         let appdata = tempfile::tempdir().unwrap();
         let game = tempfile::tempdir().unwrap();
@@ -2322,18 +2329,64 @@ mod tests {
         std::fs::create_dir_all(&pak_dir).unwrap();
         std::fs::write(exe_dir.join("Client-Win64-Shipping.exe"), b"mock exe").unwrap();
         let foreign = engine::signature::get_signature_bypass_pak_path(game.path());
+        let legacy_marker = engine::signature::get_signature_bypass_marker_path(game.path());
         std::fs::write(&foreign, b"foreign artifact").unwrap();
+        std::fs::write(&legacy_marker, b"legacy marker").unwrap();
         let versions = appdata.path().join("versions.json");
         std::fs::write(&versions, br#"{"_installMethod":"loader"}"#).unwrap();
+
+        let report = switch_method(
+            game.path().to_string_lossy().to_string(),
+            "signature_bypass".to_string(),
+        )
+        .unwrap();
+        assert!(report.failures.is_empty());
+        assert!(report.preserved.is_empty());
+        assert_eq!(
+            report.removed,
+            vec![
+                foreign.to_string_lossy().to_string(),
+                legacy_marker.to_string_lossy().to_string(),
+            ]
+        );
+        assert!(!foreign.exists());
+        assert!(!legacy_marker.exists());
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &std::fs::read_to_string(&versions).unwrap()
+            )
+            .unwrap()["_installMethod"],
+            "signature_bypass"
+        );
+        std::env::remove_var("WUWAID_E2E_APPDATA");
+    }
+
+    #[test]
+    fn switch_method_rolls_back_filesystem_when_metadata_commit_fails() {
+        let _env_lock = lock_test_environment();
+        let appdata = tempfile::tempdir().unwrap();
+        let game = tempfile::tempdir().unwrap();
+        std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
+
+        let exe_dir = game.path().join("Client").join("Binaries").join("Win64");
+        let pak_dir = game.path().join("Client").join("Content").join("Paks");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+        std::fs::create_dir_all(&pak_dir).unwrap();
+        std::fs::write(exe_dir.join("Client-Win64-Shipping.exe"), b"mock exe").unwrap();
+        let canonical = engine::signature::get_signature_bypass_pak_path(game.path());
+        std::fs::write(&canonical, b"legacy artifact").unwrap();
+        let versions = appdata.path().join("versions.json");
+        std::fs::write(&versions, b"not-json").unwrap();
 
         let error = switch_method(
             game.path().to_string_lossy().to_string(),
             "signature_bypass".to_string(),
         )
         .unwrap_err();
-        assert!(error.contains("preserved"));
-        assert_eq!(std::fs::read_to_string(&versions).unwrap(), r#"{"_installMethod":"loader"}"#);
-        assert!(foreign.exists());
+
+        assert!(error.contains("metadata_commit_failed"));
+        assert!(canonical.exists());
+        assert_eq!(std::fs::read(&versions).unwrap(), b"not-json");
         std::env::remove_var("WUWAID_E2E_APPDATA");
     }
 
@@ -2403,7 +2456,7 @@ mod tests {
     }
 
     #[test]
-    fn uninstall_keeps_metadata_when_foreign_artifact_prevents_cleanup() {
+    fn uninstall_removes_canonical_artifact_without_marker() {
         let _env_lock = lock_test_environment();
         let appdata = tempfile::tempdir().unwrap();
         let game = tempfile::tempdir().unwrap();
@@ -2420,9 +2473,33 @@ mod tests {
         std::fs::write(&versions, br#"{"_vhVersion":"3.0.0"}"#).unwrap();
 
         let result = uninstall(game.path().to_string_lossy().to_string());
-        assert!(result.is_err());
-        assert!(foreign.exists());
-        assert!(versions.exists());
+        assert_eq!(result.unwrap(), "ok");
+        assert!(!foreign.exists());
+        assert!(!versions.exists());
+        std::env::remove_var("WUWAID_E2E_APPDATA");
+    }
+
+    #[test]
+    fn uninstall_rolls_back_filesystem_when_metadata_remove_fails() {
+        let _env_lock = lock_test_environment();
+        let appdata = tempfile::tempdir().unwrap();
+        let game = tempfile::tempdir().unwrap();
+        std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
+
+        let exe_dir = game.path().join("Client").join("Binaries").join("Win64");
+        let pak_dir = game.path().join("Client").join("Content").join("Paks");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+        std::fs::create_dir_all(&pak_dir).unwrap();
+        std::fs::write(exe_dir.join("Client-Win64-Shipping.exe"), b"mock exe").unwrap();
+        let canonical = engine::signature::get_signature_bypass_pak_path(game.path());
+        std::fs::write(&canonical, b"legacy artifact").unwrap();
+        std::fs::create_dir(appdata.path().join("versions.json")).unwrap();
+
+        let error = uninstall(game.path().to_string_lossy().to_string()).unwrap_err();
+
+        assert!(error.contains("metadata_commit_failed"));
+        assert!(canonical.exists());
+        assert!(appdata.path().join("versions.json").is_dir());
         std::env::remove_var("WUWAID_E2E_APPDATA");
     }
 
@@ -2518,7 +2595,7 @@ mod tests {
 
         let foreign = engine::signature::get_signature_bypass_pak_path(game.path());
         std::fs::write(&foreign, b"foreign").unwrap();
-        let foreign_response = tauri::test::get_ipc_response(
+        assert_ipc_response(
             &window,
             ipc_request(
                 "switch_method",
@@ -2527,20 +2604,19 @@ mod tests {
                     "newMethod": "signature_bypass",
                 }),
             ),
-        )
-        .unwrap_err();
-        assert!(foreign_response
-            .as_str()
-            .unwrap()
-            .starts_with("cleanup_partial_failure: failures=[]; preserved=["));
+            Ok(serde_json::json!({
+                "removed": [foreign.to_string_lossy()],
+                "preserved": [],
+                "failures": [],
+            })),
+        );
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(
                 &std::fs::read_to_string(&versions).unwrap()
             )
             .unwrap()["_installMethod"],
-            "loader"
+            "signature_bypass"
         );
-        std::fs::remove_file(&foreign).unwrap();
 
         assert_ipc_response(
             &window,

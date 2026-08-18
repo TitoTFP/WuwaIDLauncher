@@ -87,7 +87,7 @@ fn failed_deploy_restores_foreign_mount_targets() {
 }
 
 #[test]
-fn loader_cleanup_removes_only_owned_launcher_artifacts() {
+fn loader_cleanup_removes_canonical_artifacts_without_marker() {
     let temp = tempdir().unwrap();
     let game = temp.path();
     let loader_folder = signature::get_loader_folder(game);
@@ -114,12 +114,12 @@ fn loader_cleanup_removes_only_owned_launcher_artifacts() {
     fs::write(&loader_pak, b"foreign-pak").unwrap();
     fs::write(&loader_dll, b"foreign-loader").unwrap();
     installer::remove_all_owned_artifacts(game);
-    assert!(loader_pak.exists());
-    assert!(loader_dll.exists());
+    assert!(!loader_pak.exists());
+    assert!(!loader_dll.exists());
 }
 
 #[test]
-fn remove_keeps_foreign_resource_mount_without_valid_ownership() {
+fn cleanup_removes_partial_resource_mount_without_marker() {
     let (_tmp, game) = game_dir();
     let plan = installer::probe_resource_mount(&game).unwrap();
     fs::create_dir_all(plan.mount_path.parent().unwrap()).unwrap();
@@ -130,8 +130,8 @@ fn remove_keeps_foreign_resource_mount_without_valid_ownership() {
     fs::write(&plan.mount_path, b"foreign-mount").unwrap();
 
     installer::remove_all_owned_artifacts(&game);
-    assert!(plan.pak_path.exists());
-    assert!(plan.sig_path.exists());
-    assert!(plan.owner_marker_path.exists());
-    assert!(plan.mount_path.exists());
+    assert!(!plan.pak_path.exists());
+    assert!(!plan.sig_path.exists());
+    assert!(!plan.owner_marker_path.exists());
+    assert!(!plan.mount_path.exists());
 }

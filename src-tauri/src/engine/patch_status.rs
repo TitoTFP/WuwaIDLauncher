@@ -42,7 +42,6 @@ pub fn classify_installation(
             let any_artifact = [
                 &plan.pak_path,
                 &plan.sig_path,
-                &plan.owner_marker_path,
                 &plan.mount_path,
             ]
             .iter()
@@ -60,7 +59,6 @@ pub fn classify_installation(
             let any_artifact = [
                 installer::loader_pak_path(game_path),
                 installer::loader_dll_path(game_path),
-                installer::loader_marker_path(game_path),
             ]
             .iter()
             .any(|path| path.exists());
@@ -76,7 +74,6 @@ pub fn classify_installation(
         InstallMethod::SignatureBypass => {
             let any_artifact = [
                 installer::signature_bypass_pak_path(game_path),
-                installer::signature_bypass_marker_path(game_path),
             ]
             .iter()
             .any(|path| path.exists());

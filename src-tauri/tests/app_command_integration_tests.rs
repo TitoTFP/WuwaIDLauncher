@@ -2,7 +2,6 @@ use std::fs;
 use std::path::PathBuf;
 use tempfile::tempdir;
 use wuwaid_launcher_lib::engine::atom_feed::{parse_atom_feed, ReleaseNoteEntry};
-use wuwaid_launcher_lib::engine::downloader;
 use wuwaid_launcher_lib::engine::installer::{
     compute_sha1, deploy_resource_mount, probe_resource_mount, remove_all_owned_artifacts,
 };
@@ -94,7 +93,8 @@ fn test_app_patch_status_evaluation_all_methods() {
     let mount_pak = game_dir.join("mock_mount.pak");
     release_like_pak(&mount_pak);
     assert!(deploy_resource_mount(&plan, &mount_pak, &game_dir).is_ok());
-    assert!(plan.pak_path.exists() && plan.owner_marker_path.exists());
+    assert!(plan.pak_path.exists());
+    assert!(!plan.owner_marker_path.exists());
 
     // 3. Switch to Method 2 (Loader)
     remove_all_owned_artifacts(&game_dir);
@@ -104,15 +104,6 @@ fn test_app_patch_status_evaluation_all_methods() {
     let loader_dll = signature::get_loader_dll_path(&game_dir);
     release_like_pak(&loader_pak);
     fs::write(&loader_dll, b"LOADER_DLL").unwrap();
-    fs::write(
-        signature::get_loader_marker_path(&game_dir),
-        format!(
-            "wuwaid-managed-loader:pak-sha256={};loader-sha256={}",
-            downloader::compute_sha256(&loader_pak).unwrap(),
-            downloader::compute_sha256(&loader_dll).unwrap()
-        ),
-    )
-    .unwrap();
     assert!(loader_pak.exists() && loader_dll.exists());
 
     // 4. Switch to Method 3 (Sig Bypass)
@@ -122,14 +113,6 @@ fn test_app_patch_status_evaluation_all_methods() {
 
     let bypass_pak = signature::get_signature_bypass_pak_path(&game_dir);
     release_like_pak(&bypass_pak);
-    fs::write(
-        signature::get_signature_bypass_marker_path(&game_dir),
-        format!(
-            "wuwaid-managed-signature-bypass:sha256={}",
-            downloader::compute_sha256(&bypass_pak).unwrap()
-        ),
-    )
-    .unwrap();
     assert!(bypass_pak.exists());
 
     // 5. Cleanup
@@ -205,15 +188,6 @@ fn test_app_method_switching_command_cleans_and_updates_cache() {
     let loader_dll = signature::get_loader_dll_path(&game_dir);
     release_like_pak(&loader_pak);
     fs::write(&loader_dll, b"LOADER_DLL").unwrap();
-    fs::write(
-        signature::get_loader_marker_path(&game_dir),
-        format!(
-            "wuwaid-managed-loader:pak-sha256={};loader-sha256={}",
-            downloader::compute_sha256(&loader_pak).unwrap(),
-            downloader::compute_sha256(&loader_dll).unwrap()
-        ),
-    )
-    .unwrap();
 
     // Switch method command cleans previous artifacts
     remove_all_owned_artifacts(&game_dir);

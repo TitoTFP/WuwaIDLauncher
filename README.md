@@ -35,7 +35,7 @@ Kontrak utama launcher sudah diimplementasikan dan diverifikasi melalui test sui
 
 | Area | Status | Bukti / batasan |
 | :--- | :--- | :--- |
-| Path game, tiga metode, ownership marker, transaksi, rollback, switch, uninstall | **Implemented** | src-tauri/tests/milestone1_contract_tests.rs, milestone2_contract_tests.rs, installer safety |
+| Path game, tiga metode, artefak kanonis, transaksi, rollback, switch, uninstall | **Implemented** | src-tauri/tests/milestone1_contract_tests.rs, milestone2_contract_tests.rs, installer safety |
 | Launch, external process, signature restore, force quit, error event | **Implemented + manual game smoke** | Contract tests lulus; perlu executable game nyata untuk taskkill dan lifecycle Windows |
 | Home, Settings, About, navigation lock, progress/error/reset state | **Implemented** | Svelte check 0 error/0 warning |
 | Media cache hash, offline fallback, staged replacement, release-note sanitization | **Implemented** | milestone5_contract_tests.rs, media event tests |
@@ -58,7 +58,7 @@ Dokumen acceptance lengkap berada di docs/acceptance/windows-game-matrix.md.
   - **Metode 1 — `resource_mount` (Resource Mount):** Deploy file PAK + signature + berkas mount ke folder resource game aktif (`Client/Saved/Resources/<ver>/Mount/`) tanpa menyentuh signature utama game. Dilengkapi proteksi rollback transaksional dan verifikasi integritas struktur Unreal PAK.
   - **Metode 2 — `loader` (Loader):** Menempatkan loader `winhttp.dll` dan folder `wuwaIndonesia/` pada direktori binaries game (`Client/Binaries/Win64/`).
   - **Metode 3 — `signature_bypass` (Signature Bypass):** Deploy PAK ke `Client/Content/Paks/` dengan siklus hidup pencadangan `.sig` dan pemulihan otomatis saat game dijalankan.
-- **Dynamic Method Switcher:** Berpindah metode instalasi secara instan dengan pembersihan artefak metode sebelumnya secara otomatis dan aman.
+- **Dynamic Method Switcher:** Berpindah metode instalasi secara instan dengan pembersihan artefak pada path kanonis metode sebelumnya. Path kanonis diperlakukan sebagai target launcher, termasuk saat artefak berasal dari launcher lama.
 - **Deteksi Folder Game Otomatis:** Mendeteksi lokasi direktori game melalui Windows Registry dan jalur default sistem.
 - **Engine PAK Packer & FNV64:** Modul Rust murni untuk pembuatan paket PAK Unreal Engine kompatibel dengan hashing FNV64 & index SHA-1.
 
@@ -111,7 +111,7 @@ Gunakan identifier canonical berikut pada settings atau command bridge:
 - loader — winhttp.dll loader.
 - signature_bypass — bypass signature sementara ketika game berjalan.
 
-method1, method2, dan method3 hanya alias legacy saat migrasi settings lama. Launcher menolak path yang tidak mengandung executable game, menjaga artefak asing tanpa owner marker, dan menulis metadata hanya setelah cleanup berhasil. Jika instalasi atau update gagal, jangan hapus file game manual: simpan diagnostics lokal, jalankan pemeriksaan status, dan ulangi setelah penyebab permission/network diperbaiki.
+method1, method2, dan method3 hanya alias legacy saat migrasi settings lama. Launcher menolak path yang tidak mengandung executable game, mengelola artefak pada path kanonis metode yang dipilih, dan menulis metadata hanya setelah cleanup berhasil. File pada path kanonis dianggap milik workflow launcher meskipun dibuat oleh versi launcher lama; file di luar path kanonis tidak disentuh. Jika instalasi atau update gagal, jangan hapus file game manual: simpan diagnostics lokal, jalankan pemeriksaan status, dan ulangi setelah penyebab permission/network diperbaiki.
 
 Lokasi artefak runtime:
 

@@ -12,8 +12,8 @@ utama pengguna.
 2. Simpan snapshot seluruh fixture sebelum setiap skenario.
 3. Jalankan launcher dengan WUWAID_E2E_APPDATA ke folder temporary terpisah.
 4. Setelah skenario selesai, tutup launcher, bandingkan snapshot, lalu hapus
-   folder temporary. Artefak yang boleh tertinggal hanya artefak ber-owner marker
-   yang sengaja sedang diuji.
+   folder temporary. Runner hanya mengelola path kanonis yang memang menjadi
+   target metode; artefak di luar path kanonis tidak disentuh.
 
 ## Runner contract (WUT-30)
 
@@ -53,11 +53,14 @@ Untuk menjalankan preflight manual pada dedicated game copy, tambahkan
 keduanya. Runner mengembalikan exit code `0` untuk PASS, `1` untuk FAIL, dan
 `2` untuk BLOCKED; path JSON report selalu dicetak untuk run yang sudah mulai.
 
-Report mencatat `runId`, timestamps, scenario status, owner marker, baseline
-snapshot SHA-256, evidence path, dan cleanup result. Run yang seluruhnya PASS
-menghapus hanya child fixture miliknya. Run FAIL/BLOCKED mempertahankan child
-fixture dan evidence untuk diagnosis; file asing di parent fixture tanpa owner
-marker tidak pernah dihapus.
+Report mencatat `runId`, timestamps, scenario status, baseline snapshot SHA-256,
+evidence path, dan cleanup result. Run yang seluruhnya PASS menghapus hanya child
+fixture miliknya. Run FAIL/BLOCKED mempertahankan child fixture dan evidence untuk
+diagnosis; file asing di parent fixture tidak pernah dihapus. Di dalam game copy,
+file pada path kanonis metode diperlakukan sebagai artefak launcher tanpa
+memeriksa ownership marker; ini memungkinkan migrasi instalasi dari launcher lama,
+dengan trade-off bahwa file pihak ketiga pada path yang sama dapat diganti atau
+dihapus.
 
 Artifact gate mencari executable standalone, updater ZIP, dan manifest checksum
 di root artifact, lalu memverifikasi versi konsisten dari `package.json`,
@@ -74,14 +77,15 @@ Contract test runner:
 
 | Skenario | Fixture / kondisi | Hasil yang harus terlihat | Evidence |
 | --- | --- | --- | --- |
-| Install resource_mount | Fixture valid + ResManifest | PAK, SIG, mount file, dan owner marker dibuat; status ready | onProgressUpdate, onInstallComplete, filesystem diff |
-| Install loader | Fixture valid + target Win64 writable | winhttp.dll, PAK, dan loader marker dibuat atomik | marker hash + status ready |
-| Install signature_bypass | Fixture valid + PAK target kosong | PAK dan marker dibuat; signature asli tetap ada sebelum launch | signature snapshot + marker hash |
-| Patch update | Fixture sudah memiliki patch lama | Download memakai cache temp; kegagalan mengembalikan snapshot lama | log terminal + filesystem diff |
+| Install resource_mount | Fixture valid + ResManifest | PAK, SIG, dan mount file dibuat; status ready tanpa marker | onProgressUpdate, onInstallComplete, filesystem diff |
+| Install loader | Fixture valid + target Win64 writable | winhttp.dll dan PAK dibuat atomik; status ready tanpa marker | status ready + filesystem diff |
+| Install signature_bypass | Fixture valid + PAK target kosong | PAK dibuat; signature asli tetap ada sebelum launch | signature snapshot + status ready |
+| Patch update | Fixture sudah memiliki patch lama pada satu atau beberapa resource version | Download memakai cache temp; kegagalan mengembalikan snapshot seluruh target kanonis | log terminal + filesystem diff |
 | Switch method | Patch owned pada method A | Artefak A dibersihkan; metadata berubah hanya jika cleanup selesai | CleanupReport, versions.json |
-| Foreign artifact | Target berisi file tanpa owner marker | File dipertahankan dan UI menampilkan partial cleanup; metadata tidak berubah | preserved report + metadata diff |
+| Canonical legacy artifact | Target kanonis berisi file dari launcher lama tanpa marker | File diganti/dihapus sesuai operasi; metadata berubah setelah cleanup berhasil | removed report + metadata diff |
 | Uninstall | Patch owned, lalu ulangi uninstall | Cleanup idempotent; metadata dihapus hanya setelah cleanup sukses | dua hasil command + filesystem diff |
 | Invalid / nested path | Pilih subfolder Client/Binaries dan folder acak | Path dinormalisasi hanya ke root game valid; path invalid ditolak sebelum mutasi | visible error + event payload |
+| Junction / reparse path | Target kanonis atau parent-nya adalah junction/symlink/reparse point | Operasi ditolak sebelum write/cleanup agar tidak menyentuh lokasi di luar game | error code + filesystem diff |
 | Read-only / admin | Target fixture dibuat read-only | Status needs_admin; tidak ada download atau cleanup parsial | error code + filesystem diff |
 | Launch valid | Patch ready, executable ada | Runtime state launcher=true; launcher hide; selesai kembali ke idle | runtime events + process evidence |
 | Launch invalid / not ready | Patch missing/corrupt atau executable hilang | onLaunchError; busy state kembali idle; signature tidak tertinggal bypass | event payload + filesystem diff |
