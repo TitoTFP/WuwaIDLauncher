@@ -35,6 +35,7 @@ export const bridge = {
   // Update & Release Notes
   checkLauncherUpdate: (): Promise<void> => invoke("check_launcher_update"),
   getVhReleaseNotes: (): Promise<void> => invoke("get_vh_release_notes"),
+  getLauncherReleaseNotes: (): Promise<void> => invoke("get_launcher_release_notes"),
   performLauncherUpdate: (version: string, zipUrl: string, checksumsUrl?: string): Promise<void> =>
     invoke("perform_launcher_update", { version, zipUrl, checksumsUrl }),
 
@@ -104,6 +105,7 @@ export interface EventBridgeCallbacks {
   onMediaProgress?: (payload: MediaProgressPayload) => void;
   onUpdateDate?: (dateStr: string) => void;
   onVHReleaseNotes?: (payload: ReleaseNotePayload) => void;
+  onLauncherReleaseNotes?: (payload: ReleaseNotePayload) => void;
 }
 
 export async function setupEventBridge(
@@ -181,6 +183,9 @@ export async function setupEventBridge(
     addListener<string>("onUpdateDate", (p) => callbacks.onUpdateDate?.(p)),
     addListener<ReleaseNotePayload>("onVHReleaseNotes", (p) =>
       callbacks.onVHReleaseNotes?.(p),
+    ),
+    addListener<ReleaseNotePayload>("onLauncherReleaseNotes", (p) =>
+      callbacks.onLauncherReleaseNotes?.(p),
     ),
   ]);
 

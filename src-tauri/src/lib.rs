@@ -650,6 +650,71 @@ fn get_installed_patch_version() -> Option<String> {
         .filter(|version| !version.trim().is_empty())
 }
 
+fn get_launcher_release_notes_path() -> PathBuf {
+    get_appdata_dir().join("launcher-release-notes.json")
+}
+
+fn launcher_release_note_payload(release: &engine::updater::ReleaseInfo) -> serde_json::Value {
+    serde_json::json!({
+        "tag": release.tag_name,
+        "date": release.date,
+        "body": release.body,
+        "title": release.title,
+        "author": release.author
+    })
+}
+
+fn validate_launcher_release_note_payload(
+    payload: serde_json::Value,
+) -> Option<serde_json::Value> {
+    serde_json::from_value::<engine::atom_feed::ReleaseNoteEntry>(payload)
+        .ok()
+        .and_then(|entry| engine::atom_feed::validate_release_note(&entry).ok())
+        .and_then(|entry| serde_json::to_value(entry).ok())
+}
+
+#[tauri::command]
+fn get_launcher_release_notes<R: Runtime>(app: AppHandle<R>) {
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let cache_path = get_launcher_release_notes_path();
+        let mut had_cached = false;
+
+        if let Ok(content) = std::fs::read_to_string(&cache_path) {
+            if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(payload) = validate_launcher_release_note_payload(payload) {
+                    let _ = app_handle.emit("onLauncherReleaseNotes", payload);
+                    had_cached = true;
+                }
+            }
+        }
+
+        match engine::updater::fetch_latest_release().await {
+            Ok(release) => {
+                let Some(payload) =
+                    validate_launcher_release_note_payload(launcher_release_note_payload(&release))
+                else {
+                    log::warn!("Latest launcher release notes rejected by validation");
+                    return;
+                };
+
+                if let Some(parent) = cache_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if let Ok(content) = serde_json::to_string(&payload) {
+                    let _ = std::fs::write(&cache_path, content);
+                }
+                let _ = app_handle.emit("onLauncherReleaseNotes", payload);
+            }
+            Err(error) => {
+                if !had_cached {
+                    log::debug!("Launcher release notes unavailable: {error}");
+                }
+            }
+        }
+    });
+}
+
 async fn get_latest_patch_version() -> Option<String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
@@ -1794,6 +1859,7 @@ pub fn run() {
             check_launcher_update,
             open_support,
             get_vh_release_notes,
+            get_launcher_release_notes,
             perform_launcher_update,
             check_patch_status,
             switch_method,
@@ -1870,6 +1936,27 @@ mod tests {
             launcher_update_restart_countdown().collect::<Vec<_>>(),
             (1..=12).rev().collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn launcher_release_note_payload_uses_launcher_metadata() {
+        let release = engine::updater::ReleaseInfo {
+            tag_name: "v2.6.2".to_string(),
+            version: "2.6.2".to_string(),
+            title: "WuwaID Launcher v2.6.2".to_string(),
+            date: "2026-08-18T12:00:00Z".to_string(),
+            author: "TitoTFP".to_string(),
+            body: "## Launcher changes".to_string(),
+            zip_url: None,
+            checksums_url: None,
+        };
+
+        let payload = launcher_release_note_payload(&release);
+        assert_eq!(payload["tag"], "v2.6.2");
+        assert_eq!(payload["title"], "WuwaID Launcher v2.6.2");
+        assert_eq!(payload["body"], "## Launcher changes");
+        assert_eq!(payload["date"], "2026-08-18T12:00:00Z");
+        assert_eq!(payload["author"], "TitoTFP");
     }
 
     #[test]

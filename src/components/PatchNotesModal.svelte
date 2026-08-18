@@ -25,9 +25,11 @@
     <dialog open class="patch-notes-modal" aria-labelledby="patch-notes-title">
       <div class="patch-notes-modal__head">
         <div>
-          <p class="patch-notes-modal__eyebrow">PATCH NOTES</p>
+          <p class="patch-notes-modal__eyebrow">LAUNCHER RELEASE NOTES</p>
           <h2 id="patch-notes-title">{note.title || 'Pembaruan launcher'}</h2>
-          <p class="patch-notes-modal__meta">{note.tag}{note.author ? ` · ${note.author}` : ''}</p>
+          <p class="patch-notes-modal__meta">
+            {note.tag}{note.date ? ` · ${note.date}` : ''}{note.author ? ` · ${note.author}` : ''}
+          </p>
         </div>
         <button class="patch-notes-modal__close" type="button" aria-label="Tutup patch notes" onclick={onclose}>×</button>
       </div>

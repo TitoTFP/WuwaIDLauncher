@@ -1,8 +1,8 @@
 import { bridge, setupEventBridge } from "./bridge";
 import {
   DEFAULT_LAUNCHER_CONFIG,
+  launcherReleaseNotesSeenStorageKey,
   normalizeLauncherConfig,
-  patchNotesSeenStorageKey,
 } from "./types";
 import type {
   ILauncherState,
@@ -56,7 +56,7 @@ export class LauncherState implements ILauncherState {
     null,
   );
   releaseNotesLoading: boolean = $state<boolean>(true);
-  firstLaunchPatchNotes: ReleaseNotePayload | null = $state<ReleaseNotePayload | null>(null);
+  firstLaunchLauncherReleaseNotes: ReleaseNotePayload | null = $state<ReleaseNotePayload | null>(null);
 
   // Launcher Self-Update
   launcherUpdateAvailable: boolean = $state<boolean>(false);
@@ -112,16 +112,16 @@ export class LauncherState implements ILauncherState {
     this.launcherUpdateRestartCountdown = null;
   }
 
-  dismissFirstLaunchPatchNotes() {
-    const tag = this.firstLaunchPatchNotes?.tag.trim();
+  dismissFirstLaunchLauncherReleaseNotes() {
+    const tag = this.firstLaunchLauncherReleaseNotes?.tag.trim();
     if (tag) {
       try {
-        localStorage.setItem(patchNotesSeenStorageKey(tag), "1");
+        localStorage.setItem(launcherReleaseNotesSeenStorageKey(tag), "1");
       } catch {
         // A restricted WebView storage must not prevent the modal from closing.
       }
     }
-    this.firstLaunchPatchNotes = null;
+    this.firstLaunchLauncherReleaseNotes = null;
   }
 
   async init() {
@@ -303,13 +303,15 @@ export class LauncherState implements ILauncherState {
       onVHReleaseNotes: (payload) => {
         this.releaseNotes = payload;
         this.releaseNotesLoading = false;
+      },
+      onLauncherReleaseNotes: (payload) => {
         if (payload.tag.trim()) {
           try {
-            if (!localStorage.getItem(patchNotesSeenStorageKey(payload.tag))) {
-              this.firstLaunchPatchNotes = payload;
+            if (!localStorage.getItem(launcherReleaseNotesSeenStorageKey(payload.tag))) {
+              this.firstLaunchLauncherReleaseNotes = payload;
             }
           } catch {
-            this.firstLaunchPatchNotes = payload;
+            this.firstLaunchLauncherReleaseNotes = payload;
           }
         }
       },
@@ -326,6 +328,7 @@ export class LauncherState implements ILauncherState {
     try {
       await bridge.checkAndSyncMedia();
       await bridge.getVhReleaseNotes();
+      await bridge.getLauncherReleaseNotes();
       if (this.config.autoCheckUpdate) {
         await bridge.checkLauncherUpdate();
       }

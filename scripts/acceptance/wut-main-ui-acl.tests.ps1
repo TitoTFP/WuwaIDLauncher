@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $permissionPath = Join-Path $PSScriptRoot "..\..\src-tauri\permissions\app-commands.toml"
 $manifestPath = Join-Path $PSScriptRoot "..\..\src-tauri\gen\schemas\acl-manifests.json"
-$requiredCommands = @("minimize_window", "close_window", "open_support")
+$requiredCommands = @("minimize_window", "close_window", "open_support", "get_launcher_release_notes")
 
 if (-not (Test-Path -LiteralPath $permissionPath -PathType Leaf)) {
     throw "Permission source not found: $permissionPath"

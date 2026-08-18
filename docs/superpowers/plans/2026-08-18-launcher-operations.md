@@ -4,7 +4,7 @@
 
 **Goal:** Remove unavailable remote diagnostics, add tray/update/first-open UX, and ship a smaller binary-only professional Windows release pipeline.
 
-**Architecture:** Keep Tauri commands as the backend boundary. Use the existing tray and notification plugin for OS-level tray feedback, emit a backend-owned twelve-second update countdown, and keep patch-note presentation in Svelte with the existing sanitized release-note payload. Separate PR CI from tag-based release publishing; both build only `WuwaIDLauncher.exe`, while release automation creates the updater ZIP and checksum manifest.
+**Architecture:** Keep Tauri commands as the backend boundary. Use the existing tray and notification plugin for OS-level tray feedback, emit a backend-owned twelve-second update countdown, and keep game announcements separate from launcher release notes. Read launcher notes from the updater repository's GitHub Release API, cache the validated payload, and present it in Svelte through the existing sanitizer. Separate PR CI from tag-based release publishing; both build only `WuwaIDLauncher.exe`, while release automation creates the updater ZIP and checksum manifest.
 
 **Tech Stack:** Rust/Tauri 2, Svelte 5/TypeScript, Vite, PowerShell acceptance scripts, GitHub Actions, Cargo release profile.
 
@@ -147,36 +147,54 @@ npm run check
 
 Expected: PASS with zero Svelte diagnostics.
 
-### Task 4: Show patch notes on first open
+### Task 4: Show launcher release notes once per launcher release tag
 
 **Files:**
+- Modify: `src-tauri/src/engine/updater.rs`
+- Modify: `src-tauri/src/lib.rs`
 - Create: `src/components/PatchNotesModal.svelte`
 - Modify: `src/lib/launcherState.svelte.ts`
 - Modify: `src/lib/types.ts`
+- Modify: `src/lib/bridge.ts`
 - Modify: `src/App.svelte`
+- Test: `src-tauri/src/engine/updater.rs` unit tests
 
-- [ ] **Step 1: Add the state contract**
+- [ ] **Step 1: Add the launcher release JSON contract test**
 
-Define `firstLaunchPatchNotes: ReleaseNotePayload | null` and
-`dismissFirstLaunchPatchNotes()` in `ILauncherState`; add an exported tag-key
-helper in `types.ts` so the persistence rule is deterministic.
+Add a fixture representing GitHub's latest-release JSON and assert that
+`parse_latest_release_json` maps `tag_name`, `name`, `body`, `published_at`,
+author login, ZIP asset, and checksum asset into `ReleaseInfo`.
 
-- [ ] **Step 2: Verify the missing contract**
+- [ ] **Step 2: Run the focused test and observe RED**
 
-```powershell
-npm run check
-```
+Run `cargo test --manifest-path src-tauri/Cargo.toml updater::tests::latest_release_json_maps_launcher_notes -- --exact`.
+Expected: compile failure because the parser does not exist yet.
 
-Expected: the new component/state references fail until the implementation is
-added.
+- [ ] **Step 3: Implement the minimal updater parser and fetch helper**
 
-- [ ] **Step 3: Implement the modal**
+Add `parse_latest_release_json`, `fetch_latest_release`, and launcher release
+metadata fields to `ReleaseInfo`. Refactor `check_latest_release` to reuse the
+fetch helper while retaining its newer-version filtering. Reject missing or
+empty tags; default missing title/author/date without inventing a release body.
 
-Use the existing `marked` plus `sanitizeReleaseNotesHtml` path, show the first
-unseen tag when `onVHReleaseNotes` arrives, store the tag in localStorage on
-dismiss/continue, and leave `SidePanel` rendering unchanged.
+- [ ] **Step 4: Run the focused parser test and verify GREEN**
 
-- [ ] **Step 4: Verify frontend behavior statically**
+Run the focused test again and expect PASS.
+
+- [ ] **Step 5: Add backend command, cache, and event bridge**
+
+Add `get_launcher_release_notes`, a separate cache file, and the
+`onLauncherReleaseNotes` event. Keep the existing Atom `get_vh_release_notes`
+path untouched. Add the command/listener and startup invocation in the bridge.
+
+- [ ] **Step 6: Add first-open launcher state and modal wiring**
+
+Track `firstLaunchLauncherReleaseNotes`, record
+`wuwaid-launcher.launcher-release-notes-seen.<tag>`, and render the existing
+sanitized modal from that state. The game patch announcement state remains
+`releaseNotes` and is not used by the modal.
+
+- [ ] **Step 7: Verify frontend behavior statically**
 
 ```powershell
 npm run check

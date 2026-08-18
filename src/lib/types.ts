@@ -190,8 +190,8 @@ export interface ReleaseNotePayload {
   author: string;
 }
 
-export function patchNotesSeenStorageKey(tag: string): string {
-  return `wuwaid-launcher.patch-notes-seen.${encodeURIComponent(tag.trim())}`;
+export function launcherReleaseNotesSeenStorageKey(tag: string): string {
+  return `wuwaid-launcher.launcher-release-notes-seen.${encodeURIComponent(tag.trim())}`;
 }
 
 export interface LauncherUpdatePayload {
@@ -236,7 +236,7 @@ export interface ILauncherState {
   updateDate: string;
   releaseNotes: ReleaseNotePayload | null;
   releaseNotesLoading: boolean;
-  firstLaunchPatchNotes: ReleaseNotePayload | null;
+  firstLaunchLauncherReleaseNotes: ReleaseNotePayload | null;
   launcherUpdateAvailable: boolean;
   launcherUpdatePayload: LauncherUpdatePayload | null;
   toasts: ToastMessage[];
@@ -249,7 +249,7 @@ export interface ILauncherState {
   openAdminPrompt(path: string): void;
   closeAdminPrompt(): void;
   dismissLauncherUpdate(): void;
-  dismissFirstLaunchPatchNotes(): void;
+  dismissFirstLaunchLauncherReleaseNotes(): void;
   init(): Promise<void>;
   saveConfig(): Promise<void>;
 }

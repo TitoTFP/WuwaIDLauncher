@@ -9,6 +9,9 @@ pub const GITHUB_API_LATEST_RELEASE: &str = "https://api.github.com/repos/TitoTF
 pub struct ReleaseInfo {
     pub tag_name: String,
     pub version: String,
+    pub title: String,
+    pub date: String,
+    pub author: String,
     pub body: String,
     pub zip_url: Option<String>,
     pub checksums_url: Option<String>,
@@ -145,7 +148,77 @@ pub fn is_newer_version(current: &str, latest: &str) -> bool {
     false
 }
 
-pub async fn check_latest_release(current_version: &str) -> Result<Option<ReleaseInfo>, String> {
+pub fn parse_latest_release_json(json: &serde_json::Value) -> Result<ReleaseInfo, String> {
+    let tag_name = json
+        .get("tag_name")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "GitHub release tidak memiliki tag launcher.".to_string())?
+        .to_string();
+    let version = tag_name.trim_start_matches('v').to_string();
+    let title = json
+        .get("name")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("WuwaID Launcher {tag_name}"));
+    let date = json
+        .get("published_at")
+        .or_else(|| json.get("created_at"))
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let author = json
+        .get("author")
+        .and_then(|value| value.get("login"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("WuwaID Team")
+        .to_string();
+    let body = json
+        .get("body")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+
+    let mut zip_url = None;
+    let mut checksums_url = None;
+    if let Some(assets) = json.get("assets").and_then(|value| value.as_array()) {
+        for asset in assets {
+            let name = asset
+                .get("name")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            let url = asset
+                .get("browser_download_url")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+            let lowercase_name = name.to_ascii_lowercase();
+            if lowercase_name.ends_with(".zip") && lowercase_name.contains("launcher") {
+                zip_url = url.clone();
+            }
+            if name.eq_ignore_ascii_case("SHA256sums.txt") {
+                checksums_url = url;
+            }
+        }
+    }
+
+    Ok(ReleaseInfo {
+        tag_name,
+        version,
+        title,
+        date,
+        author,
+        body,
+        zip_url,
+        checksums_url,
+    })
+}
+
+pub async fn fetch_latest_release() -> Result<ReleaseInfo, String> {
     let client = reqwest::Client::builder()
         .user_agent("WuwaIDLauncher-Tauri")
         .timeout(std::time::Duration::from_secs(10))
@@ -167,35 +240,13 @@ pub async fn check_latest_release(current_version: &str) -> Result<Option<Releas
         .await
         .map_err(|e| format!("Failed to parse release JSON: {}", e))?;
 
-    let tag_name = json.get("tag_name").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-    let body = json.get("body").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    parse_latest_release_json(&json)
+}
 
-    let mut zip_url = None;
-    let mut checksums_url = None;
-
-    if let Some(assets) = json.get("assets").and_then(|a| a.as_array()) {
-        for asset in assets {
-            let name = asset.get("name").and_then(|n| n.as_str()).unwrap_or_default();
-            let url = asset.get("browser_download_url").and_then(|u| u.as_str()).map(|s| s.to_string());
-            if name.ends_with(".zip") && name.contains("Launcher") {
-                zip_url = url.clone();
-            }
-            if name.eq_ignore_ascii_case("SHA256sums.txt") {
-                checksums_url = url;
-            }
-        }
-    }
-
-    let is_newer = is_newer_version(current_version, &tag_name);
-
-    if is_newer {
-        Ok(Some(ReleaseInfo {
-            tag_name: tag_name.clone(),
-            version: tag_name.trim_start_matches('v').to_string(),
-            body,
-            zip_url,
-            checksums_url,
-        }))
+pub async fn check_latest_release(current_version: &str) -> Result<Option<ReleaseInfo>, String> {
+    let release = fetch_latest_release().await?;
+    if is_newer_version(current_version, &release.tag_name) {
+        Ok(Some(release))
     } else {
         Ok(None)
     }
@@ -267,6 +318,37 @@ mod tests {
     fn latest_release_endpoint_targets_launcher_repository() {
         assert!(GITHUB_API_LATEST_RELEASE.contains("/repos/TitoTFP/WuwaIDLauncher/"));
         assert!(!GITHUB_API_LATEST_RELEASE.contains("/repos/TitoTFP/WuwaID/releases"));
+    }
+
+    #[test]
+    fn latest_release_json_maps_launcher_notes() {
+        let json = serde_json::json!({
+            "tag_name": "v2.6.2",
+            "name": "WuwaID Launcher v2.6.2",
+            "body": "## Perubahan\n- Perbaikan launcher",
+            "published_at": "2026-08-18T12:00:00Z",
+            "author": { "login": "TitoTFP" },
+            "assets": [
+                {
+                    "name": "WuwaIDLauncher-v2.6.2.zip",
+                    "browser_download_url": "https://github.com/TitoTFP/WuwaIDLauncher/releases/download/v2.6.2/WuwaIDLauncher-v2.6.2.zip"
+                },
+                {
+                    "name": "SHA256sums.txt",
+                    "browser_download_url": "https://github.com/TitoTFP/WuwaIDLauncher/releases/download/v2.6.2/SHA256sums.txt"
+                }
+            ]
+        });
+
+        let release = parse_latest_release_json(&json).unwrap();
+        assert_eq!(release.tag_name, "v2.6.2");
+        assert_eq!(release.version, "2.6.2");
+        assert_eq!(release.title, "WuwaID Launcher v2.6.2");
+        assert_eq!(release.body, "## Perubahan\n- Perbaikan launcher");
+        assert_eq!(release.date, "2026-08-18T12:00:00Z");
+        assert_eq!(release.author, "TitoTFP");
+        assert!(release.zip_url.unwrap().ends_with("WuwaIDLauncher-v2.6.2.zip"));
+        assert!(release.checksums_url.unwrap().ends_with("SHA256sums.txt"));
     }
 
     #[test]

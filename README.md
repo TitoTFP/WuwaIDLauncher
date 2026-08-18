@@ -66,6 +66,7 @@ Dokumen acceptance lengkap berada di docs/acceptance/windows-game-matrix.md.
 
 - **Streaming Video Background & BGM:** Mengambil manifest live `assets.json`, mengunduh aset video latar dan musik dengan verifikasi SHA-256 ke cache lokal, dan men-stream melalui protokol `media://` dengan dukungan HTTP Range/206.
 - **Dynamic Release Notes (Atom Feed):** Mengambil catatan rilis terbaru langsung dari `releases.atom` GitHub repo WuwaID dan merendernya sebagai Markdown di drawer pengumuman `SidePanel`.
+- **Launcher Release Notes:** Saat pertama kali membuka tag rilis launcher baru, menampilkan body otomatis dari GitHub Release repo WuwaIDLauncher. Catatan launcher dicache terpisah dan hanya ditampilkan sekali per tag.
 - **Countdown Tanggal Update:** Mem-parsing jadwal pembaruan game dari manifest untuk menampilkan hitung mundur waktu rilis patch berikutnya.
 
 ### ⚡ Mode Tray & Penghematan Resource Ekstrem

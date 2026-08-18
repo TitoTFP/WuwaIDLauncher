@@ -52,8 +52,8 @@
     onclose={() => appState.dismissLauncherUpdate()}
   />
   <PatchNotesModal
-    note={appState.firstLaunchPatchNotes}
-    onclose={() => appState.dismissFirstLaunchPatchNotes()}
+    note={appState.firstLaunchLauncherReleaseNotes}
+    onclose={() => appState.dismissFirstLaunchLauncherReleaseNotes()}
   />
   <ToastHost />
   <AdminModal />
