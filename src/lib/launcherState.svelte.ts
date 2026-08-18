@@ -2,6 +2,7 @@ import { bridge, setupEventBridge } from "./bridge";
 import {
   DEFAULT_LAUNCHER_CONFIG,
   normalizeLauncherConfig,
+  patchNotesSeenStorageKey,
 } from "./types";
 import type {
   ILauncherState,
@@ -37,17 +38,13 @@ export class LauncherState implements ILauncherState {
   vhVersion: string = $state<string>("");
   statusMessage: string = $state<string>("");
   diagnosticMessage: string = $state<string>("");
-  logUploadActive: boolean = $state<boolean>(false);
-  logUploadStatus: string = $state<string>("");
-  logUploadLocalPath: string = $state<string>("");
-  telemetryStatus: string = $state<string>("");
-  telemetryStatusMessage: string = $state<string>("");
   mediaStatus: MediaStatusPayload["status"] | "" = $state<MediaStatusPayload["status"] | "">("");
   mediaStatusMessage: string = $state<string>("");
   mediaProgress: MediaProgressPayload | null = $state<MediaProgressPayload | null>(null);
   launcherUpdateProgress: number = $state<number>(0);
   launcherUpdateStatus: string = $state<string>("");
   launcherUpdateError: string = $state<string>("");
+  launcherUpdateRestartCountdown: number | null = $state<number | null>(null);
   bgmPlaying: boolean = $state<boolean>(false);
   bgmVolume: number = $state<number>(DEFAULT_LAUNCHER_CONFIG.bgmVolume);
 
@@ -59,6 +56,7 @@ export class LauncherState implements ILauncherState {
     null,
   );
   releaseNotesLoading: boolean = $state<boolean>(true);
+  firstLaunchPatchNotes: ReleaseNotePayload | null = $state<ReleaseNotePayload | null>(null);
 
   // Launcher Self-Update
   launcherUpdateAvailable: boolean = $state<boolean>(false);
@@ -111,6 +109,19 @@ export class LauncherState implements ILauncherState {
     this.launcherUpdateProgress = 0;
     this.launcherUpdateStatus = "";
     this.launcherUpdateError = "";
+    this.launcherUpdateRestartCountdown = null;
+  }
+
+  dismissFirstLaunchPatchNotes() {
+    const tag = this.firstLaunchPatchNotes?.tag.trim();
+    if (tag) {
+      try {
+        localStorage.setItem(patchNotesSeenStorageKey(tag), "1");
+      } catch {
+        // A restricted WebView storage must not prevent the modal from closing.
+      }
+    }
+    this.firstLaunchPatchNotes = null;
   }
 
   async init() {
@@ -231,46 +242,16 @@ export class LauncherState implements ILauncherState {
           ? remainingSeconds
           : null;
       },
-      onLogUploadStarted: () => {
-        this.logUploadActive = true;
-        this.logUploadStatus = "Mengunggah log...";
-        this.logUploadLocalPath = "";
-      },
-      onLogUploadFinished: (res) => {
-        this.logUploadActive = false;
-        this.logUploadLocalPath = res.localPath || "";
-        this.logUploadStatus = res.success
-          ? "Log berhasil diunggah!"
-          : res.localPath
-            ? "Bundle lokal tersedia."
-            : `Gagal: ${res.message || ""}`;
-        if (res.success) {
-          this.setStatus("Log berhasil diunggah.", res.message || this.logUploadStatus);
-        } else if (res.localPath) {
-          this.setStatus(
-            "Bundle log diagnostik disimpan lokal.",
-            res.message || "Upload remote tidak tersedia; bundle dapat dibagikan manual.",
-          );
-        } else {
-          this.setStatus(
-            "Pengunggahan log gagal.",
-            res.message || this.logUploadStatus,
-          );
-        }
-      },
-      onTelemetryStatus: (payload) => {
-        this.telemetryStatus = payload.status;
-        this.telemetryStatusMessage = payload.message;
-      },
       onLauncherUpdateProgress: (percent, statusText) => {
         this.launcherUpdateProgress = percent;
         this.launcherUpdateStatus = statusText;
         this.launcherUpdateError = "";
       },
-      onLauncherUpdateRestarting: () => {
+      onLauncherUpdateRestarting: (remainingSeconds) => {
         this.launcherUpdateError = "";
-        this.launcherUpdateStatus = "Update siap; launcher akan dimulai ulang.";
-        this.setStatus("Launcher sedang memulai ulang untuk menerapkan update.");
+        this.launcherUpdateRestartCountdown = remainingSeconds;
+        this.launcherUpdateStatus = `Update selesai diunduh. Launcher akan tertutup otomatis dan dibuka kembali dalam ${remainingSeconds} detik.`;
+        this.setStatus("Launcher akan tertutup otomatis lalu dibuka kembali.");
       },
       onLauncherUpdateError: (error) => {
         this.dismissLauncherUpdate();
@@ -282,6 +263,7 @@ export class LauncherState implements ILauncherState {
         this.launcherUpdateProgress = 0;
         this.launcherUpdateError = "";
         this.launcherUpdateStatus = "Menunggu konfirmasi.";
+        this.launcherUpdateRestartCountdown = null;
       },
       onLauncherUpdateStatus: (payload) => {
         this.showToast(payload.message, payload.kind);
@@ -321,6 +303,15 @@ export class LauncherState implements ILauncherState {
       onVHReleaseNotes: (payload) => {
         this.releaseNotes = payload;
         this.releaseNotesLoading = false;
+        if (payload.tag.trim()) {
+          try {
+            if (!localStorage.getItem(patchNotesSeenStorageKey(payload.tag))) {
+              this.firstLaunchPatchNotes = payload;
+            }
+          } catch {
+            this.firstLaunchPatchNotes = payload;
+          }
+        }
       },
     });
 

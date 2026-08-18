@@ -17,7 +17,6 @@ commands.allow = [
   "force_quit_game",
   "uninstall",
   "restart_as_admin",
-  "upload_logs",
   "notify_ui_interactive",
   "reset_webview_cache",
   "is_game_running",

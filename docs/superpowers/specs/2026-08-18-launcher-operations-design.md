@@ -1,0 +1,131 @@
+# Launcher Operations and Release Design
+
+**Date:** 2026-08-18
+
+## Goal
+
+Make the Windows launcher operationally consistent with the existing `main`
+branch while keeping the release surface small: no installer bundles, an
+explicit tray notification, a visible self-update restart countdown, one-time
+patch notes on first open, and no inactive log-upload/telemetry surface.
+
+## Scope and assumptions
+
+- “Matikan fitur kirim logs” means remote diagnostics upload and telemetry are
+  unavailable until a server exists. The unused upload UI, IPC commands,
+  settings fields, backend modules, and related dependency features are removed
+  rather than leaving a disabled control that can fail later.
+- A local `WuwaIDLauncher.exe` is the only output of the local Tauri build.
+  Release automation also creates one ZIP containing that executable plus a
+  `SHA256sums.txt` manifest because the self-updater consumes that exact
+  contract. MSI and NSIS artifacts are not produced or published.
+- The existing game patch release-note feed remains the source of patch notes.
+  The launcher shows the latest validated entry once per tag in a modal; the
+  existing announcement panel remains available after dismissal.
+- Windows toast notification is the source of the tray message. A failed toast
+  must never prevent the launcher from hiding.
+
+## Design
+
+### 1. Diagnostics removal
+
+Remove `upload_logs`, `get_log_upload_enabled`, the remote multipart upload
+implementation, telemetry heartbeat workers, and their frontend event/state
+plumbing. Remove `diagnosticsUploadEnabled` and `telemetryEnabled` from the
+persisted settings schema while continuing to tolerate and discard those legacy
+JSON keys during normalization. Remove the unused `LogsPanel` and the menu item
+that advertised remote upload. Keep ordinary `log` calls used for local runtime
+diagnostics; they are not transmitted.
+
+This leaves the launcher with no outbound log/telemetry request path and no
+setting that implies the unavailable server exists.
+
+### 2. Tray notification
+
+Initialize the already-declared Tauri notification plugin. When a normal
+minimize is performed from a launcher window that is already in tray mode, hide
+the window, set tray mode, and issue:
+
+> WuwaID Launcher — Launcher berjalan di system tray. Klik ikon tray untuk membukanya kembali.
+
+The notification is best-effort and is emitted after the hide operation. Tray
+show and left-click behavior stays unchanged. Add a small pure helper/test for
+the notification copy and retain the existing window-mode tests.
+
+### 3. Self-update restart notice
+
+Keep the current secure sequence: HTTPS URL validation, ZIP download, checksum
+verification, safe extraction, and handoff script. After successful extraction,
+emit a restart event with `remainingSeconds: 12`, then emit the next value once
+per second until zero. The backend waits the same twelve seconds before starting
+the Windows handoff and exiting. This matches `main`’s visible restart warning,
+while making the timing deterministic at the process boundary.
+
+The frontend renders the message in the update modal:
+
+> Update selesai diunduh. Launcher akan tertutup otomatis dan dibuka kembali dalam 12 detik.
+
+The modal remains non-dismissible during the countdown. If handoff spawning
+fails, the existing error event clears the countdown and exposes the diagnostic.
+
+### 4. First-open patch notes
+
+On receipt of a validated release-note payload, the frontend checks
+`localStorage` for `wuwaid-launcher.patch-notes-seen.<tag>`. If absent, it sets a
+pending modal payload. Dismissing or opening the panel records the tag. The body
+is rendered through the existing Markdown and sanitization pipeline; no raw
+HTML path is added. Offline fallback notes can still be shown once, preserving
+the current offline behavior.
+
+### 5. Binary-only packaging and size
+
+Set Tauri bundling inactive so `npm run tauri -- build` produces the release
+executable without MSI/NSIS. Keep the release profile’s size settings, remove
+dependencies/features made unused by diagnostics removal, and use `npm ci` in
+automation. Measure the resulting EXE against the last committed release
+artifact and record both sizes in CI logs; do not claim a reduction unless the
+new artifact is actually smaller.
+
+### 6. CI/CD
+
+Replace the branch-triggered release-producing workflow with:
+
+- `ci.yml`: pull requests and protected branch pushes; Node/Rust setup, cached
+  dependencies, Svelte check, frontend build, Rust tests, clippy, binary-only
+  build, and a one-file artifact upload. Concurrency cancels obsolete checks.
+- `release.yml`: version tags `vX.Y.Z` and manual dispatch; repeat the checks,
+  build the binary-only executable, smoke-check its name and non-zero size,
+  create `WuwaIDLauncher-vX.Y.Z.zip`, create a checksum manifest, and publish a
+  non-draft GitHub release containing only the updater ZIP and checksum.
+
+The acceptance gate is updated to validate the binary-only contract and ZIP
+contents, and its fixture tests no longer require MSI/NSIS files.
+
+## Error handling
+
+- Existing secure update validation remains fail-closed. Every failed update
+  removes temporary ZIP, staging, and handoff artifacts.
+- Notification failures are logged and ignored.
+- Patch-note cache failures leave the announcement panel usable and do not block
+  launcher initialization.
+- Legacy diagnostic settings are ignored with a normalization diagnostic, not
+  reintroduced into the saved schema.
+
+## Verification
+
+- Rust unit/integration tests cover removed IPC registration, legacy settings
+  normalization, tray notification text, and restart countdown semantics.
+- `npm run check` covers the new state and modal contracts.
+- `npm run build` and `npm run tauri -- build` prove the frontend and binary-only
+  release build.
+- PowerShell acceptance tests prove artifact discovery, checksum, ZIP safety,
+  and absence of installer requirements.
+- CI workflow YAML is parsed/contract-checked and the release script is tested
+  with a fixture artifact.
+- Final report includes the actual EXE size and the verification commands.
+
+## Non-goals
+
+- No new log server or remote diagnostics endpoint is introduced.
+- No game patch installation behavior is changed.
+- No installer replacement or auto-start-at-login behavior is added.

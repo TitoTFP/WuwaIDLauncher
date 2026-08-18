@@ -13,7 +13,6 @@
   "dependencies": {
     "@tauri-apps/api": "^2.2.0",
     "@tauri-apps/plugin-dialog": "^2.2.0",
-    "@tauri-apps/plugin-notification": "^2.2.0",
     "@tauri-apps/plugin-process": "^2.2.0",
     "marked": "^18.0.9",
     "svelte": "^5.20.0"

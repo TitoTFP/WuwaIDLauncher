@@ -71,23 +71,17 @@ function Initialize-Artifact {
 
     New-Item -ItemType Directory -Force -Path $Path | Out-Null
     if ($IncludeExecutable) {
-        $bundleRelease = Join-Path $Path "bundle\release"
-        New-Item -ItemType Directory -Force -Path $bundleRelease | Out-Null
         $executable = Join-Path $Path "WuwaIDLauncher.exe"
         Set-Content -LiteralPath $executable -Value "fixture executable" -NoNewline
 
-        $zip = Join-Path $bundleRelease "WuwaIDLauncher_2.6.1_x64.zip"
-        $msi = Join-Path $bundleRelease "WuwaIDLauncher_2.6.1_x64_en-US.msi"
-        $nsis = Join-Path $bundleRelease "WuwaIDLauncher_2.6.1_x64-setup.exe"
-        Set-Content -LiteralPath $msi -Value "fixture msi" -NoNewline
-        Set-Content -LiteralPath $nsis -Value "fixture nsis" -NoNewline
+        $zip = Join-Path $Path "WuwaIDLauncher-v2.6.1.zip"
         Compress-Archive -LiteralPath $executable -DestinationPath $zip
 
-        $manifestLines = @($zip, $msi, $nsis | ForEach-Object {
+        $manifestLines = @($zip | ForEach-Object {
             $hash = (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash.ToLowerInvariant()
             "{0} *{1}" -f $hash, (Split-Path -Leaf $_)
         })
-        Set-Content -LiteralPath (Join-Path $bundleRelease "SHA256sums.txt") -Value $manifestLines
+        Set-Content -LiteralPath (Join-Path $Path "SHA256sums.txt") -Value $manifestLines
     }
 }
 
@@ -119,6 +113,25 @@ function Read-Report {
     return Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json
 }
 
+function Assert-WorkflowContract {
+    $workflowRoot = Join-Path $PSScriptRoot "..\..\.github\workflows"
+    $ciPath = Join-Path $workflowRoot "ci.yml"
+    $releasePath = Join-Path $workflowRoot "release.yml"
+    Assert-True (Test-Path -LiteralPath $ciPath -PathType Leaf) "Professional CI workflow is required."
+    Assert-True (Test-Path -LiteralPath $releasePath -PathType Leaf) "Professional release workflow is required."
+
+    $ci = Get-Content -Raw -LiteralPath $ciPath
+    $release = Get-Content -Raw -LiteralPath $releasePath
+    $allWorkflows = @(Get-ChildItem -LiteralPath $workflowRoot -Filter "*.yml" -File | Get-Content -Raw) -join "`n"
+
+    Assert-True ($ci -match "permissions:\s*\r?\n\s+contents:\s+read") "CI must use read-only contents permission."
+    Assert-True ($release -match "permissions:\s*\r?\n\s+contents:\s+write") "Release workflow must use contents write permission."
+    Assert-True ($release -match "tags:" -and $release -match "v\*\.\*\.\*") "Release workflow must trigger on semantic version tags."
+    Assert-True ($release -match "workflow_dispatch:") "Release workflow must support manual dispatch."
+    Assert-True ($allWorkflows -notmatch "tauri-action|MSI|NSIS|\\.msi|nsis") "Workflows must not build installer bundles."
+    Assert-True ($allWorkflows -match "npm ci") "Workflows must use reproducible npm ci installs."
+}
+
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ("wuwaid-release-gate-test-" + [guid]::NewGuid().ToString("N"))
 $runner = Join-Path $PSScriptRoot "windows-release-gate.ps1"
 
@@ -126,6 +139,7 @@ try {
     $script:TestRoot = $testRoot
     $script:Runner = $runner
     $script:Pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+    Assert-WorkflowContract
 
     $successCase = New-CaseDirectory -Name "success"
     Initialize-Artifact -Path $successCase.artifact
@@ -182,7 +196,7 @@ try {
 
     $tamperedCase = New-CaseDirectory -Name "tampered-checksum"
     Initialize-Artifact -Path $tamperedCase.artifact
-    $tamperedManifest = Join-Path $tamperedCase.artifact "bundle\release\SHA256sums.txt"
+    $tamperedManifest = Join-Path $tamperedCase.artifact "SHA256sums.txt"
     $tamperedLines = @(Get-Content -LiteralPath $tamperedManifest)
     $tamperedParts = $tamperedLines[0] -split "\s+", 2
     $tamperedLines[0] = "{0} {1}" -f (("0" * 64) -join ""), $tamperedParts[1]
@@ -195,9 +209,9 @@ try {
 
     $invalidZipCase = New-CaseDirectory -Name "invalid-zip"
     Initialize-Artifact -Path $invalidZipCase.artifact
-    $invalidZip = Join-Path $invalidZipCase.artifact "bundle\release\WuwaIDLauncher_2.6.1_x64.zip"
+    $invalidZip = Join-Path $invalidZipCase.artifact "WuwaIDLauncher-v2.6.1.zip"
     Set-UnsafeArtifactZip -Path $invalidZip
-    $invalidZipManifest = Join-Path $invalidZipCase.artifact "bundle\release\SHA256sums.txt"
+    $invalidZipManifest = Join-Path $invalidZipCase.artifact "SHA256sums.txt"
     $invalidZipLines = @(Get-Content -LiteralPath $invalidZipManifest)
     $invalidZipParts = $invalidZipLines[0] -split "\s+", 2
     $invalidZipHash = (Get-FileHash -LiteralPath $invalidZip -Algorithm SHA256).Hash.ToLowerInvariant()

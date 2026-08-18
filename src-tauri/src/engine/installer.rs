@@ -49,7 +49,11 @@ pub fn validate_mount_file(mount_path: &Path) -> Result<bool, String> {
         .map_err(|e| format!("Gagal membaca mount file: {}", e))?;
     let normalized = content.replace("\r\n", "\n");
     let lines: Vec<&str> = normalized.split('\n').collect();
-    if lines.len() != 4 || lines[0] != "::Mount::" || lines[2] != "::Del::" || lines[3] != "" {
+    if lines.len() != 4
+        || lines[0] != "::Mount::"
+        || lines[2] != "::Del::"
+        || !lines[3].is_empty()
+    {
         return Ok(false);
     }
 
@@ -753,7 +757,7 @@ pub fn probe_resource_mount(game_path: &Path) -> Result<ResourceMountPlan, Strin
         return Err("Resource game belum siap; ResManifest tidak ditemukan.".to_string());
     }
 
-    versions.sort_by(|a, b| b.0.cmp(&a.0));
+    versions.sort_by_key(|b| std::cmp::Reverse(b.0));
     let (_, version_name, version_dir) = versions.remove(0);
 
     let mount_dir = version_dir.join("Mount");

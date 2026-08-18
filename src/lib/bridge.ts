@@ -4,8 +4,8 @@ import type {
   CleanupReport,
   InstallMethod,
   LauncherUpdatePayload,
+  LauncherUpdateRestartPayload,
   LauncherUpdateStatusPayload,
-  LogUploadResult,
   MediaProgressPayload,
   MediaReadyPayload,
   MediaStatusPayload,
@@ -13,7 +13,6 @@ import type {
   ProgressPayload,
   ReleaseNotePayload,
   SettingsLoadResult,
-  TelemetryStatusPayload,
 } from "./types";
 
 export const bridge = {
@@ -74,10 +73,7 @@ export const bridge = {
   restartAsAdmin: (): Promise<void> => invoke("restart_as_admin"),
   openSupport: (): Promise<void> => invoke("open_support"),
 
-  // Diagnostic & Telemetry
-  getLogUploadEnabled: (): Promise<boolean> => invoke("get_log_upload_enabled"),
-  uploadLogs: (gamePath: string): Promise<void> =>
-    invoke("upload_logs", { gamePath }),
+  // Local UI maintenance
   notifyUiInteractive: (): Promise<void> => invoke("notify_ui_interactive"),
   resetWebViewCache: (): Promise<void> => invoke("reset_webview_cache"),
 
@@ -97,14 +93,11 @@ export interface EventBridgeCallbacks {
   onGameLaunchStarted?: () => void;
   onGameLaunchFinished?: () => void;
   onSignatureRestoreCountdown?: (remainingSeconds: number, active: boolean) => void;
-  onLogUploadStarted?: () => void;
-  onLogUploadFinished?: (result: LogUploadResult) => void;
-  onTelemetryStatus?: (payload: TelemetryStatusPayload) => void;
   onLauncherUpdateProgress?: (percent: number, statusText: string) => void;
   onLauncherUpdateAvailable?: (payload: LauncherUpdatePayload) => void;
   onLauncherUpdateStatus?: (payload: LauncherUpdateStatusPayload) => void;
   onLauncherUpdateStaged?: () => void;
-  onLauncherUpdateRestarting?: () => void;
+  onLauncherUpdateRestarting?: (remainingSeconds: number) => void;
   onLauncherUpdateError?: (error: string) => void;
   onMediaReady?: (payload: MediaReadyPayload) => void;
   onMediaStatus?: (payload: MediaStatusPayload) => void;
@@ -157,15 +150,6 @@ export async function setupEventBridge(
       "onSignatureRestoreCountdown",
       (p) => callbacks.onSignatureRestoreCountdown?.(p.remainingSeconds, p.active),
     ),
-    addListener<void>("onLogUploadStarted", () =>
-      callbacks.onLogUploadStarted?.(),
-    ),
-    addListener<LogUploadResult>("onLogUploadFinished", (res) =>
-      callbacks.onLogUploadFinished?.(res),
-    ),
-    addListener<TelemetryStatusPayload>("onTelemetryStatus", (payload) =>
-      callbacks.onTelemetryStatus?.(payload),
-    ),
     addListener<{ percent: number; status: string }>(
       "onLauncherUpdateProgress",
       (p) => callbacks.onLauncherUpdateProgress?.(p.percent, p.status),
@@ -179,8 +163,8 @@ export async function setupEventBridge(
     addListener<void>("onLauncherUpdateStaged", () =>
       callbacks.onLauncherUpdateStaged?.(),
     ),
-    addListener<void>("onLauncherUpdateRestarting", () =>
-      callbacks.onLauncherUpdateRestarting?.(),
+    addListener<LauncherUpdateRestartPayload>("onLauncherUpdateRestarting", (p) =>
+      callbacks.onLauncherUpdateRestarting?.(p.remainingSeconds),
     ),
     addListener<string>("onLauncherUpdateError", (error) =>
       callbacks.onLauncherUpdateError?.(error),

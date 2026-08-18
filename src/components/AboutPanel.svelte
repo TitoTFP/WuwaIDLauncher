@@ -9,7 +9,7 @@
   </div>
   <section class="about-card"><h2>Versi terpasang</h2><p class="version">v{appState.appVersion}</p><p>Versi Patch ID: {appState.vhVersion || 'Belum diketahui'}</p><p>Method aktif: {appState.config.installMethod}</p></section>
   <section class="about-card"><h2>Status fitur</h2><ul><li>Installer tiga metode dengan validasi ownership dan rollback.</li><li>Status patch, media, dan operasi diteruskan ke UI.</li><li>Verifikasi packaging Windows tetap menjadi release gate.</li></ul></section>
-  <section class="about-card"><h2>Privasi</h2><p>Diagnostics dan telemetry mengikuti preferensi launcher. Detail teknis hanya ditampilkan saat operasi gagal atau user meminta upload log.</p></section>
+  <section class="about-card"><h2>Privasi</h2><p>Launcher tidak mengirim log atau telemetry ke server. Detail teknis hanya ditampilkan saat operasi gagal agar dapat diperiksa secara lokal.</p></section>
 </main>
 
 <style>

@@ -60,7 +60,7 @@
   }
 
   async function changeBoolean(
-    key: 'dx11' | 'bgmEnabled' | 'autoCheckUpdate' | 'diagnosticsUploadEnabled' | 'telemetryEnabled',
+    key: 'dx11' | 'bgmEnabled' | 'autoCheckUpdate',
     event: Event,
     message: string,
   ) {
@@ -151,19 +151,6 @@
       <p class="settings-note">Saat game berjalan, perubahan metode dan halaman konfigurasi ditahan sampai game selesai.</p>
     </section>
 
-    <section class="settings-card">
-      <h2>Diagnostics & privacy</h2>
-      <label class="settings-check">
-        <input type="checkbox" checked={appState.config.diagnosticsUploadEnabled} onchange={(event) => changeBoolean('diagnosticsUploadEnabled', event, 'Preferensi upload diagnostics diperbarui.')} />
-        <span>Izinkan upload log diagnostik</span>
-      </label>
-      <label class="settings-check">
-        <input type="checkbox" checked={appState.config.telemetryEnabled} onchange={(event) => changeBoolean('telemetryEnabled', event, 'Preferensi telemetry diperbarui.')} />
-        <span>Izinkan telemetry anonim</span>
-      </label>
-      <p class="settings-note" role="status">Status telemetry: {appState.telemetryStatusMessage || (appState.config.telemetryEnabled ? 'Menunggu event game.' : 'Nonaktif.')}</p>
-      <p class="settings-note">Default kedua opsi ini nonaktif. Payload log disensor sebelum upload; bundle lokal tetap dibuat saat upload tidak diizinkan atau endpoint tidak tersedia.</p>
-    </section>
   </div>
 
   {#if saving}<p class="settings-saving" role="status">Menyimpan...</p>{/if}

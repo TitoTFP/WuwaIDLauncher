@@ -10,10 +10,11 @@
     progress?: number;
     status?: string;
     error?: string;
+    restartCountdown?: number | null;
     onclose?: () => void;
   }
 
-  let { open = false, version = '', zipUrl = '', checksumsUrl = '', progress = 0, status = '', error = '', onclose }: Props = $props();
+  let { open = false, version = '', zipUrl = '', checksumsUrl = '', progress = 0, status = '', error = '', restartCountdown = null, onclose }: Props = $props();
 
   let isUpdating = $state(false);
   let updateProgress = $state(0);
@@ -40,7 +41,7 @@
   }
 
   function dismiss() {
-    if (isUpdating) return;
+    if (isUpdating || restartCountdown !== null) return;
     onclose?.();
   }
 </script>
@@ -58,7 +59,15 @@
       <p class="lu-modal__ver" id="luModalVer">{version}</p>
       <p class="lu-modal__desc">Apakah Anda ingin memperbarui Launcher sekarang?</p>
 
-      {#if isUpdating || (status && status !== 'Menunggu konfirmasi.')}
+      {#if restartCountdown !== null}
+        <div class="lu-pbar lu-pbar--restart" role="status" aria-live="assertive">
+          <div class="lu-pbar__text">{restartCountdown} detik</div>
+          <div class="lu-pbar__track">
+            <div class="lu-pbar__fill" style="width: {Math.max(0, Math.min(100, ((12 - restartCountdown) / 12) * 100))}%"></div>
+          </div>
+          <div class="lu-pbar__sub">Update selesai diunduh. Launcher akan tertutup otomatis dan dibuka ulang.</div>
+        </div>
+      {:else if isUpdating || (status && status !== 'Menunggu konfirmasi.')}
         <div class="lu-pbar">
           <div class="lu-pbar__text">{updateProgress}%</div>
           <div class="lu-pbar__track">

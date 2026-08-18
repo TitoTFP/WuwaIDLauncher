@@ -174,10 +174,8 @@ where
         let dest = cache_dir.join(&asset.name);
         let mut needs_download = true;
 
-        if dest.exists() {
-            if verify_sha256(&dest, &asset.sha256).unwrap_or(false) {
-                needs_download = false;
-            }
+        if dest.exists() && verify_sha256(&dest, &asset.sha256).unwrap_or(false) {
+            needs_download = false;
         }
 
         if needs_download {

@@ -114,20 +114,6 @@
     }
   }
 
-  async function handleUploadLogs() {
-    closeDropdown();
-    if (!appState.gamePath) {
-      appState.setStatus('Pilih folder game terlebih dahulu.');
-      return;
-    }
-    try {
-      await bridge.uploadLogs(appState.gamePath);
-    } catch (error) {
-      appState.logUploadActive = false;
-      appState.setStatus('Gagal memulai pengunggahan log.', errorMessage(error));
-    }
-  }
-
   async function handleResetCache() {
     closeDropdown();
     try {
@@ -368,13 +354,6 @@
         <path fill="currentColor" d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 4l5 2.18V11c0 3.5-2.33 6.79-5 7.93-2.67-1.14-5-4.43-5-7.93V7.18L12 5z" />
       </svg>
       Jalankan sebagai Admin
-    </button>
-
-    <button class="rp-dropdown__item" id="menuUploadLogs" onclick={handleUploadLogs} type="button">
-      <svg viewBox="0 0 24 24" width="14" height="14">
-        <path fill="currentColor" d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z" />
-      </svg>
-      Kirim log diagnostik
     </button>
 
     <button class="rp-dropdown__item" id="menuResetCache" onclick={handleResetCache} type="button">

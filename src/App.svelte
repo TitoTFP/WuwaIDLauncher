@@ -7,6 +7,7 @@
   import AudioPlayer from './components/AudioPlayer.svelte';
   import RightPanel from './components/RightPanel.svelte';
   import UpdateModal from './components/UpdateModal.svelte';
+  import PatchNotesModal from './components/PatchNotesModal.svelte';
   import ToastHost from './components/ToastHost.svelte';
   import AdminModal from './components/AdminModal.svelte';
 
@@ -47,7 +48,12 @@
     progress={appState.launcherUpdateProgress}
     status={appState.launcherUpdateStatus}
     error={appState.launcherUpdateError}
+    restartCountdown={appState.launcherUpdateRestartCountdown}
     onclose={() => appState.dismissLauncherUpdate()}
+  />
+  <PatchNotesModal
+    note={appState.firstLaunchPatchNotes}
+    onclose={() => appState.dismissFirstLaunchPatchNotes()}
   />
   <ToastHost />
   <AdminModal />

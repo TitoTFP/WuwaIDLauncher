@@ -53,8 +53,6 @@ export interface LauncherConfig {
   autoCheckUpdate: boolean;
   bgmVolume: number;
   bgmEnabled: boolean;
-  diagnosticsUploadEnabled: boolean;
-  telemetryEnabled: boolean;
 }
 
 export const DEFAULT_LAUNCHER_CONFIG: LauncherConfig = {
@@ -64,8 +62,6 @@ export const DEFAULT_LAUNCHER_CONFIG: LauncherConfig = {
   autoCheckUpdate: true,
   bgmVolume: 0.35,
   bgmEnabled: true,
-  diagnosticsUploadEnabled: false,
-  telemetryEnabled: false,
 };
 
 export interface SettingsLoadResult {
@@ -120,7 +116,7 @@ export function normalizeLauncherConfig(raw: unknown): NormalizedConfigResult {
     diagnostics.push("Pengaturan performa lama dihapus; launcher memakai mode Penuh.");
   }
 
-  for (const [key, fallback] of [["dx11", config.dx11], ["autoCheckUpdate", config.autoCheckUpdate], ["bgmEnabled", config.bgmEnabled], ["diagnosticsUploadEnabled", config.diagnosticsUploadEnabled], ["telemetryEnabled", config.telemetryEnabled]] as const) {
+  for (const [key, fallback] of [["dx11", config.dx11], ["autoCheckUpdate", config.autoCheckUpdate], ["bgmEnabled", config.bgmEnabled]] as const) {
     if (typeof value[key] === "boolean") config[key] = value[key] as boolean;
     else if (key in value) {
       config[key] = fallback;
@@ -160,22 +156,13 @@ export interface PatchStatusPayload {
   message?: string;
 }
 
-export interface LogUploadResult {
-  success: boolean;
-  uploaded?: boolean;
-  message?: string;
-  url?: string;
-  localPath?: string;
-}
-
 export interface LauncherUpdateStatusPayload {
   kind: "ok" | "info";
   message: string;
 }
 
-export interface TelemetryStatusPayload {
-  status: "disabled" | "sent" | "error";
-  message: string;
+export interface LauncherUpdateRestartPayload {
+  remainingSeconds: number;
 }
 
 export interface MediaReadyPayload {
@@ -201,6 +188,10 @@ export interface ReleaseNotePayload {
   title: string;
   body: string;
   author: string;
+}
+
+export function patchNotesSeenStorageKey(tag: string): string {
+  return `wuwaid-launcher.patch-notes-seen.${encodeURIComponent(tag.trim())}`;
 }
 
 export interface LauncherUpdatePayload {
@@ -231,17 +222,13 @@ export interface ILauncherState {
   vhVersion: string;
   statusMessage: string;
   diagnosticMessage: string;
-  logUploadActive: boolean;
-  logUploadStatus: string;
-  logUploadLocalPath: string;
-  telemetryStatus: string;
-  telemetryStatusMessage: string;
   mediaStatus: MediaStatusPayload["status"] | "";
   mediaStatusMessage: string;
   mediaProgress: MediaProgressPayload | null;
   launcherUpdateProgress: number;
   launcherUpdateStatus: string;
   launcherUpdateError: string;
+  launcherUpdateRestartCountdown: number | null;
   bgmPlaying: boolean;
   bgmVolume: number;
   bgmUrl: string;
@@ -249,6 +236,7 @@ export interface ILauncherState {
   updateDate: string;
   releaseNotes: ReleaseNotePayload | null;
   releaseNotesLoading: boolean;
+  firstLaunchPatchNotes: ReleaseNotePayload | null;
   launcherUpdateAvailable: boolean;
   launcherUpdatePayload: LauncherUpdatePayload | null;
   toasts: ToastMessage[];
@@ -261,6 +249,7 @@ export interface ILauncherState {
   openAdminPrompt(path: string): void;
   closeAdminPrompt(): void;
   dismissLauncherUpdate(): void;
+  dismissFirstLaunchPatchNotes(): void;
   init(): Promise<void>;
   saveConfig(): Promise<void>;
 }

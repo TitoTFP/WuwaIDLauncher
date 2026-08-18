@@ -12,8 +12,6 @@ pub struct LauncherSettings {
     pub auto_check_update: bool,
     pub bgm_volume: f64,
     pub bgm_enabled: bool,
-    pub diagnostics_upload_enabled: bool,
-    pub telemetry_enabled: bool,
 }
 
 impl Default for LauncherSettings {
@@ -25,8 +23,6 @@ impl Default for LauncherSettings {
             auto_check_update: true,
             bgm_volume: 0.35,
             bgm_enabled: true,
-            diagnostics_upload_enabled: false,
-            telemetry_enabled: false,
         }
     }
 }
@@ -147,6 +143,14 @@ pub fn normalize_settings_json(raw: &str) -> SettingsLoadResult {
         );
     }
 
+    if object.contains_key("diagnosticsUploadEnabled") || object.contains_key("telemetryEnabled") {
+        repaired = true;
+        diagnostic(
+            &mut diagnostics,
+            "Pengaturan upload diagnostics dan telemetry dihapus karena server belum tersedia.",
+        );
+    }
+
     read_bool(
         object,
         "dx11",
@@ -168,21 +172,6 @@ pub fn normalize_settings_json(raw: &str) -> SettingsLoadResult {
         &mut diagnostics,
         &mut repaired,
     );
-    read_bool(
-        object,
-        "diagnosticsUploadEnabled",
-        &mut settings.diagnostics_upload_enabled,
-        &mut diagnostics,
-        &mut repaired,
-    );
-    read_bool(
-        object,
-        "telemetryEnabled",
-        &mut settings.telemetry_enabled,
-        &mut diagnostics,
-        &mut repaired,
-    );
-
     if let Some(value) = object.get("bgmVolume") {
         match value.as_f64() {
             Some(value) if value.is_finite() => {

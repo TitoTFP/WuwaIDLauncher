@@ -44,7 +44,7 @@ Untuk menjalankan full WUT-31 command gate, tambahkan `-RunCommandGate`:
       -RunCommandGate
 
 Flag tersebut menjalankan dan menyimpan log terpisah untuk `npm run check`,
-`npm run build`, Cargo all-target tests, dan `npm run tauri -- build`. Flag
+`npm run build`, Cargo all-target tests, dan `npm run tauri -- build --no-bundle`. Flag
 dibuat opt-in karena Tauri build memutasi output build dan dapat memerlukan
 beberapa menit; artifact gate tetap berjalan pada setiap `automated` run.
 
@@ -59,12 +59,12 @@ menghapus hanya child fixture miliknya. Run FAIL/BLOCKED mempertahankan child
 fixture dan evidence untuk diagnosis; file asing di parent fixture tanpa owner
 marker tidak pernah dihapus.
 
-Artifact gate mencari executable standalone dan bundle release pada root atau
-`bundle/release`, lalu memverifikasi versi konsisten dari `package.json`,
+Artifact gate mencari executable standalone, updater ZIP, dan manifest checksum
+di root artifact, lalu memverifikasi versi konsisten dari `package.json`,
 `src-tauri/Cargo.toml`, dan `src-tauri/tauri.conf.json`. Lima configured icon
-files wajib tersedia. `SHA256sums.txt` wajib cocok untuk ZIP, MSI, dan NSIS;
-hash executable standalone juga dihitung dan dicatat. ZIP wajib berisi
-`WuwaIDLauncher.exe` dan tidak boleh memiliki path traversal.
+files wajib tersedia. `SHA256sums.txt` wajib cocok untuk ZIP; hash executable
+standalone juga dihitung dan dicatat. ZIP wajib berisi `WuwaIDLauncher.exe` dan
+tidak boleh memiliki path traversal. MSI/NSIS sengaja tidak dibuat.
 
 Contract test runner:
 
@@ -92,10 +92,9 @@ Contract test runner:
 | Release notes XSS | Body berisi script, event handler, javascript: link | Hanya allowlist HTML dan link aman yang tampil | screenshot + sanitized HTML |
 | Self-update valid | ZIP berisi WuwaIDLauncher.exe + checksum benar | ZIP terverifikasi, staging dan handoff dibuat, installer restart | SHA-256 + handoff + artifact |
 | Self-update invalid | Checksum mismatch, exe hilang, traversal, atau URL HTTP | Update ditolak sebelum handoff; staging/temp dibersihkan | onLauncherUpdateError + filesystem diff |
-| Diagnostics disabled | Default settings / toggle off | Command ditolak; tidak ada request jaringan dan tidak ada client ID baru | settings + network trace |
-| Diagnostics enabled | Toggle on + fixture logs | Payload settings/versions disensor, retry maksimal 2, bundle lokal tersedia saat gagal | ZIP content + status UI |
+| Local diagnostics | Fixture logs atau launch failure | Detail operasi tersedia lokal; tidak ada upload atau telemetry request | local state/log + network trace |
 | Tray / window | Game running, minimize/close, tray show | Launcher hide saat game aktif; tray dapat show/focus; close aman | screen recording |
-| Packaging | Windows MSVC + WebView2 tersedia | EXE, MSI, dan NSIS installer dibuat; version/icon/manifest konsisten | src-tauri/target/release/bundle/** |
+| Packaging | Windows MSVC + WebView2 tersedia | EXE portable dibangun; updater ZIP dan checksum konsisten; MSI/NSIS tidak dibuat | release root + checksum |
 
 ## Automated gate yang sudah dijalankan
 
@@ -103,13 +102,11 @@ Contract test runner:
     npm run build
     & 'C:\Users\Gipar\.cargo\bin\cargo.exe' test --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1
     $env:Path = "C:\Users\Gipar\.cargo\bin;$env:Path"
-    npm run tauri -- build
+    npm run tauri -- build --no-bundle
 
-Packaging menghasilkan:
+Packaging menghasilkan binary standalone:
 
 - src-tauri/target/release/WuwaIDLauncher.exe
-- src-tauri/target/release/bundle/msi/WuwaIDLauncher_2.6.1_x64_en-US.msi
-- src-tauri/target/release/bundle/nsis/WuwaIDLauncher_2.6.1_x64-setup.exe
 
 Skenario yang bergantung pada executable game asli, taskkill Windows, tray,
 hak Administrator, dan restart self-update tetap harus dicentang manual pada

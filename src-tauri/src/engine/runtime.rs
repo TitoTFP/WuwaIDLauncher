@@ -470,16 +470,16 @@ fn spawn_direct(command: &LaunchCommand) -> Result<ManagedProcess, std::io::Erro
     }))
 }
 
-pub fn launch_game(game_path: &Path, dx11: bool) -> Result<LaunchedGame, LaunchFailure> {
+pub fn launch_game(game_path: &Path, dx11: bool) -> Result<LaunchedGame, Box<LaunchFailure>> {
     let command = build_launch_command(game_path, dx11);
     let executable = command.executable.clone();
     if !executable.exists() {
-        return Err(LaunchFailure::new_with_mode(
+        return Err(Box::new(LaunchFailure::new_with_mode(
             command,
             SpawnFailureKind::SpawnFailed,
             format!("executable_missing: {:?}", executable),
             Some(LaunchMode::Direct),
-        ));
+        )));
     }
 
     match spawn_direct(&command) {
@@ -501,18 +501,18 @@ pub fn launch_game(game_path: &Path, dx11: bool) -> Result<LaunchedGame, LaunchF
             if kind == SpawnFailureKind::ElevationRequired {
                 return spawn_elevated(&command);
             }
-            Err(LaunchFailure::new_with_mode(
+            Err(Box::new(LaunchFailure::new_with_mode(
                 command,
                 kind,
                 error.to_string(),
                 Some(LaunchMode::Direct),
-            ))
+            )))
         }
     }
 }
 
 #[cfg(windows)]
-fn spawn_elevated(command: &LaunchCommand) -> Result<LaunchedGame, LaunchFailure> {
+fn spawn_elevated(command: &LaunchCommand) -> Result<LaunchedGame, Box<LaunchFailure>> {
     use std::os::windows::ffi::OsStrExt;
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::GetLastError;
@@ -544,20 +544,22 @@ fn spawn_elevated(command: &LaunchCommand) -> Result<LaunchedGame, LaunchFailure
         .chain(Some(0))
         .collect();
 
-    let mut info = SHELLEXECUTEINFOW::default();
-    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
-    info.fMask = SEE_MASK_NOCLOSEPROCESS;
-    info.lpVerb = PCWSTR::from_raw(verb.as_ptr());
-    info.lpFile = PCWSTR::from_raw(executable.as_ptr());
-    info.lpParameters = PCWSTR::from_raw(arguments.as_ptr());
-    info.lpDirectory = PCWSTR::from_raw(working_directory.as_ptr());
-    info.nShow = SW_SHOWNORMAL.0;
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOCLOSEPROCESS,
+        lpVerb: PCWSTR::from_raw(verb.as_ptr()),
+        lpFile: PCWSTR::from_raw(executable.as_ptr()),
+        lpParameters: PCWSTR::from_raw(arguments.as_ptr()),
+        lpDirectory: PCWSTR::from_raw(working_directory.as_ptr()),
+        nShow: SW_SHOWNORMAL.0,
+        ..Default::default()
+    };
 
     let executed = unsafe { ShellExecuteExW(&mut info).is_ok() };
     if !executed {
         let raw_code = unsafe { GetLastError().0 as i32 };
         let kind = classify_spawn_error(Some(raw_code));
-        return Err(LaunchFailure::new_with_mode(
+        return Err(Box::new(LaunchFailure::new_with_mode(
             command.clone(),
             if raw_code == 1223 {
                 SpawnFailureKind::ElevationCancelled
@@ -566,18 +568,18 @@ fn spawn_elevated(command: &LaunchCommand) -> Result<LaunchedGame, LaunchFailure
             },
             format!("ShellExecuteExW error {raw_code}"),
             Some(LaunchMode::Elevated),
-        ));
+        )));
     }
 
     let handle = info.hProcess;
     let pid = unsafe { GetProcessId(handle) };
     if pid == 0 {
-        return Err(LaunchFailure::new_with_mode(
+        return Err(Box::new(LaunchFailure::new_with_mode(
             command.clone(),
             SpawnFailureKind::SpawnFailed,
             "ShellExecuteExW returned no process id",
             Some(LaunchMode::Elevated),
-        ));
+        )));
     }
 
     Ok(LaunchedGame {
@@ -710,7 +712,7 @@ pub fn force_quit_game() -> Result<bool, String> {
         if !found && find_game_process_id().is_some() {
             return Err("taskkill tidak menghentikan proses game.".to_string());
         }
-        return Ok(found);
+        Ok(found)
     }
 
     #[cfg(not(windows))]

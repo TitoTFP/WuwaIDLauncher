@@ -8,12 +8,34 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_notification::NotificationExt;
 
 const WUWAID_LATEST_DOWNLOAD_BASE_URL: &str =
     "https://github.com/TitoTFP/WuwaID/releases/latest/download/";
 const WUWAID_LATEST_CHECKSUMS_URL: &str =
     "https://github.com/TitoTFP/WuwaID/releases/latest/download/SHA256sums.txt";
 const SUPPORT_URL: &str = "https://trakteer.id/TitoTFP";
+const LAUNCHER_UPDATE_RESTART_DELAY_SECONDS: u64 = 12;
+
+fn launcher_update_restart_countdown() -> impl Iterator<Item = u64> {
+    (1..=LAUNCHER_UPDATE_RESTART_DELAY_SECONDS).rev()
+}
+
+fn tray_notification_body() -> &'static str {
+    "Launcher berjalan di system tray. Klik ikon tray untuk membukanya kembali."
+}
+
+fn notify_tray_minimized<R: Runtime>(app: &AppHandle<R>) {
+    if let Err(error) = app
+        .notification()
+        .builder()
+        .title("WuwaID Launcher")
+        .body(tray_notification_body())
+        .show()
+    {
+        log::warn!("Tray notification tidak dapat ditampilkan: {error}");
+    }
+}
 
 fn media_manifest_url() -> String {
     std::env::var("WUWAID_ASSETS_URL").unwrap_or_else(|_| engine::media::ASSETS_URL.to_string())
@@ -361,57 +383,6 @@ fn emit_runtime_state<R: Runtime>(app: &AppHandle<R>, state: engine::runtime::Ru
     );
 }
 
-fn emit_telemetry_status<R: Runtime>(
-    app: &AppHandle<R>,
-    status: &str,
-    message: impl Into<String>,
-) {
-    let _ = app.emit(
-        "onTelemetryStatus",
-        serde_json::json!({
-            "status": status,
-            "message": message.into()
-        }),
-    );
-}
-
-async fn send_telemetry_if_enabled<R: Runtime>(
-    app: &AppHandle<R>,
-    install_method: &str,
-    event: &str,
-) {
-    let enabled = load_settings()
-        .map(|result| result.settings.telemetry_enabled)
-        .unwrap_or(false);
-    if !engine::telemetry::should_send_telemetry(enabled) {
-        emit_telemetry_status(app, "disabled", "Telemetry nonaktif.");
-        return;
-    }
-
-    let appdata = get_appdata_dir();
-    let client_id = engine::telemetry::get_or_create_client_id(&appdata);
-    match engine::telemetry::send_heartbeat(
-        &client_id,
-        env!("CARGO_PKG_VERSION"),
-        install_method,
-        event,
-    )
-    .await
-    {
-        Ok(true) => emit_telemetry_status(app, "sent", "Telemetry anonim terkirim."),
-        Ok(false) => emit_telemetry_status(
-            app,
-            "error",
-            "Server telemetry menolak request.",
-        ),
-        Err(error) => emit_telemetry_status(
-            app,
-            "error",
-            format!("Telemetry tidak dapat dikirim: {error}"),
-        ),
-    }
-}
-
 fn spawn_runtime_monitor<R: Runtime>(app: AppHandle<R>) {
     tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(2));
@@ -474,20 +445,21 @@ pub fn parse_range_header(range_header: &str, total_len: u64) -> Option<(u64, u6
 #[tauri::command]
 fn minimize_window<R: Runtime>(window: WebviewWindow<R>) {
     let app = window.app_handle();
-    match window_minimize_action(is_tray_mode(&app)) {
+    match window_minimize_action(is_tray_mode(app)) {
         WindowMinimizeAction::Minimize => {
             let _ = window.minimize();
         }
         WindowMinimizeAction::Hide => {
-            set_tray_mode(&app, true);
+            set_tray_mode(app, true);
             let _ = window.hide();
+            notify_tray_minimized(app);
         }
     }
 }
 
 #[tauri::command]
 fn close_window<R: Runtime>(window: WebviewWindow<R>) {
-    request_close(&window.app_handle());
+    request_close(window.app_handle());
 }
 
 #[tauri::command]
@@ -1062,6 +1034,13 @@ fn perform_launcher_update<R: Runtime>(
                         }));
                         log::info!("Update staged at {:?}", exe_path);
                         let _ = app_handle.emit("onLauncherUpdateStaged", ());
+                        for remaining_seconds in launcher_update_restart_countdown() {
+                            let _ = app_handle.emit(
+                                "onLauncherUpdateRestarting",
+                                serde_json::json!({"remainingSeconds": remaining_seconds}),
+                            );
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                        }
                         #[cfg(windows)]
                         {
                             use std::os::windows::process::CommandExt;
@@ -1189,72 +1168,6 @@ fn reset_webview_cache<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
         serde_json::json!({"status": "checking", "message": "Cache direset; memulai sinkronisasi media..."}),
     );
     check_and_sync_media(app);
-    Ok(())
-}
-
-#[tauri::command]
-fn get_log_upload_enabled() -> bool {
-    load_settings()
-        .map(|result| result.settings.diagnostics_upload_enabled)
-        .unwrap_or(false)
-}
-
-#[tauri::command]
-fn upload_logs<R: Runtime>(app: AppHandle<R>, game_path: String) -> Result<(), String> {
-    let settings = load_settings()
-        .map_err(|error| format!("diagnostics_settings_failed: {error}"))?;
-    let upload_enabled = settings.settings.diagnostics_upload_enabled;
-    let normalized_game_path = engine::path::normalize_game_path(&game_path)
-        .ok_or_else(|| "invalid_game_path: folder game tidak valid.".to_string())?;
-
-    log::info!("Upload logs requested for validated game path.");
-    let app_handle = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let _ = app_handle.emit("onLogUploadStarted", ());
-        let appdata = get_appdata_dir();
-
-        match engine::log_collector::collect_logs_to_zip(&normalized_game_path, &appdata) {
-            Ok(zip_bytes) => {
-                let local_path =
-                    engine::log_collector::save_logs_bundle(&zip_bytes, &appdata).ok();
-                if !upload_enabled {
-                    let _ = app_handle.emit("onLogUploadFinished", serde_json::json!({
-                        "success": false,
-                        "uploaded": false,
-                        "message": "Upload dinonaktifkan; bundle diagnostik lokal telah dibuat.",
-                        "localPath": local_path.as_ref().map(|path| path.to_string_lossy().to_string())
-                    }));
-                    return;
-                }
-                let client_id = engine::telemetry::get_or_create_client_id(&appdata);
-                match engine::log_collector::upload_logs_zip(zip_bytes, &client_id).await {
-                    Ok(msg) => {
-                        let _ = app_handle.emit("onLogUploadFinished", serde_json::json!({
-                            "success": true,
-                            "uploaded": true,
-                            "message": msg,
-                            "localPath": local_path.as_ref().map(|path| path.to_string_lossy().to_string())
-                        }));
-                    }
-                    Err(e) => {
-                        let _ = app_handle.emit("onLogUploadFinished", serde_json::json!({
-                            "success": false,
-                            "uploaded": false,
-                            "message": e,
-                            "localPath": local_path.as_ref().map(|path| path.to_string_lossy().to_string())
-                        }));
-                    }
-                }
-            }
-            Err(e) => {
-                let _ = app_handle.emit("onLogUploadFinished", serde_json::json!({
-                    "success": false,
-                    "uploaded": false,
-                    "message": e
-                }));
-            }
-        }
-    });
     Ok(())
 }
 
@@ -1642,11 +1555,9 @@ fn launch_game<R: Runtime>(
                 if let Some(window) = app_handle.get_webview_window("main") {
                     set_tray_mode(&app_handle, true);
                     let _ = window.hide();
+                    notify_tray_minimized(&app_handle);
                 }
                 engine::runtime::trim_memory_working_set();
-
-                // Send telemetry launch event only after explicit opt-in.
-                send_telemetry_if_enabled(&app_handle, &canonical_method, "launch").await;
 
                 // Monitor process in background and persist final evidence.
                 let app_for_monitor = app_handle.clone();
@@ -1824,6 +1735,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(RuntimeCoordinator::default())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
         .register_uri_scheme_protocol("media", media_protocol_handler)
         .setup(|app| {
@@ -1858,7 +1770,7 @@ pub fn run() {
                     } = event
                     {
                         let app = tray.app_handle();
-                        set_tray_mode(&app, true);
+                        set_tray_mode(app, true);
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
@@ -1866,20 +1778,6 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
-
-            // Background telemetry heartbeat worker (every 5 minutes)
-            let app_telemetry = app_handle.clone();
-            tauri::async_runtime::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(300));
-
-                loop {
-                    interval.tick().await;
-                    if engine::runtime::is_game_running() {
-                        send_telemetry_if_enabled(&app_telemetry, "active", "heartbeat").await;
-                    }
-                    let _ = app_telemetry.emit("onHeartbeatTick", ());
-                }
-            });
 
             Ok(())
         })
@@ -1901,8 +1799,6 @@ pub fn run() {
             switch_method,
             notify_ui_interactive,
             reset_webview_cache,
-            get_log_upload_enabled,
-            upload_logs,
             start_installation,
             check_game_folder_write_access,
             launch_game,
@@ -1958,6 +1854,22 @@ mod tests {
     fn window_minimize_action_distinguishes_normal_and_tray_modes() {
         assert_eq!(window_minimize_action(false), WindowMinimizeAction::Minimize);
         assert_eq!(window_minimize_action(true), WindowMinimizeAction::Hide);
+    }
+
+    #[test]
+    fn tray_notification_body_is_explicit() {
+        assert_eq!(
+            tray_notification_body(),
+            "Launcher berjalan di system tray. Klik ikon tray untuk membukanya kembali."
+        );
+    }
+
+    #[test]
+    fn launcher_update_restart_countdown_matches_main_branch() {
+        assert_eq!(
+            launcher_update_restart_countdown().collect::<Vec<_>>(),
+            (1..=12).rev().collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -2429,8 +2341,6 @@ mod tests {
 
         let app = tauri::test::mock_builder()
             .invoke_handler(tauri::generate_handler![
-                get_log_upload_enabled,
-                upload_logs,
                 start_installation,
                 launch_game,
                 check_patch_status,
@@ -2443,19 +2353,6 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_ipc_response(
-            &window,
-            ipc_request("get_log_upload_enabled", serde_json::json!({})),
-            Ok(false),
-        );
-        assert_ipc_response(
-            &window,
-            ipc_request(
-                "upload_logs",
-                serde_json::json!({"gamePath": game.path().to_string_lossy()}),
-            ),
-            Ok(()),
-        );
         assert_ipc_response(
             &window,
             ipc_request(

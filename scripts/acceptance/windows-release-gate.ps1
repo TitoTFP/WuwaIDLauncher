@@ -196,35 +196,19 @@ function Get-WorkspaceMetadata {
 function Set-ReleaseArtifactPaths {
     param([Parameter(Mandatory = $true)][string]$Version)
 
-    $zipName = "WuwaIDLauncher_{0}_x64.zip" -f $Version
-    $msiName = "WuwaIDLauncher_{0}_x64_en-US.msi" -f $Version
-    $nsisName = "WuwaIDLauncher_{0}_x64-setup.exe" -f $Version
+    $zipName = "WuwaIDLauncher-v{0}.zip" -f $Version
     $script:Artifacts = [ordered]@{
         executable = Find-ArtifactFile -RelativePaths @(
             "WuwaIDLauncher.exe",
             "bundle/release/WuwaIDLauncher.exe"
         )
         zip = Find-ArtifactFile -RelativePaths @(
-            "bundle/release/$zipName",
-            "bundle/$zipName",
             $zipName
         )
-        msi = Find-ArtifactFile -RelativePaths @(
-            "bundle/release/$msiName",
-            "bundle/msi/$msiName",
-            "bundle/$msiName",
-            $msiName
-        )
-        nsis = Find-ArtifactFile -RelativePaths @(
-            "bundle/release/$nsisName",
-            "bundle/nsis/$nsisName",
-            "bundle/$nsisName",
-            $nsisName
-        )
         manifest = Find-ArtifactFile -RelativePaths @(
+            "SHA256sums.txt",
             "bundle/release/SHA256sums.txt",
-            "bundle/SHA256sums.txt",
-            "SHA256sums.txt"
+            "bundle/SHA256sums.txt"
         )
     }
 }
@@ -269,18 +253,14 @@ function Invoke-ArtifactGate {
         files = [ordered]@{
             executable = $script:Artifacts.executable
             zip = $script:Artifacts.zip
-            msi = $script:Artifacts.msi
-            nsis = $script:Artifacts.nsis
             manifest = $script:Artifacts.manifest
         }
     })
-    Add-Scenario -Name "artifact-files" -Status "PASS" -Message "EXE, ZIP, MSI, NSIS, dan checksum manifest tersedia." -Evidence @($filesEvidence)
+    Add-Scenario -Name "artifact-files" -Status "PASS" -Message "EXE, updater ZIP, dan checksum manifest tersedia." -Evidence @($filesEvidence)
 
     $versions = @($metadata.packageVersion, $metadata.cargoVersion, $metadata.tauriVersion)
     $versionNamesMatch = @(
-        (Split-Path -Leaf $script:Artifacts.zip),
-        (Split-Path -Leaf $script:Artifacts.msi),
-        (Split-Path -Leaf $script:Artifacts.nsis)
+        (Split-Path -Leaf $script:Artifacts.zip)
     ) | Where-Object { $_ -notlike "*$($script:ExpectedVersion)*" }
     $versionEvidence = Write-ArtifactEvidence -Name "version" -Value ([ordered]@{
         package = $metadata.packageVersion
@@ -327,8 +307,6 @@ function Invoke-ArtifactGate {
 
     $checksumTargets = @(
         [pscustomobject]@{ key = "zip"; manifestRequired = $true },
-        [pscustomobject]@{ key = "msi"; manifestRequired = $true },
-        [pscustomobject]@{ key = "nsis"; manifestRequired = $true },
         [pscustomobject]@{ key = "executable"; manifestRequired = $false }
     )
     $checksumResults = @()
@@ -363,7 +341,7 @@ function Invoke-ArtifactGate {
         Add-Scenario -Name "artifact-checksum" -Status "FAIL" -Message ("Checksum manifest tidak valid: " + ($details -join "; ")) -Evidence @($checksumEvidence)
         return $false
     }
-    Add-Scenario -Name "artifact-checksum" -Status "PASS" -Message "Checksum ZIP/MSI/NSIS cocok; hash executable standalone dicatat." -Evidence @($checksumEvidence)
+    Add-Scenario -Name "artifact-checksum" -Status "PASS" -Message "Checksum updater ZIP cocok; hash executable standalone dicatat." -Evidence @($checksumEvidence)
 
     $zipEvidencePath = Join-Path $script:EvidenceRoot "artifact-zip-contents.json"
     $archive = $null
@@ -419,7 +397,7 @@ function Invoke-CommandGate {
         [pscustomobject]@{ name = "command-npm-check"; executable = "npm"; arguments = @("run", "check") },
         [pscustomobject]@{ name = "command-npm-build"; executable = "npm"; arguments = @("run", "build") },
         [pscustomobject]@{ name = "command-cargo-test"; executable = if ([string]::IsNullOrWhiteSpace($cargoExecutable)) { "cargo" } else { $cargoExecutable }; arguments = @("test", "--manifest-path", "src-tauri/Cargo.toml", "--all-targets", "--", "--test-threads=1") },
-        [pscustomobject]@{ name = "command-tauri-build"; executable = "npm"; arguments = @("run", "tauri", "--", "build") }
+        [pscustomobject]@{ name = "command-tauri-build"; executable = "npm"; arguments = @("run", "tauri", "--", "build", "--no-bundle") }
     )
     $allPassed = $true
     foreach ($command in $commands) {

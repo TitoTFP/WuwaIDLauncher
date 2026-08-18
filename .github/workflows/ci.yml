@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+      - "feat/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Check frontend
+        run: npm run check
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Test backend
+        run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1
+
+      - name: Lint backend
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Build launcher binary
+        run: npm run tauri -- build --no-bundle
+
+      - name: Validate launcher artifact
+        shell: pwsh
+        run: |
+          $exe = Get-Item -LiteralPath "src-tauri/target/release/WuwaIDLauncher.exe" -ErrorAction Stop
+          if ($exe.Length -le 1MB) {
+            throw "Launcher binary terlalu kecil: $($exe.Length) bytes"
+          }
+          Write-Host "WuwaIDLauncher.exe: $($exe.Length) bytes"
+
+      - name: Upload launcher artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WuwaIDLauncher-ci-${{ github.run_number }}
+          path: src-tauri/target/release/WuwaIDLauncher.exe
+          if-no-files-found: error
+          retention-days: 7

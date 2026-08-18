@@ -37,11 +37,11 @@ Kontrak utama launcher sudah diimplementasikan dan diverifikasi melalui test sui
 | :--- | :--- | :--- |
 | Path game, tiga metode, ownership marker, transaksi, rollback, switch, uninstall | **Implemented** | src-tauri/tests/milestone1_contract_tests.rs, milestone2_contract_tests.rs, installer safety |
 | Launch, external process, signature restore, force quit, error event | **Implemented + manual game smoke** | Contract tests lulus; perlu executable game nyata untuk taskkill dan lifecycle Windows |
-| Home, Settings, Logs, About, navigation lock, progress/error/reset state | **Implemented** | Svelte check 0 error/0 warning |
+| Home, Settings, About, navigation lock, progress/error/reset state | **Implemented** | Svelte check 0 error/0 warning |
 | Media cache hash, offline fallback, staged replacement, release-note sanitization | **Implemented** | milestone5_contract_tests.rs, media event tests |
 | Self-update checksum, ZIP validation, staging, rollback handoff, cleanup | **Implemented + manual restart smoke** | Checksum/ZIP/handoff tests; valid release asset diperlukan untuk restart end-to-end |
-| Diagnostics consent, redaction, bounded retry, local bundle fallback, telemetry opt-in | **Implemented** | milestone6_contract_tests.rs; raw game log content tetap perlu ditinjau sebelum dibagikan |
-| EXE, MSI, NSIS packaging | **Implemented** | Artifact tercatat di docs/acceptance/windows-game-matrix.md |
+| Local runtime diagnostics tanpa upload remote | **Implemented** | Legacy upload/telemetry settings dinormalisasi dan tidak dikirim ke server |
+| Standalone EXE, updater ZIP, SHA256 manifest | **Implemented** | Artifact gate dan workflow release; MSI/NSIS sengaja tidak dibuat |
 | Real game/admin/read-only/tray/offline/restart acceptance | **Partial / manual** | Jalankan matrix acceptance pada Windows release machine |
 | Future features di luar WUT-5 sampai WUT-29 | **Planned** | Tidak menjadi bagian release gate ini |
 
@@ -71,15 +71,14 @@ Dokumen acceptance lengkap berada di docs/acceptance/windows-game-matrix.md.
 ### ⚡ Mode Tray & Penghematan Resource Ekstrem
 
 - **Window Minimization ke System Tray:** Launcher otomatis menyembunyikan jendela ke system tray saat game berjalan dengan footprint RAM ultra-rendah (<15MB Working Set).
-- **Heartbeat Pemain Aktif Anonim (opt-in):** Telemetri default nonaktif dan hanya dikirim setelah pengguna mengaktifkannya di Settings.
+- **Operasi Lokal:** Launcher menyimpan diagnostics lokal untuk troubleshooting; belum ada pengiriman log atau telemetry karena server belum tersedia.
 
-### 🛡️ Keamanan, Diagnostik & Menu Cepat (8 Hamburger Actions)
+### 🛡️ Keamanan, Diagnostik & Menu Cepat (7 Hamburger Actions)
 
 - **Folder Game:** Dialog pemilih direktori instalasi game interaktif (`rfd`).
 - **Perbarui Patch ID & Perbarui Launcher:** Validasi ulang integritas file mod lokal dan pengecekan rilis versi terbaru launcher.
 - **Paksa Tutup Game:** Terminasi proses `Client-Win64-Shipping.exe` secara aman jika terjadi crash/hang.
 - **Jalankan sebagai Admin:** Alur restart aplikasi dengan elevasi hak akses Administrator Windows (`runas`).
-- **Kirim Log Diagnostik (opt-in):** Pengumpul dan pengarsip log game serta launcher ke berkas ZIP; settings/versions disensor, retry dibatasi dua kali, dan bundle lokal tetap tersedia saat upload gagal atau consent belum diberikan.
 - **Reset Cache Tampilan:** Pembersihan data cache webview dan media cache lokal.
 - **Hapus Patch ID:** Penghapusan bersih seluruh artefak mod yang dikelola launcher dan pemulihan signature asli.
 
@@ -90,7 +89,7 @@ Dokumen acceptance lengkap berada di docs/acceptance/windows-game-matrix.md.
 ### 1️⃣ Jalankan Launcher
 
 1. Unduh file rilis `WuwaIDLauncher.exe` dari halaman GitHub Releases.
-2. Jalankan aplikasi (bersifat portable atau installer NSIS).
+2. Jalankan aplikasi portable `WuwaIDLauncher.exe`.
 
 ### 2️⃣ Tentukan Folder Game
 
@@ -117,12 +116,14 @@ Lokasi artefak runtime:
 
 - Settings dan versions: %LOCALAPPDATA%/WuwaIDLauncher/.
 - Media cache: %LOCALAPPDATA%/WuwaIDLauncher/Cache/.
-- Bundle diagnostics: %LOCALAPPDATA%/WuwaIDLauncher/Diagnostics/.
+- Diagnostics lokal dan log runtime: %LOCALAPPDATA%/WuwaIDLauncher/.
 - Update staging/handoff sementara: .staging/, update.zip, dan update-handoff.cmd di appdata; artifact gagal dibersihkan otomatis.
 
 ### Privacy dan Consent
 
-Upload diagnostics dan telemetry keduanya **default nonaktif**. Upload remote hanya dimulai dari aksi pengguna setelah toggle diagnostics aktif; aksi diagnostics tetap dapat membuat bundle lokal untuk dibagikan manual. Endpoint remote opsional dikonfigurasi melalui `WUWAID_LOG_UPLOAD_ENDPOINT` dan harus memakai HTTPS. settings.json dan versions.json disensor untuk path game, install path, client ID, dan username sebelum masuk ZIP. Bundle lokal dipertahankan agar pengguna dapat memeriksa atau menghapusnya sendiri. Isi raw game log dapat membawa data yang ditulis oleh game, jadi tinjau bundle sebelum membagikannya.
+Launcher tidak mengirim log atau telemetry ke server. Diagnostics hanya dipakai
+secara lokal untuk menampilkan detail operasi; isi log game dapat memuat data yang
+ditulis oleh game, jadi tinjau sebelum membagikannya secara manual.
 
 ---
 
@@ -172,7 +173,7 @@ Upload diagnostics dan telemetry keduanya **default nonaktif**. Upload remote ha
 # Validasi tipe & komponen Svelte
 npm run check
 
-# Build bundle frontend
+# Build frontend
 npm run build
 
 # Menjalankan seluruh unit test, mock HTTP, command integration, dan installer safety tests
@@ -184,25 +185,23 @@ npm run build
 ```bash
 # Build binary rilis produksi via Tauri (PowerShell; Cargo harus berada di PATH)
 $env:Path = "C:\Users\Gipar\.cargo\bin;$env:Path"
-npm run tauri -- build
+npm run tauri -- build --no-bundle
 ```
 
 Artifact release yang diharapkan:
 
 - src-tauri/target/release/WuwaIDLauncher.exe
-- src-tauri/target/release/bundle/msi/WuwaIDLauncher_2.6.1_x64_en-US.msi
-- src-tauri/target/release/bundle/nsis/WuwaIDLauncher_2.6.1_x64-setup.exe
-- src-tauri/target/release/bundle/release/WuwaIDLauncher_2.6.1_x64.zip
-- src-tauri/target/release/bundle/release/SHA256sums.txt
+- WuwaIDLauncher-v2.6.1.zip
+- SHA256sums.txt
 
 Checklist sebelum publish:
 
 - [ ] npm run check dan npm run build lulus.
 - [ ] cargo test --all-targets lulus dengan fixture deterministic.
-- [ ] EXE, MSI, NSIS, updater ZIP, dan SHA256sums.txt ada serta versinya 2.6.1.
+- [ ] EXE, updater ZIP, dan SHA256sums.txt ada serta versinya 2.6.1.
 - [ ] Jalankan docs/acceptance/windows-game-matrix.md pada Windows dengan fixture reversible.
 - [ ] Uji read-only/admin, tray, force quit, offline media, dan self-update restart pada mesin release.
-- [ ] Tinjau bundle diagnostics dan konfirmasi consent sebelum mengirimnya.
+- [ ] Tinjau diagnostics lokal sebelum membagikannya secara manual.
 
 Bukti gate lokal terbaru tersimpan di `docs/acceptance/windows-game-matrix-results-2026-08-18.md`.
 
