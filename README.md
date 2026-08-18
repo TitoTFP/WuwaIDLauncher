@@ -79,7 +79,7 @@ Dokumen acceptance lengkap berada di docs/acceptance/windows-game-matrix.md.
 - **Perbarui Patch ID & Perbarui Launcher:** Validasi ulang integritas file mod lokal dan pengecekan rilis versi terbaru launcher.
 - **Paksa Tutup Game:** Terminasi proses `Client-Win64-Shipping.exe` secara aman jika terjadi crash/hang.
 - **Jalankan sebagai Admin:** Alur restart aplikasi dengan elevasi hak akses Administrator Windows (`runas`).
-- **Kirim Log Diagnostik (opt-in):** Pengumpul dan pengarsip log game serta launcher ke berkas ZIP; settings/versions disensor, retry dibatasi dua kali, dan bundle lokal tetap tersedia saat upload gagal.
+- **Kirim Log Diagnostik (opt-in):** Pengumpul dan pengarsip log game serta launcher ke berkas ZIP; settings/versions disensor, retry dibatasi dua kali, dan bundle lokal tetap tersedia saat upload gagal atau consent belum diberikan.
 - **Reset Cache Tampilan:** Pembersihan data cache webview dan media cache lokal.
 - **Hapus Patch ID:** Penghapusan bersih seluruh artefak mod yang dikelola launcher dan pemulihan signature asli.
 
@@ -122,7 +122,7 @@ Lokasi artefak runtime:
 
 ### Privacy dan Consent
 
-Upload diagnostics dan telemetry keduanya **default nonaktif**. Upload hanya dimulai dari aksi pengguna setelah toggle diagnostics aktif. settings.json dan versions.json disensor untuk path game, install path, client ID, dan username sebelum masuk ZIP. Bundle lokal dipertahankan agar pengguna dapat memeriksa atau menghapusnya sendiri. Isi raw game log dapat membawa data yang ditulis oleh game, jadi tinjau bundle sebelum membagikannya.
+Upload diagnostics dan telemetry keduanya **default nonaktif**. Upload remote hanya dimulai dari aksi pengguna setelah toggle diagnostics aktif; aksi diagnostics tetap dapat membuat bundle lokal untuk dibagikan manual. Endpoint remote opsional dikonfigurasi melalui `WUWAID_LOG_UPLOAD_ENDPOINT` dan harus memakai HTTPS. settings.json dan versions.json disensor untuk path game, install path, client ID, dan username sebelum masuk ZIP. Bundle lokal dipertahankan agar pengguna dapat memeriksa atau menghapusnya sendiri. Isi raw game log dapat membawa data yang ditulis oleh game, jadi tinjau bundle sebelum membagikannya.
 
 ---
 

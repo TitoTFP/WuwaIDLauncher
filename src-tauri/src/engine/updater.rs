@@ -3,7 +3,7 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 
-pub const GITHUB_API_LATEST_RELEASE: &str = "https://api.github.com/repos/TitoTFP/WuwaID/releases/latest";
+pub const GITHUB_API_LATEST_RELEASE: &str = "https://api.github.com/repos/TitoTFP/WuwaIDLauncher/releases/latest";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ReleaseInfo {
@@ -267,6 +267,12 @@ mod tests {
         assert!(!is_newer_version("2.6.1", "2.6.1"));
         assert!(!is_newer_version("2.6.2", "2.6.1"));
         assert!(!is_newer_version("3.0.0", "2.6.1"));
+    }
+
+    #[test]
+    fn latest_release_endpoint_targets_launcher_repository() {
+        assert!(GITHUB_API_LATEST_RELEASE.contains("/repos/TitoTFP/WuwaIDLauncher/"));
+        assert!(!GITHUB_API_LATEST_RELEASE.contains("/repos/TitoTFP/WuwaID/releases"));
     }
 
     #[test]

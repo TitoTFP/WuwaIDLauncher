@@ -7,6 +7,7 @@ commands.allow = [
   "check_and_sync_media",
   "get_vh_release_notes",
   "check_launcher_update",
+  "open_support",
   "perform_launcher_update",
   "check_patch_status",
   "switch_method",

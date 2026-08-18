@@ -685,6 +685,10 @@ pub fn is_game_running() -> bool {
 pub fn force_quit_game() -> Result<bool, String> {
     #[cfg(windows)]
     {
+        if find_game_process_id().is_none() {
+            return Ok(false);
+        }
+
         let names = ["Client-Win64-Shipping.exe", "WutheringWaves.exe"];
         let mut found = false;
         let mut errors = Vec::new();

@@ -26,6 +26,7 @@ export class LauncherState implements ILauncherState {
   );
   gamePath: string = $state<string>("");
   patchState: PatchState = $state<PatchState>("unchecked");
+  patchStatusCheckPending: boolean = $state<boolean>(false);
   progressPercent: number = $state<number>(0);
   progressStatus: string = $state<string>("");
   progressDownloadedBytes: number = $state<number>(0);
@@ -149,6 +150,8 @@ export class LauncherState implements ILauncherState {
         this.gameOrigin = origin;
       },
       onPatchStatus: (payload) => {
+        const manualCheck = this.patchStatusCheckPending;
+        this.patchStatusCheckPending = false;
         if (payload.status === "ready") {
           this.patchState = "ready";
           this.installed = true;
@@ -164,6 +167,20 @@ export class LauncherState implements ILauncherState {
           if (payload.message) this.setStatus(payload.message, payload.message);
         }
         if (payload.currentVersion) this.vhVersion = payload.currentVersion;
+        if (manualCheck) {
+          if (payload.status === "ready") {
+            this.showToast(
+              payload.latestVersion
+                ? "Patch ID sudah terbaru."
+                : "Patch ID aktif; versi terbaru belum dapat diverifikasi.",
+              payload.latestVersion ? "ok" : "info",
+            );
+          } else if (payload.status === "needs_update") {
+            this.showToast("Versi Patch ID baru tersedia.", "info");
+          } else if (payload.status === "not_installed") {
+            this.showToast("Patch ID belum terpasang.", "info");
+          }
+        }
       },
       onProgressUpdate: (payload) => {
         this.progressPercent = payload.percent;
@@ -176,8 +193,11 @@ export class LauncherState implements ILauncherState {
         this.installing = false;
         this.installed = true;
         this.patchState = "ready";
-        this.progressPercent = 100;
-        this.progressStatus = "Instalasi selesai.";
+        this.progressPercent = 0;
+        this.progressStatus = "";
+        this.progressDownloadedBytes = 0;
+        this.progressTotalBytes = 0;
+        this.progressSpeedMbps = 0;
         this.clearStatus();
         bridge.getVhVersion().then((v) => {
           this.vhVersion = v;
@@ -188,7 +208,11 @@ export class LauncherState implements ILauncherState {
         this.installing = false;
         this.launching = false;
         if (!wasLaunching) this.patchState = "error";
-        this.progressStatus = "Operasi gagal.";
+        this.progressPercent = 0;
+        this.progressStatus = "";
+        this.progressDownloadedBytes = 0;
+        this.progressTotalBytes = 0;
+        this.progressSpeedMbps = 0;
         this.setStatus("Operasi gagal. Silakan coba lagi.", err || "Tidak ada detail error.");
       },
       onLaunchError: (err) => {
@@ -211,11 +235,22 @@ export class LauncherState implements ILauncherState {
         this.logUploadLocalPath = res.localPath || "";
         this.logUploadStatus = res.success
           ? "Log berhasil diunggah!"
-          : `Gagal: ${res.message || ""}`;
-        this.setStatus(
-          res.success ? "Log berhasil diunggah." : "Pengunggahan log gagal.",
-          res.message || this.logUploadStatus,
-        );
+          : res.localPath
+            ? "Bundle lokal tersedia."
+            : `Gagal: ${res.message || ""}`;
+        if (res.success) {
+          this.setStatus("Log berhasil diunggah.", res.message || this.logUploadStatus);
+        } else if (res.localPath) {
+          this.setStatus(
+            "Bundle log diagnostik disimpan lokal.",
+            res.message || "Upload remote tidak tersedia; bundle dapat dibagikan manual.",
+          );
+        } else {
+          this.setStatus(
+            "Pengunggahan log gagal.",
+            res.message || this.logUploadStatus,
+          );
+        }
       },
       onTelemetryStatus: (payload) => {
         this.telemetryStatus = payload.status;
@@ -241,6 +276,9 @@ export class LauncherState implements ILauncherState {
         this.launcherUpdateProgress = 0;
         this.launcherUpdateError = "";
         this.launcherUpdateStatus = "Menunggu konfirmasi.";
+      },
+      onLauncherUpdateStatus: (payload) => {
+        this.showToast(payload.message, payload.kind);
       },
       onLauncherUpdateStaged: () => {
         this.launcherUpdateStatus = "Update terverifikasi dan siap diterapkan.";

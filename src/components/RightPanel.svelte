@@ -70,10 +70,15 @@
 
   async function handleCheckPatch() {
     closeDropdown();
-    if (!appState.gamePath) return;
+    if (!appState.gamePath) {
+      appState.setStatus('Pilih folder game terlebih dahulu.');
+      return;
+    }
+    appState.patchStatusCheckPending = true;
     try {
       await bridge.checkPatchStatus(appState.gamePath, appState.config.installMethod);
     } catch (error) {
+      appState.patchStatusCheckPending = false;
       appState.setStatus('Gagal memeriksa status patch.', errorMessage(error));
     }
   }
@@ -90,7 +95,11 @@
   async function handleForceQuit() {
     closeDropdown();
     try {
-      await bridge.forceQuitGame();
+      const terminated = await bridge.forceQuitGame();
+      appState.showToast(
+        terminated ? 'Game berhasil dipaksa tutup.' : 'Game tidak sedang berjalan.',
+        terminated ? 'ok' : 'info',
+      );
     } catch (error) {
       appState.setStatus('Gagal menutup game.', errorMessage(error));
     }
@@ -107,9 +116,8 @@
 
   async function handleUploadLogs() {
     closeDropdown();
-    if (!appState.gamePath) return;
-    if (!appState.config.diagnosticsUploadEnabled) {
-      appState.setStatus('Upload diagnostics nonaktif.', 'Aktifkan izin upload di Pengaturan.');
+    if (!appState.gamePath) {
+      appState.setStatus('Pilih folder game terlebih dahulu.');
       return;
     }
     try {
@@ -127,6 +135,16 @@
       appState.setStatus('Cache tampilan berhasil direset.');
     } catch (error) {
       appState.setStatus('Gagal mereset cache tampilan.', errorMessage(error));
+    }
+  }
+
+  async function handleSupport() {
+    closeDropdown();
+    try {
+      await bridge.openSupport();
+      appState.showToast('Halaman dukungan dibuka di browser.', 'ok');
+    } catch (error) {
+      appState.setStatus('Gagal membuka halaman dukungan.', errorMessage(error));
     }
   }
 
@@ -297,7 +315,7 @@
   {/if}
 
   <!-- Progress Section when Installing -->
-  {#if appState.installing || appState.progressPercent > 0}
+  {#if appState.installing}
     <div class="progress" id="progressSection">
       <div class="progress__head">
         <span id="progressText">{appState.progressStatus}</span>
@@ -366,12 +384,12 @@
       Reset cache tampilan
     </button>
 
-    <a class="rp-dropdown__item rp-dropdown__item--trakteer" id="menuDukung" href="https://trakteer.id/TitoTFP" target="_blank" rel="noopener noreferrer" title="Dukung Kami di Trakteer">
+    <button class="rp-dropdown__item rp-dropdown__item--trakteer" id="menuDukung" onclick={handleSupport} title="Dukung Kami di Trakteer" type="button">
       <svg viewBox="0 0 24 24" width="14" height="14">
         <path fill="currentColor" d="M7 3h8.5a4.5 4.5 0 0 1 .5 8.97V13a5 5 0 0 1-5 5H7a5 5 0 0 1-5-5V8a5 5 0 0 1 5-5Zm9 2.1v4.8A2.5 2.5 0 0 0 16 5.1ZM7.1 8.2c-1.1 0-1.9.83-1.9 1.88 0 2.18 3.52 4.1 3.8 4.1s3.8-1.92 3.8-4.1c0-1.05-.8-1.88-1.9-1.88-.74 0-1.45.43-1.9 1.08-.45-.65-1.16-1.08-1.9-1.08ZM5 20h12v2H5v-2Z" />
       </svg>
       Dukung Kami
-    </a>
+    </button>
 
     <div class="rp-dropdown__sep"></div>
 

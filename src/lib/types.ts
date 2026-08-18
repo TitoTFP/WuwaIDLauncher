@@ -162,9 +162,15 @@ export interface PatchStatusPayload {
 
 export interface LogUploadResult {
   success: boolean;
+  uploaded?: boolean;
   message?: string;
   url?: string;
   localPath?: string;
+}
+
+export interface LauncherUpdateStatusPayload {
+  kind: "ok" | "info";
+  message: string;
 }
 
 export interface TelemetryStatusPayload {
@@ -214,6 +220,7 @@ export interface ILauncherState {
   gameOrigin: "launcher" | "external";
   gamePath: string;
   patchState: PatchState;
+  patchStatusCheckPending: boolean;
   progressPercent: number;
   progressStatus: string;
   progressDownloadedBytes: number;

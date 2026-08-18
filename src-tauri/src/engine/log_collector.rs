@@ -5,8 +5,24 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
-pub const DEFAULT_LOG_UPLOAD_ENDPOINT: &str = "https://wuwa-logs.titofp.workers.dev/upload";
+pub const DEFAULT_LOG_UPLOAD_ENDPOINT: &str = "";
 pub const MAX_UPLOAD_ATTEMPTS: usize = 2;
+
+pub fn configured_upload_endpoint() -> Option<String> {
+    let endpoint = std::env::var("WUWAID_LOG_UPLOAD_ENDPOINT")
+        .unwrap_or_else(|_| DEFAULT_LOG_UPLOAD_ENDPOINT.to_string());
+    let endpoint = endpoint.trim();
+    if endpoint.is_empty() {
+        return None;
+    }
+    let Some(host) = endpoint.strip_prefix("https://") else {
+        return None;
+    };
+    if host.is_empty() || host.chars().any(char::is_whitespace) {
+        return None;
+    }
+    Some(endpoint.to_string())
+}
 
 pub fn max_upload_attempts() -> usize {
     MAX_UPLOAD_ATTEMPTS
@@ -123,8 +139,11 @@ pub async fn upload_logs_zip(
     zip_data: Vec<u8>,
     client_id: &str,
 ) -> Result<String, String> {
+    let endpoint = configured_upload_endpoint().ok_or_else(|| {
+        "Endpoint upload diagnostics belum dikonfigurasi; bundle lokal tetap tersedia.".to_string()
+    })?;
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(8))
         .build()
         .map_err(|e| format!("Failed to create client: {}", e))?;
 
@@ -139,7 +158,7 @@ pub async fn upload_logs_zip(
             .part("file", part);
 
         match client
-            .post(DEFAULT_LOG_UPLOAD_ENDPOINT)
+            .post(&endpoint)
             .multipart(form)
             .send()
             .await
@@ -187,5 +206,10 @@ mod tests {
         let reader = Cursor::new(zip_bytes);
         let archive = zip::ZipArchive::new(reader).unwrap();
         assert!(archive.len() >= 2);
+    }
+
+    #[test]
+    fn upload_endpoint_requires_explicit_https_configuration() {
+        assert!(configured_upload_endpoint().is_none());
     }
 }

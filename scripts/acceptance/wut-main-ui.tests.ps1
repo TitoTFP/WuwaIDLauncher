@@ -4,6 +4,8 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $topBar = Get-Content -Raw -LiteralPath (Join-Path $root "src\components\TopBar.svelte")
 $app = Get-Content -Raw -LiteralPath (Join-Path $root "src\App.svelte")
 $modal = Get-Content -Raw -LiteralPath (Join-Path $root "src\components\UpdateModal.svelte")
+$rightPanel = Get-Content -Raw -LiteralPath (Join-Path $root "src\components\RightPanel.svelte")
+$bridge = Get-Content -Raw -LiteralPath (Join-Path $root "src\lib\bridge.ts")
 
 if ($topBar -match '>\s*PERFORMA\s*<' -or $topBar -match 'SETTINGS|LOGS|ABOUT') {
     throw "Top navigation still exposes a removed performance or legacy page"
@@ -20,6 +22,17 @@ foreach ($removed in @('PerformancePanel', 'page === ''performance''', 'getPerfo
 }
 if ($modal -match 'Versi \{version\}') {
     throw "Update modal still adds the legacy Versi prefix"
+}
+if ($rightPanel -match 'progressPercent\s*>\s*0' -or $rightPanel -notmatch '#if appState\.installing') {
+    throw "Progress UI is not restricted to an active installation"
+}
+foreach ($required in @('handleSupport', 'bridge.openSupport', 'menuDukung')) {
+    if ($rightPanel -notmatch [regex]::Escape($required)) {
+        throw "Main menu action is missing: $required"
+    }
+}
+if ($bridge -notmatch 'onLauncherUpdateStatus') {
+    throw "Launcher update status event bridge is missing"
 }
 
 Write-Output "PASS: main UI removal contract"

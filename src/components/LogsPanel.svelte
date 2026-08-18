@@ -24,9 +24,9 @@
   <section class="log-card">
     <h2>Status upload</h2>
     <p role="status">{appState.logUploadActive ? 'Sedang mengunggah log...' : appState.logUploadStatus || 'Belum ada upload pada sesi ini.'}</p>
-    {#if !appState.config.diagnosticsUploadEnabled}<p class="log-note">Upload dinonaktifkan. Aktifkan izin di Pengaturan untuk mengirim bundle diagnostik.</p>{/if}
+    {#if !appState.config.diagnosticsUploadEnabled}<p class="log-note">Upload remote dinonaktifkan. Aksi ini tetap dapat membuat bundle lokal; aktifkan izin di Pengaturan untuk mengirimkannya.</p>{/if}
     {#if appState.logUploadLocalPath}<p class="log-note">Bundle lokal tersedia: <code>{appState.logUploadLocalPath}</code></p>{/if}
-    <div class="log-actions"><button type="button" onclick={upload} disabled={!appState.gamePath || appState.logUploadActive || !appState.config.diagnosticsUploadEnabled}>Kirim log diagnostik</button><button type="button" onclick={resetCache}>Reset cache WebView</button></div>
+    <div class="log-actions"><button type="button" onclick={upload} disabled={!appState.gamePath || appState.logUploadActive}>Simpan / kirim log diagnostik</button><button type="button" onclick={resetCache}>Reset cache WebView</button></div>
   </section>
   <section class="log-card">
     <h2>Informasi sesi</h2>

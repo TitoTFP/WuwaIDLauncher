@@ -162,7 +162,7 @@
         <span>Izinkan telemetry anonim</span>
       </label>
       <p class="settings-note" role="status">Status telemetry: {appState.telemetryStatusMessage || (appState.config.telemetryEnabled ? 'Menunggu event game.' : 'Nonaktif.')}</p>
-      <p class="settings-note">Default kedua opsi ini nonaktif. Payload log disensor sebelum upload dan kegagalan tetap menghasilkan bundle lokal.</p>
+      <p class="settings-note">Default kedua opsi ini nonaktif. Payload log disensor sebelum upload; bundle lokal tetap dibuat saat upload tidak diizinkan atau endpoint tidak tersedia.</p>
     </section>
   </div>
 

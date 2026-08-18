@@ -13,6 +13,7 @@ const WUWAID_LATEST_DOWNLOAD_BASE_URL: &str =
     "https://github.com/TitoTFP/WuwaID/releases/latest/download/";
 const WUWAID_LATEST_CHECKSUMS_URL: &str =
     "https://github.com/TitoTFP/WuwaID/releases/latest/download/SHA256sums.txt";
+const SUPPORT_URL: &str = "https://trakteer.id/TitoTFP";
 
 fn media_manifest_url() -> String {
     std::env::var("WUWAID_ASSETS_URL").unwrap_or_else(|_| engine::media::ASSETS_URL.to_string())
@@ -582,7 +583,15 @@ fn check_launcher_update<R: Runtime>(app: AppHandle<R>) {
                     );
                 }
             }
-            Ok(None) => {}
+            Ok(None) => {
+                let _ = app_handle.emit(
+                    "onLauncherUpdateStatus",
+                    serde_json::json!({
+                        "kind": "ok",
+                        "message": "Launcher sudah menggunakan versi terbaru."
+                    }),
+                );
+            }
             Err(error) => {
                 let _ = app_handle.emit(
                     "onLauncherUpdateError",
@@ -591,6 +600,39 @@ fn check_launcher_update<R: Runtime>(app: AppHandle<R>) {
             }
         }
     });
+}
+
+#[tauri::command]
+fn open_support() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", SUPPORT_URL])
+            .spawn()
+            .map_err(|error| format!("Gagal membuka browser dukungan: {error}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(SUPPORT_URL)
+            .spawn()
+            .map_err(|error| format!("Gagal membuka browser dukungan: {error}"))?;
+        return Ok(());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(SUPPORT_URL)
+            .spawn()
+            .map_err(|error| format!("Gagal membuka browser dukungan: {error}"))?;
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    Err("Membuka browser dukungan tidak didukung pada platform ini.".to_string())
 }
 
 #[tauri::command]
@@ -1023,9 +1065,7 @@ fn get_log_upload_enabled() -> bool {
 fn upload_logs<R: Runtime>(app: AppHandle<R>, game_path: String) -> Result<(), String> {
     let settings = load_settings()
         .map_err(|error| format!("diagnostics_settings_failed: {error}"))?;
-    if !settings.settings.diagnostics_upload_enabled {
-        return Err("diagnostics_upload_disabled: aktifkan izin upload di Pengaturan.".to_string());
-    }
+    let upload_enabled = settings.settings.diagnostics_upload_enabled;
     let normalized_game_path = engine::path::normalize_game_path(&game_path)
         .ok_or_else(|| "invalid_game_path: folder game tidak valid.".to_string())?;
 
@@ -1039,11 +1079,21 @@ fn upload_logs<R: Runtime>(app: AppHandle<R>, game_path: String) -> Result<(), S
             Ok(zip_bytes) => {
                 let local_path =
                     engine::log_collector::save_logs_bundle(&zip_bytes, &appdata).ok();
+                if !upload_enabled {
+                    let _ = app_handle.emit("onLogUploadFinished", serde_json::json!({
+                        "success": false,
+                        "uploaded": false,
+                        "message": "Upload dinonaktifkan; bundle diagnostik lokal telah dibuat.",
+                        "localPath": local_path.as_ref().map(|path| path.to_string_lossy().to_string())
+                    }));
+                    return;
+                }
                 let client_id = engine::telemetry::get_or_create_client_id(&appdata);
                 match engine::log_collector::upload_logs_zip(zip_bytes, &client_id).await {
                     Ok(msg) => {
                         let _ = app_handle.emit("onLogUploadFinished", serde_json::json!({
                             "success": true,
+                            "uploaded": true,
                             "message": msg,
                             "localPath": local_path.as_ref().map(|path| path.to_string_lossy().to_string())
                         }));
@@ -1051,6 +1101,7 @@ fn upload_logs<R: Runtime>(app: AppHandle<R>, game_path: String) -> Result<(), S
                     Err(e) => {
                         let _ = app_handle.emit("onLogUploadFinished", serde_json::json!({
                             "success": false,
+                            "uploaded": false,
                             "message": e,
                             "localPath": local_path.as_ref().map(|path| path.to_string_lossy().to_string())
                         }));
@@ -1060,6 +1111,7 @@ fn upload_logs<R: Runtime>(app: AppHandle<R>, game_path: String) -> Result<(), S
             Err(e) => {
                 let _ = app_handle.emit("onLogUploadFinished", serde_json::json!({
                     "success": false,
+                    "uploaded": false,
                     "message": e
                 }));
             }
@@ -1529,24 +1581,26 @@ fn launch_game<R: Runtime>(
 }
 
 #[tauri::command]
-fn force_quit_game<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+fn force_quit_game<R: Runtime>(app: AppHandle<R>) -> Result<bool, String> {
     let active_path = app
         .try_state::<RuntimeCoordinator>()
         .and_then(|state| state.game_path.lock().ok().and_then(|value| value.clone()));
     if active_path.is_some() {
         mark_force_quit_requested(&app);
     }
-    let result = engine::runtime::force_quit_game();
-    if let Err(error) = result {
-        if engine::runtime::find_game_process_id().is_none() {
-            if let Some(path) = active_path {
-                let _ = engine::signature::restore_sig(&path);
+    let terminated = match engine::runtime::force_quit_game() {
+        Ok(terminated) => terminated,
+        Err(error) => {
+            if engine::runtime::find_game_process_id().is_none() {
+                if let Some(path) = active_path {
+                    let _ = engine::signature::restore_sig(&path);
+                }
+                set_launcher_process(&app, None, None);
             }
-            set_launcher_process(&app, None, None);
+            let _ = app.emit("onLaunchError", format!("force_quit_failed: {error}"));
+            return Err(error);
         }
-        let _ = app.emit("onLaunchError", format!("force_quit_failed: {error}"));
-        return Err(error);
-    }
+    };
     if let Some(path) = active_path {
         let _ = engine::signature::restore_sig(&path);
     }
@@ -1564,7 +1618,7 @@ fn force_quit_game<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
         let _ = window.set_focus();
     }
     log::info!("Force quit game requested");
-    Ok(())
+    Ok(terminated)
 }
 
 #[tauri::command]
@@ -1724,6 +1778,7 @@ pub fn run() {
             get_vh_version,
             check_and_sync_media,
             check_launcher_update,
+            open_support,
             get_vh_release_notes,
             perform_launcher_update,
             check_patch_status,
@@ -2255,7 +2310,7 @@ mod tests {
                 "upload_logs",
                 serde_json::json!({"gamePath": game.path().to_string_lossy()}),
             ),
-            Err("diagnostics_upload_disabled: aktifkan izin upload di Pengaturan.".to_string()),
+            Ok(()),
         );
         assert_ipc_response(
             &window,

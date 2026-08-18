@@ -4,6 +4,7 @@ import type {
   CleanupReport,
   InstallMethod,
   LauncherUpdatePayload,
+  LauncherUpdateStatusPayload,
   LogUploadResult,
   MediaProgressPayload,
   MediaReadyPayload,
@@ -69,8 +70,9 @@ export const bridge = {
     dx11: boolean,
     installMethod: InstallMethod,
   ): Promise<void> => invoke("launch_game", { gamePath, dx11, installMethod }),
-  forceQuitGame: (): Promise<void> => invoke("force_quit_game"),
+  forceQuitGame: (): Promise<boolean> => invoke("force_quit_game"),
   restartAsAdmin: (): Promise<void> => invoke("restart_as_admin"),
+  openSupport: (): Promise<void> => invoke("open_support"),
 
   // Diagnostic & Telemetry
   getLogUploadEnabled: (): Promise<boolean> => invoke("get_log_upload_enabled"),
@@ -99,6 +101,7 @@ export interface EventBridgeCallbacks {
   onTelemetryStatus?: (payload: TelemetryStatusPayload) => void;
   onLauncherUpdateProgress?: (percent: number, statusText: string) => void;
   onLauncherUpdateAvailable?: (payload: LauncherUpdatePayload) => void;
+  onLauncherUpdateStatus?: (payload: LauncherUpdateStatusPayload) => void;
   onLauncherUpdateStaged?: () => void;
   onLauncherUpdateRestarting?: () => void;
   onLauncherUpdateError?: (error: string) => void;
@@ -164,6 +167,9 @@ export async function setupEventBridge(
     ),
     addListener<LauncherUpdatePayload>("onLauncherUpdateAvailable", (p) =>
       callbacks.onLauncherUpdateAvailable?.(p),
+    ),
+    addListener<LauncherUpdateStatusPayload>("onLauncherUpdateStatus", (p) =>
+      callbacks.onLauncherUpdateStatus?.(p),
     ),
     addListener<void>("onLauncherUpdateStaged", () =>
       callbacks.onLauncherUpdateStaged?.(),
