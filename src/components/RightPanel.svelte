@@ -206,10 +206,12 @@
           true,
         );
         if (access !== 'ok') {
+          if (access === 'needs_admin') {
+            appState.openAdminPrompt(appState.gamePath);
+            return;
+          }
           appState.setStatus(
-            access === 'needs_admin'
-              ? 'Folder game membutuhkan hak Administrator.'
-              : 'Folder game tidak valid atau metode tidak didukung.',
+            'Folder game tidak valid atau metode tidak didukung.',
             access,
           );
           return;
@@ -247,45 +249,15 @@
 <svelte:window onclick={closeDropdown} />
 
 <aside class="right-panel" id="rightPanel">
-  {#if appState.statusMessage}
-    <div class="rp-status operation-status" role="status" aria-live="polite">
-      <div class="rp-status__row">
-        <div class="operation-status__title">{appState.statusMessage}</div>
-        <button class="operation-status__close" type="button" aria-label="Tutup pesan" onclick={() => appState.clearStatus()}>×</button>
-      </div>
-      {#if appState.diagnosticMessage && appState.diagnosticMessage !== appState.statusMessage}
-        <details class="operation-status__details">
-          <summary>Detail teknis</summary>
-          <code>{appState.diagnosticMessage}</code>
-        </details>
-      {/if}
-    </div>
-  {/if}
-
-  {#if appState.logUploadActive || appState.logUploadStatus}
-    <div class="rp-status operation-status" role="status" aria-live="polite">
-      <div class="operation-status__title">{appState.logUploadActive ? 'Mengunggah log diagnostik...' : appState.logUploadStatus}</div>
-    </div>
-  {/if}
-
   {#if appState.mediaStatus && appState.mediaStatus !== 'ready'}
-    <div class="rp-status operation-status" role="status" aria-live="polite">
-      <div class="operation-status__title">Media: {appState.mediaStatus}</div>
-      <div class="operation-status__details">{appState.mediaStatusMessage}</div>
+    <div class="rp-status" role="status" aria-live="polite">
+      <div class="rp-status__row">
+        <span class="rp-status__text">{appState.mediaStatusMessage}</span>
+        {#if appState.mediaProgress}<span class="rp-status__pct">{appState.mediaProgress.percent}%</span>{/if}
+      </div>
       {#if appState.mediaProgress}
         <div class="rp-status__bar"><div class="progress__fill" style="width: {appState.mediaProgress.percent}%;"></div></div>
       {/if}
-    </div>
-  {/if}
-
-  {#if appState.launcherUpdateStatus}
-    <div class="rp-status operation-status" role="status" aria-live="polite">
-      <div class="rp-status__row">
-        <span class="operation-status__title">Update launcher</span>
-        <span class="rp-status__pct">{appState.launcherUpdateProgress}%</span>
-      </div>
-      <div class="rp-status__bar"><div class="progress__fill" style="width: {appState.launcherUpdateProgress}%;"></div></div>
-      <div class="operation-status__details">{appState.launcherUpdateStatus}</div>
     </div>
   {/if}
 
@@ -482,44 +454,3 @@
     </div>
   </div>
 {/if}
-
-<style>
-  .operation-status {
-    color: var(--text-1, #f5f5f5);
-  }
-
-  .operation-status__title {
-    color: var(--cyan-accent, #9ee8ff);
-    font-size: 12px;
-    line-height: 1.35;
-  }
-
-  .operation-status__close {
-    margin-left: auto;
-    padding: 0 4px;
-    border: 0;
-    background: transparent;
-    color: var(--text-2, #b6bdcf);
-    font-size: 18px;
-    line-height: 1;
-    cursor: pointer;
-  }
-
-  .operation-status__details {
-    color: var(--text-2, #b6bdcf);
-    font-size: 10px;
-    line-height: 1.35;
-  }
-
-  .operation-status__details code {
-    display: block;
-    margin-top: 5px;
-    white-space: pre-wrap;
-    user-select: text;
-  }
-
-  .operation-status summary {
-    cursor: pointer;
-    color: var(--accent-gold, #f4d48a);
-  }
-</style>

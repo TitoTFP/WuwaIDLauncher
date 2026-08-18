@@ -2,14 +2,9 @@
   import { appState } from '../lib/launcherState.svelte';
   import { bridge } from '../lib/bridge';
   import { INSTALL_METHOD_OPTIONS } from '../lib/types';
-  import type { InstallMethod, PageId } from '../lib/types';
+  import type { InstallMethod } from '../lib/types';
 
   let methodMenuOpen = $state(false);
-
-  function setPage(page: PageId) {
-    if (appState.gameRunning && page !== 'home') return;
-    appState.page = page;
-  }
 
   async function selectMethod(method: InstallMethod) {
     if (appState.config.installMethod === method) {
@@ -34,7 +29,7 @@
     } catch (error) {
       appState.config.installMethod = previous;
       const detail = error instanceof Error ? error.message : String(error);
-      appState.setStatus('Gagal mengganti metode instalasi.', detail);
+      appState.showToast(`Gagal mengganti metode instalasi.\n${detail}`, 'err');
     }
   }
 
@@ -45,12 +40,12 @@
 
   async function handleMinimize() {
     try { await bridge.minimizeWindow(); }
-    catch (error) { appState.setStatus('Gagal meminimalkan launcher.', error instanceof Error ? error.message : String(error)); }
+    catch (error) { appState.showToast(`Gagal meminimalkan launcher: ${error instanceof Error ? error.message : String(error)}`, 'err'); }
   }
 
   async function handleClose() {
     try { await bridge.closeWindow(); }
-    catch (error) { appState.setStatus('Gagal menutup launcher.', error instanceof Error ? error.message : String(error)); }
+    catch (error) { appState.showToast(`Gagal menutup launcher: ${error instanceof Error ? error.message : String(error)}`, 'err'); }
   }
 </script>
 
@@ -64,26 +59,16 @@
   <div class="top-bar__right">
     <nav class="top-nav" id="topNav">
       <button
-        class="top-nav__item"
-        class:active={appState.page === 'home'}
-        onclick={() => setPage('home')}
+        class="top-nav__item active"
+        data-page="home"
         type="button"
       >
         HOME
       </button>
 
-      {#each [{ id: 'settings', label: 'SETTINGS' }, { id: 'logs', label: 'LOGS' }, { id: 'about', label: 'ABOUT' }] as item}
-        <button
-          class="top-nav__item"
-          class:active={appState.page === item.id}
-          disabled={appState.gameRunning}
-          onclick={() => setPage(item.id as PageId)}
-          type="button"
-        >{item.label}</button>
-      {/each}
-
       <button
         class="top-nav__item top-nav__item--menu"
+        class:open={methodMenuOpen}
         id="methodNavBtn"
         onclick={toggleMethodMenu}
         type="button"
@@ -97,7 +82,7 @@
     {#if methodMenuOpen}
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="method-menu" id="methodMenu" onclick={(e) => e.stopPropagation()}>
+      <div class="method-menu open" id="methodMenu" onclick={(e) => e.stopPropagation()}>
         {#each INSTALL_METHOD_OPTIONS as option}
           <button
             class="method-menu__item"

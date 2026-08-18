@@ -78,6 +78,7 @@ export const bridge = {
     invoke("upload_logs", { gamePath }),
   notifyUiInteractive: (): Promise<void> => invoke("notify_ui_interactive"),
   resetWebViewCache: (): Promise<void> => invoke("reset_webview_cache"),
+
 };
 
 // Event listener helper for Tauri events

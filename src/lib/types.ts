@@ -1,5 +1,3 @@
-export type PageId = "home" | "settings" | "logs" | "about";
-
 export type InstallMethod = "resource_mount" | "loader" | "signature_bypass";
 
 export interface CleanupReport {
@@ -32,7 +30,13 @@ export const INSTALL_METHOD_OPTIONS: readonly InstallMethodOption[] = [
   },
 ];
 
-export type VisualMode = "full" | "light" | "off";
+export type ToastKind = "ok" | "err" | "info";
+
+export interface ToastMessage {
+  id: number;
+  message: string;
+  kind: ToastKind;
+}
 
 export type PatchState =
   | "unchecked"
@@ -45,7 +49,6 @@ export type PatchState =
 export interface LauncherConfig {
   gamePath: string;
   installMethod: InstallMethod;
-  launcherVisualMode: VisualMode;
   dx11: boolean;
   autoCheckUpdate: boolean;
   bgmVolume: number;
@@ -57,7 +60,6 @@ export interface LauncherConfig {
 export const DEFAULT_LAUNCHER_CONFIG: LauncherConfig = {
   gamePath: "",
   installMethod: "resource_mount",
-  launcherVisualMode: "full",
   dx11: false,
   autoCheckUpdate: true,
   bgmVolume: 0.35,
@@ -113,11 +115,9 @@ export function normalizeLauncherConfig(raw: unknown): NormalizedConfigResult {
   }
   config.installMethod = method;
 
-  if (value.launcherVisualMode === "full" || value.launcherVisualMode === "light" || value.launcherVisualMode === "off") {
-    config.launcherVisualMode = value.launcherVisualMode;
-  } else if ("launcherVisualMode" in value) {
+  if ("launcherVisualMode" in value || "perf" in value) {
     repaired = true;
-    diagnostics.push("Mode visual tidak didukung; memakai full.");
+    diagnostics.push("Pengaturan performa lama dihapus; launcher memakai mode Penuh.");
   }
 
   for (const [key, fallback] of [["dx11", config.dx11], ["autoCheckUpdate", config.autoCheckUpdate], ["bgmEnabled", config.bgmEnabled], ["diagnosticsUploadEnabled", config.diagnosticsUploadEnabled], ["telemetryEnabled", config.telemetryEnabled]] as const) {
@@ -206,7 +206,7 @@ export interface LauncherUpdatePayload {
 }
 
 export interface ILauncherState {
-  page: PageId;
+  page: "home";
   installing: boolean;
   installed: boolean;
   launching: boolean;
@@ -221,7 +221,6 @@ export interface ILauncherState {
   progressSpeedMbps: number;
   appVersion: string;
   vhVersion: string;
-  visualMode: VisualMode;
   statusMessage: string;
   diagnosticMessage: string;
   logUploadActive: boolean;
@@ -244,9 +243,15 @@ export interface ILauncherState {
   releaseNotesLoading: boolean;
   launcherUpdateAvailable: boolean;
   launcherUpdatePayload: LauncherUpdatePayload | null;
+  toasts: ToastMessage[];
+  adminPromptOpen: boolean;
+  adminPromptPath: string;
   config: LauncherConfig;
   setStatus(message: string, diagnostic?: string): void;
   clearStatus(): void;
+  showToast(message: string, kind?: ToastKind): void;
+  openAdminPrompt(path: string): void;
+  closeAdminPrompt(): void;
   dismissLauncherUpdate(): void;
   init(): Promise<void>;
   saveConfig(): Promise<void>;

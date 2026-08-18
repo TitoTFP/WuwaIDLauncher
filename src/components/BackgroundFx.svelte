@@ -1,14 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { appState } from '../lib/launcherState.svelte';
-  import type { VisualMode } from '../lib/types';
 
   let videoElement: HTMLVideoElement | null = $state(null);
   let canvasElement: HTMLCanvasElement | null = $state(null);
   let videoLoaded = $state(false);
 
-  let visualMode = $derived<VisualMode>(appState.config.launcherVisualMode || 'full');
-  let isVideoAllowed = $derived(visualMode === 'full' && !appState.gameRunning);
+  let isVideoAllowed = $derived(!appState.gameRunning);
 
   $effect(() => {
     if (!videoElement) return;
@@ -89,7 +87,7 @@
 
     function render() {
       if (!ctx) return;
-      if (appState.gameRunning || (visualMode as string) === 'off') {
+      if (appState.gameRunning) {
         ctx.clearRect(0, 0, width, height);
         animFrameId = requestAnimationFrame(render);
         return;
@@ -128,7 +126,7 @@
   });
 </script>
 
-<div class="bg-layer" data-visual-mode={visualMode}>
+<div class="bg-layer">
   <video
     bind:this={videoElement}
     id="bgVideo"
@@ -150,4 +148,6 @@
   </div>
 </div>
 
+<canvas id="audioViz" class="audio-viz"></canvas>
+<canvas id="waterFx" class="water-fx"></canvas>
 <canvas bind:this={canvasElement} id="particleCanvas"></canvas>

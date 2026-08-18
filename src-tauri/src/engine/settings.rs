@@ -8,7 +8,6 @@ use serde_json::{Map, Value};
 pub struct LauncherSettings {
     pub game_path: String,
     pub install_method: InstallMethod,
-    pub launcher_visual_mode: String,
     pub dx11: bool,
     pub auto_check_update: bool,
     pub bgm_volume: f64,
@@ -22,7 +21,6 @@ impl Default for LauncherSettings {
         Self {
             game_path: String::new(),
             install_method: InstallMethod::ResourceMount,
-            launcher_visual_mode: "full".to_string(),
             dx11: false,
             auto_check_update: true,
             bgm_volume: 0.35,
@@ -141,19 +139,12 @@ pub fn normalize_settings_json(raw: &str) -> SettingsLoadResult {
         }
     }
 
-    if let Some(value) = object.get("launcherVisualMode") {
-        match value.as_str() {
-            Some("full" | "light" | "off") => {
-                settings.launcher_visual_mode = value.as_str().unwrap().to_string();
-            }
-            _ => {
-                repaired = true;
-                diagnostic(
-                    &mut diagnostics,
-                    "Mode visual tidak didukung; memakai full.",
-                );
-            }
-        }
+    if object.contains_key("launcherVisualMode") || object.contains_key("perf") {
+        repaired = true;
+        diagnostic(
+            &mut diagnostics,
+            "Pengaturan performa lama dihapus; launcher memakai mode Penuh.",
+        );
     }
 
     read_bool(

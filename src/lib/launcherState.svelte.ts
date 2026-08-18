@@ -9,14 +9,14 @@ import type {
   LauncherUpdatePayload,
   MediaProgressPayload,
   MediaStatusPayload,
-  PageId,
   PatchState,
   ReleaseNotePayload,
-  VisualMode,
+  ToastKind,
+  ToastMessage,
 } from "./types";
 
 export class LauncherState implements ILauncherState {
-  page: PageId = $state<PageId>("home");
+  page: "home" = $state("home");
   installing: boolean = $state<boolean>(false);
   installed: boolean = $state<boolean>(false);
   launching: boolean = $state<boolean>(false);
@@ -33,7 +33,6 @@ export class LauncherState implements ILauncherState {
   progressSpeedMbps: number = $state<number>(0);
   appVersion: string = $state<string>("2.6.1");
   vhVersion: string = $state<string>("");
-  visualMode: VisualMode = $state<VisualMode>("full");
   statusMessage: string = $state<string>("");
   diagnosticMessage: string = $state<string>("");
   logUploadActive: boolean = $state<boolean>(false);
@@ -63,6 +62,10 @@ export class LauncherState implements ILauncherState {
   launcherUpdateAvailable: boolean = $state<boolean>(false);
   launcherUpdatePayload: LauncherUpdatePayload | null =
     $state<LauncherUpdatePayload | null>(null);
+  toasts: ToastMessage[] = $state<ToastMessage[]>([]);
+  private toastSequence = 0;
+  adminPromptOpen: boolean = $state(false);
+  adminPromptPath: string = $state("");
 
   config: LauncherConfig = $state<LauncherConfig>({
     ...DEFAULT_LAUNCHER_CONFIG,
@@ -71,11 +74,33 @@ export class LauncherState implements ILauncherState {
   setStatus(message: string, diagnostic = message) {
     this.statusMessage = message;
     this.diagnosticMessage = diagnostic;
+    const kind = /gagal|tidak|error|invalid|konflik|failed/i.test(message)
+      ? "err"
+      : "info";
+    const text = diagnostic && diagnostic !== message ? `${message}\n${diagnostic}` : message;
+    this.showToast(text, kind);
   }
 
   clearStatus() {
     this.statusMessage = "";
     this.diagnosticMessage = "";
+  }
+
+  showToast(message: string, kind: ToastKind = "info") {
+    const toast = { id: ++this.toastSequence, message, kind };
+    this.toasts = [...this.toasts, toast];
+    window.setTimeout(() => {
+      this.toasts = this.toasts.filter((item) => item.id !== toast.id);
+    }, 4200);
+  }
+
+  openAdminPrompt(path: string) {
+    this.adminPromptPath = path;
+    this.adminPromptOpen = true;
+  }
+
+  closeAdminPrompt() {
+    this.adminPromptOpen = false;
   }
 
   dismissLauncherUpdate() {
@@ -101,7 +126,6 @@ export class LauncherState implements ILauncherState {
       const normalized = normalizeLauncherConfig(result.settings);
       this.config = normalized.config;
       this.gamePath = this.config.gamePath;
-      this.visualMode = this.config.launcherVisualMode;
       this.bgmVolume = this.config.bgmVolume;
       if (result.diagnostics.length || normalized.diagnostics.length) {
         const diagnostics = [...result.diagnostics, ...normalized.diagnostics];
@@ -208,9 +232,8 @@ export class LauncherState implements ILauncherState {
         this.setStatus("Launcher sedang memulai ulang untuk menerapkan update.");
       },
       onLauncherUpdateError: (error) => {
-        this.launcherUpdateError = error;
-        this.launcherUpdateStatus = "Update gagal.";
-        this.setStatus("Update launcher gagal.", error);
+        this.dismissLauncherUpdate();
+        this.showToast(`Pembaruan gagal: ${error}`, "err");
       },
       onLauncherUpdateAvailable: (payload) => {
         this.launcherUpdateAvailable = true;
@@ -218,11 +241,10 @@ export class LauncherState implements ILauncherState {
         this.launcherUpdateProgress = 0;
         this.launcherUpdateError = "";
         this.launcherUpdateStatus = "Menunggu konfirmasi.";
-        this.setStatus(`Update launcher tersedia: v${payload.version}.`);
       },
       onLauncherUpdateStaged: () => {
         this.launcherUpdateStatus = "Update terverifikasi dan siap diterapkan.";
-        this.setStatus("Update launcher sudah diverifikasi.");
+        this.showToast("Update launcher sudah diverifikasi.", "ok");
       },
       onMediaReady: (payload) => {
         this.mediaStatus = "ready";

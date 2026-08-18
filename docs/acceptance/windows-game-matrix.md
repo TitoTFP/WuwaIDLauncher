@@ -15,6 +15,61 @@ utama pengguna.
    folder temporary. Artefak yang boleh tertinggal hanya artefak ber-owner marker
    yang sengaja sedang diuji.
 
+## Runner contract (WUT-30)
+
+Runner PowerShell membuat child folder ber-ID run di bawah `FixtureRoot`. Runner
+hanya boleh menerima artifact release, output evidence, dan fixture yang berada
+di lokasi terpisah; `FixtureRoot` yang sama/overlap dengan `GamePath` ditolak
+sebelum fixture dibuat.
+
+Contoh artifact-only automated run:
+
+    $runRoot = Join-Path $env:TEMP "wuwaid-release-gate"
+    $artifactRoot = "E:\Wuwa Mod\WuwaIDLauncher\src-tauri\target\release"
+    $outputRoot = Join-Path $runRoot "evidence"
+    $fixtureRoot = Join-Path $runRoot "fixtures"
+    pwsh -NoProfile -File .\scripts\acceptance\windows-release-gate.ps1 `
+      -Mode automated `
+      -ArtifactRoot $artifactRoot `
+      -OutputRoot $outputRoot `
+      -FixtureRoot $fixtureRoot
+
+Untuk menjalankan full WUT-31 command gate, tambahkan `-RunCommandGate`:
+
+    pwsh -NoProfile -File .\scripts\acceptance\windows-release-gate.ps1 `
+      -Mode automated `
+      -ArtifactRoot $artifactRoot `
+      -OutputRoot $outputRoot `
+      -FixtureRoot $fixtureRoot `
+      -RunCommandGate
+
+Flag tersebut menjalankan dan menyimpan log terpisah untuk `npm run check`,
+`npm run build`, Cargo all-target tests, dan `npm run tauri -- build`. Flag
+dibuat opt-in karena Tauri build memutasi output build dan dapat memerlukan
+beberapa menit; artifact gate tetap berjalan pada setiap `automated` run.
+
+Untuk menjalankan preflight manual pada dedicated game copy, tambahkan
+`-Mode manual -GamePath "D:\Wuthering Waves-Test"`. `-Mode all` menjalankan
+keduanya. Runner mengembalikan exit code `0` untuk PASS, `1` untuk FAIL, dan
+`2` untuk BLOCKED; path JSON report selalu dicetak untuk run yang sudah mulai.
+
+Report mencatat `runId`, timestamps, scenario status, owner marker, baseline
+snapshot SHA-256, evidence path, dan cleanup result. Run yang seluruhnya PASS
+menghapus hanya child fixture miliknya. Run FAIL/BLOCKED mempertahankan child
+fixture dan evidence untuk diagnosis; file asing di parent fixture tanpa owner
+marker tidak pernah dihapus.
+
+Artifact gate mencari executable standalone dan bundle release pada root atau
+`bundle/release`, lalu memverifikasi versi konsisten dari `package.json`,
+`src-tauri/Cargo.toml`, dan `src-tauri/tauri.conf.json`. Lima configured icon
+files wajib tersedia. `SHA256sums.txt` wajib cocok untuk ZIP, MSI, dan NSIS;
+hash executable standalone juga dihitung dan dicatat. ZIP wajib berisi
+`wuwaid-launcher.exe` dan tidak boleh memiliki path traversal.
+
+Contract test runner:
+
+    pwsh -NoProfile -File .\scripts\acceptance\windows-release-gate.tests.ps1
+
 ## Matrix
 
 | Skenario | Fixture / kondisi | Hasil yang harus terlihat | Evidence |

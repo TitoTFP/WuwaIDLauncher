@@ -24,7 +24,7 @@
 - Create: E:\Wuwa Mod\WuwaIDLauncher\scripts\acceptance\windows-release-gate.tests.ps1
 - Create: E:\Wuwa Mod\WuwaIDLauncher\scripts\acceptance\windows-release-gate.ps1
 
-- [ ] **Step 1: Write the failing contract test**
+- [x] **Step 1: Write the failing contract test**
 
 The test script must invoke the runner with an artifact folder and temporary
 output folder, then assert that the runner returns a report containing:
@@ -48,21 +48,21 @@ Run:
 Expected first result: FAIL because the runner and report contract do not
 exist yet.
 
-- [ ] **Step 2: Implement the minimal runner input validation**
+- [x] **Step 2: Implement the minimal runner input validation**
 
 Implement parameters Mode, ArtifactRoot, OutputRoot, FixtureRoot, and optional
 GamePath. Reject missing artifact paths, a missing required executable, a
 fixture path equal to the supplied game path, and unsupported mode values before
 creating or mutating a fixture.
 
-- [ ] **Step 3: Implement report creation**
+- [x] **Step 3: Implement report creation**
 
 Create a run ID from the current UTC timestamp and process ID. Store each
 scenario as an object with name, status, startedAt, finishedAt, evidence, and
 message. Write a JSON report to OutputRoot and return its absolute path on
 success.
 
-- [ ] **Step 4: Run the contract test again**
+- [x] **Step 4: Run the contract test again**
 
 Run the same PowerShell test. Expected result: PASS with only the initial
 input/report scenarios present.
@@ -74,7 +74,7 @@ input/report scenarios present.
 - Modify: E:\Wuwa Mod\WuwaIDLauncher\scripts\acceptance\windows-release-gate.tests.ps1
 - Modify: E:\Wuwa Mod\WuwaIDLauncher\docs\acceptance\windows-game-matrix.md
 
-- [ ] **Step 1: Add failing artifact assertions**
+- [x] **Step 1: Add failing artifact assertions**
 
 The test fixture must create a small checksum manifest for known temporary
 files and assert that the runner reports:
@@ -89,7 +89,7 @@ files and assert that the runner reports:
 The test must also assert that a deliberately changed checksum is reported as
 FAIL and never as PASS.
 
-- [ ] **Step 2: Implement artifact checks**
+- [x] **Step 2: Implement artifact checks**
 
 Validate that the release directory contains:
 
@@ -104,10 +104,13 @@ files exist, calculate SHA-256 for each release asset, and compare it to
 SHA256sums.txt. A mismatch produces FAIL and stops downstream artifact
 scenarios.
 
-- [ ] **Step 3: Add the local automated command gate**
+- [x] **Step 3: Add the local automated command gate**
 
 Run these commands from the workspace root and record exit codes and output
 paths:
+
+The runner executes this command set when invoked with `-RunCommandGate`.
+Artifact-only runs omit the flag so contract tests do not rebuild the workspace.
 
     npm run check
     npm run build
@@ -118,7 +121,7 @@ paths:
 The runner marks the scenario FAIL on any non-zero exit code and includes the
 command output path in evidence.
 
-- [ ] **Step 4: Verify artifact gate**
+- [x] **Step 4: Verify artifact gate**
 
 Run the PowerShell contract test against the current release folder. Expected
 result: all artifact/version/checksum scenarios PASS and a tampered checksum
@@ -131,7 +134,7 @@ scenario FAIL.
 - Modify: E:\Wuwa Mod\WuwaIDLauncher\scripts\acceptance\windows-release-gate.tests.ps1
 - Modify: E:\Wuwa Mod\WuwaIDLauncher\docs\acceptance\windows-game-matrix.md
 
-- [ ] **Step 1: Define the fixture layout**
+- [x] **Step 1: Define the fixture layout**
 
 Create only under FixtureRoot:
 
@@ -142,20 +145,20 @@ Create only under FixtureRoot:
 Copy any required source fixture data into that directory, record a recursive
 baseline hash, and write an owner marker identifying the current run.
 
-- [ ] **Step 2: Add mutation and cleanup assertions**
+- [x] **Step 2: Add mutation and cleanup assertions**
 
 The test must verify that a successful run removes the fixture and that a
 forced failure leaves the fixture path and evidence available. It must also
 verify that a file without the runner owner marker is preserved.
 
-- [ ] **Step 3: Implement safe cleanup**
+- [x] **Step 3: Implement safe cleanup**
 
 Use an explicit run-owned root and owner marker. On success, remove only the
 run-owned temporary root. On failure, do not perform recursive cleanup; report
 the exact path for diagnosis. Never pass a workspace root, drive root, or user
 game root to cleanup.
 
-- [ ] **Step 4: Run fixture contract tests**
+- [x] **Step 4: Run fixture contract tests**
 
 Run:
 

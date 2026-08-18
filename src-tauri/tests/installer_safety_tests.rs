@@ -7,14 +7,30 @@ fn game_dir() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempdir().unwrap();
     let game = tmp.path().join("Wuthering Waves");
     let resources = game.join("Client/Saved/Resources/2.6.0");
+    let mount_dir = resources.join("Mount");
+    let official_dir = resources.join("Lang_en/Base");
     fs::create_dir_all(game.join("Client/Binaries/Win64")).unwrap();
-    fs::create_dir_all(&resources).unwrap();
+    fs::create_dir_all(&mount_dir).unwrap();
+    fs::create_dir_all(&official_dir).unwrap();
     fs::write(
         game.join("Client/Binaries/Win64/Client-Win64-Shipping.exe"),
         b"exe",
     )
     .unwrap();
     fs::write(resources.join("ResManifest"), b"manifest").unwrap();
+    let official_pak = official_dir.join("pakchunk10-WindowsNoEditor.pak");
+    let official_sig = official_dir.join("pakchunk10-WindowsNoEditor.sig");
+    fs::write(&official_pak, b"OFFICIAL_RESOURCE_PAK").unwrap();
+    fs::write(&official_sig, b"OFFICIAL_RESOURCE_SIG").unwrap();
+    fs::write(
+        mount_dir.join("MountLang_en.txt"),
+        format!(
+            "::Mount::\nLang_en/Base/pakchunk10-WindowsNoEditor,4,{},{},,\n::Del::\n",
+            installer::compute_sha1(&official_pak).unwrap(),
+            installer::compute_sha1(&official_sig).unwrap(),
+        ),
+    )
+    .unwrap();
     fs::create_dir_all(path::get_pak_dir(&game)).unwrap();
     fs::write(signature::get_sig_path(&game), b"original-signature").unwrap();
     (tmp, game)
@@ -58,7 +74,7 @@ fn failed_deploy_restores_foreign_mount_targets() {
 
     let source = game.join("valid.pak");
     valid_pak(&source);
-    fs::remove_file(signature::get_sig_path(&game)).unwrap();
+    fs::remove_file(&plan.source_signature_path).unwrap();
 
     assert!(installer::deploy_resource_mount(&plan, &source, &game).is_err());
     assert_eq!(fs::read(&plan.pak_path).unwrap(), b"foreign-pak");

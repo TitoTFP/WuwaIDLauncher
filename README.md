@@ -72,7 +72,6 @@ Dokumen acceptance lengkap berada di docs/acceptance/windows-game-matrix.md.
 
 - **Window Minimization ke System Tray:** Launcher otomatis menyembunyikan jendela ke system tray saat game berjalan dengan footprint RAM ultra-rendah (<15MB Working Set).
 - **Heartbeat Pemain Aktif Anonim (opt-in):** Telemetri default nonaktif dan hanya dikirim setelah pengguna mengaktifkannya di Settings.
-- **High Performance Mode:** Manajemen konfigurasi `Engine.ini` untuk optimasi performa grafis dan kelancaran frametime game.
 
 ### 🛡️ Keamanan, Diagnostik & Menu Cepat (8 Hamburger Actions)
 
@@ -257,7 +256,6 @@ Terima kasih kepada proyek-proyek berikut atas inspirasi dan ekosistem open-sour
 
 - **[Tauri Apps](https://tauri.app/)** — Framework desktop multi-platform yang cepat dan aman.
 - **[Svelte Team](https://svelte.dev/)** — Framework reaktif modern Svelte 5.
-- **[AlteriaX/WuWa-Configs](https://github.com/AlteriaX/WuWa-Configs)** — Preset konfigurasi Engine.ini untuk High Performance Mode.
 - **[CallMeDangDev](https://github.com/CallMeDangDev)** — Referensi arsitektur launcher mod Wuthering Waves.
 - **Komunitas & Penerjemah Wuthering Waves Indonesia** — Dedikasi dalam menghadirkan terjemahan Bahasa Indonesia berkualitas bagi pemain Sol3.
 

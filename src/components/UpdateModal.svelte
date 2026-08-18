@@ -34,7 +34,8 @@
       await bridge.performLauncherUpdate(version, zipUrl, checksumsUrl || undefined);
     } catch (err) {
       isUpdating = false;
-      appState.setStatus('Update launcher gagal.', err instanceof Error ? err.message : String(err));
+      onclose?.();
+      appState.showToast(`Pembaruan gagal: ${err instanceof Error ? err.message : String(err)}`, 'err');
     }
   }
 
@@ -54,17 +55,16 @@
       </div>
 
       <h3 class="lu-modal__title">Versi baru tersedia!</h3>
-      <p class="lu-modal__ver" id="luModalVer">Versi {version}</p>
+      <p class="lu-modal__ver" id="luModalVer">{version}</p>
       <p class="lu-modal__desc">Apakah Anda ingin memperbarui Launcher sekarang?</p>
 
-      {#if isUpdating || error || (status && status !== 'Menunggu konfirmasi.')}
+      {#if isUpdating || (status && status !== 'Menunggu konfirmasi.')}
         <div class="lu-pbar">
           <div class="lu-pbar__text">{updateProgress}%</div>
           <div class="lu-pbar__track">
             <div class="lu-pbar__fill" style="width: {updateProgress}%"></div>
           </div>
           <div class="lu-pbar__sub">{updateStatus || 'Menyiapkan update...'}</div>
-          {#if error}<button class="lu-modal__btn lu-modal__btn--primary" onclick={startUpdate} type="button">Coba lagi</button>{/if}
         </div>
       {:else}
         <div class="lu-modal__btns">

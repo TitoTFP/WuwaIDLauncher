@@ -16,6 +16,7 @@ pub struct ResourceMountPlan {
     pub version_name: String,
     pub version_dir: PathBuf,
     pub mount_dir: PathBuf,
+    pub source_signature_path: PathBuf,
     pub pak_path: PathBuf,
     pub sig_path: PathBuf,
     pub mount_path: PathBuf,
@@ -44,21 +45,42 @@ pub fn validate_mount_file(mount_path: &Path) -> Result<bool, String> {
     if !mount_path.exists() {
         return Ok(false);
     }
-    let content =
-        fs::read_to_string(mount_path).map_err(|e| format!("Gagal membaca mount file: {}", e))?;
-
-    let lines: Vec<&str> = content
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .collect();
-    if lines.len() != 3 {
+    let content = fs::read_to_string(mount_path)
+        .map_err(|e| format!("Gagal membaca mount file: {}", e))?;
+    let normalized = content.replace("\r\n", "\n");
+    let lines: Vec<&str> = normalized.split('\n').collect();
+    if lines.len() != 4 || lines[0] != "::Mount::" || lines[2] != "::Del::" || lines[3] != "" {
         return Ok(false);
     }
 
-    Ok(lines[0] == "99"
-        && lines[1] == "../Patch/wuwaindonesia/WuWaID_99_P.pak"
-        && lines[2] == "../Patch/wuwaindonesia/WuWaID_99_P.sig")
+    let fields: Vec<&str> = lines[1].split(',').collect();
+    Ok(fields.len() == 6
+        && fields[0] == patch_mount_entry()
+        && fields[1] == "99"
+        && valid_sha1(fields[2])
+        && valid_sha1(fields[3])
+        && fields[4].is_empty()
+        && fields[5].is_empty())
+}
+
+fn patch_mount_entry() -> String {
+    let stem = PATCH_PAK_FILE_NAME
+        .strip_suffix(".pak")
+        .unwrap_or(PATCH_PAK_FILE_NAME);
+    format!("Patch/{}/{}", PATCH_FOLDER_NAME, stem)
+}
+
+fn mount_content(pak_sha1: &str, signature_sha1: &str) -> String {
+    format!(
+        "::Mount::\n{},99,{},{},,\n::Del::\n",
+        patch_mount_entry(),
+        pak_sha1.to_ascii_uppercase(),
+        signature_sha1.to_ascii_uppercase()
+    )
+}
+
+fn valid_sha1(value: &str) -> bool {
+    value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// Validate the footer and indexed data of a real Unreal PAK produced for the
@@ -116,8 +138,8 @@ pub fn validate_pak_file(pak_path: &Path) -> Result<bool, String> {
 fn marker_hash(marker: &str) -> Option<&str> {
     marker
         .trim()
-        .strip_prefix("wuwaid-managed-mod:sha1=")
-        .filter(|hash| hash.len() == 40 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+        .strip_prefix("WuwaID Resource Mount v1\nsha256=")
+        .filter(|hash| valid_sha256(hash))
 }
 
 pub fn validate_installed_resource_mount(plan: &ResourceMountPlan) -> Result<bool, String> {
@@ -141,16 +163,56 @@ pub fn validate_installed_resource_mount(plan: &ResourceMountPlan) -> Result<boo
 
     let marker = fs::read_to_string(&plan.owner_marker_path)
         .map_err(|e| format!("Gagal membaca owner marker: {}", e))?;
-    let Some(expected_sha1) = marker_hash(&marker) else {
+    let Some(expected_sha256) = marker_hash(&marker) else {
         return Ok(false);
     };
-    if compute_sha1(&plan.pak_path).map_err(|e| format!("Gagal menghitung SHA-1 PAK: {}", e))?
-        != expected_sha1.to_ascii_lowercase()
+    if downloader::compute_sha256(&plan.pak_path)
+        .map_err(|e| format!("Gagal menghitung SHA-256 PAK: {}", e))?
+        != expected_sha256.to_ascii_lowercase()
     {
         return Ok(false);
     }
 
-    validate_mount_file(&plan.mount_path)
+    if !validate_mount_file(&plan.mount_path)? {
+        return Ok(false);
+    }
+    let expected_mount = mount_content(
+        &compute_sha1(&plan.pak_path)
+            .map_err(|e| format!("Gagal menghitung SHA-1 PAK: {}", e))?,
+        &compute_sha1(&plan.sig_path)
+            .map_err(|e| format!("Gagal menghitung SHA-1 signature: {}", e))?,
+    );
+    let actual_mount = fs::read_to_string(&plan.mount_path)
+        .map_err(|e| format!("Gagal membaca mount file: {}", e))?
+        .replace("\r\n", "\n");
+    if actual_mount != expected_mount {
+        return Ok(false);
+    }
+
+    Ok(compute_sha1(&plan.sig_path)
+        .map_err(|e| format!("Gagal menghitung SHA-1 signature: {}", e))?
+        .eq_ignore_ascii_case(
+            &compute_sha1(&plan.source_signature_path)
+                .map_err(|e| format!("Gagal menghitung SHA-1 signature resmi: {}", e))?,
+        ))
+}
+
+fn is_legacy_resource_mount_owned(plan: &ResourceMountPlan) -> bool {
+    let Ok(marker) = fs::read_to_string(&plan.owner_marker_path) else {
+        return false;
+    };
+    let marker = marker.trim();
+    if marker == "wuwaid-managed-mod" {
+        return true;
+    }
+    let Some(expected_sha1) = marker.strip_prefix("wuwaid-managed-mod:sha1=") else {
+        return false;
+    };
+    valid_sha1(expected_sha1)
+        && plan.pak_path.is_file()
+        && compute_sha1(&plan.pak_path)
+            .map(|actual| actual.eq_ignore_ascii_case(expected_sha1))
+            .unwrap_or(false)
 }
 
 pub fn loader_pak_path(game_path: &Path) -> PathBuf {
@@ -389,7 +451,10 @@ fn reject_foreign_targets(
     let owned = match method {
         InstallMethod::ResourceMount => probe_resource_mount(game_path)
             .ok()
-            .map(|plan| validate_installed_resource_mount(&plan).unwrap_or(false))
+            .map(|plan| {
+                validate_installed_resource_mount(&plan).unwrap_or(false)
+                    || is_legacy_resource_mount_owned(&plan)
+            })
             .unwrap_or(false),
         InstallMethod::Loader => validate_installed_loader(game_path).unwrap_or(false),
         InstallMethod::SignatureBypass => {
@@ -546,7 +611,9 @@ fn cleanup_owned_artifacts_except(
 
     if keep != Some(InstallMethod::ResourceMount) {
         if let Ok(plan) = probe_resource_mount(game_path) {
-            if validate_installed_resource_mount(&plan).unwrap_or(false) {
+            if validate_installed_resource_mount(&plan).unwrap_or(false)
+                || is_legacy_resource_mount_owned(&plan)
+            {
                 for target in [
                     plan.owner_marker_path,
                     plan.pak_path,
@@ -673,11 +740,10 @@ pub fn probe_resource_mount(game_path: &Path) -> Result<ResourceMountPlan, Strin
     if let Ok(entries) = fs::read_dir(&root) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
-                let manifest = path.join("ResManifest");
-                if manifest.exists() {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    versions.push((name, path));
+            let name = entry.file_name().to_string_lossy().to_string();
+            if path.is_dir() && path.join("ResManifest").exists() {
+                if let Some(version) = parse_resource_version(&name) {
+                    versions.push((version, name, path));
                 }
             }
         }
@@ -687,11 +753,15 @@ pub fn probe_resource_mount(game_path: &Path) -> Result<ResourceMountPlan, Strin
         return Err("Resource game belum siap; ResManifest tidak ditemukan.".to_string());
     }
 
-    // Pick highest/latest version
     versions.sort_by(|a, b| b.0.cmp(&a.0));
-    let (version_name, version_dir) = &versions[0];
+    let (_, version_name, version_dir) = versions.remove(0);
 
     let mount_dir = version_dir.join("Mount");
+    if !mount_dir.is_dir() {
+        return Err("Folder Mount tidak ditemukan pada resource game aktif.".to_string());
+    }
+    let source_signature_path = find_official_signature(&version_dir)
+        .ok_or_else(|| "Signature resmi tidak ditemukan pada resource game aktif.".to_string())?;
     let patch_dir = version_dir.join("Patch").join(PATCH_FOLDER_NAME);
 
     let pak_path = patch_dir.join(PATCH_PAK_FILE_NAME);
@@ -700,9 +770,10 @@ pub fn probe_resource_mount(game_path: &Path) -> Result<ResourceMountPlan, Strin
     let owner_marker_path = patch_dir.join(OWNER_MARKER_FILE_NAME);
 
     Ok(ResourceMountPlan {
-        version_name: version_name.clone(),
+        version_name,
         version_dir: version_dir.clone(),
         mount_dir,
+        source_signature_path,
         pak_path,
         sig_path,
         mount_path,
@@ -710,10 +781,110 @@ pub fn probe_resource_mount(game_path: &Path) -> Result<ResourceMountPlan, Strin
     })
 }
 
+fn parse_resource_version(value: &str) -> Option<(u32, u32, u32)> {
+    let parts: Vec<_> = value.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    Some((
+        parts[0].parse().ok()?,
+        parts[1].parse().ok()?,
+        parts[2].parse().ok()?,
+    ))
+}
+
+fn find_official_signature(version_dir: &Path) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    let english_root = version_dir.join("Lang_en");
+    if let Ok(entries) = fs::read_dir(&english_root) {
+        candidates.extend(
+            entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| path.is_dir()),
+        );
+    }
+    candidates.sort_by_key(|path| path.to_string_lossy().to_ascii_lowercase());
+    candidates.push(version_dir.join("Resource").join("Base"));
+
+    let own_stem = PATCH_PAK_FILE_NAME
+        .strip_suffix(".pak")
+        .unwrap_or(PATCH_PAK_FILE_NAME);
+    let own_stem_lower = own_stem.to_ascii_lowercase();
+    for directory in candidates {
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        let mut signatures: Vec<PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.is_file()
+                    && path
+                        .extension()
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("sig"))
+                    && path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .map(|name| !name.to_ascii_lowercase().starts_with(&own_stem_lower))
+                        .unwrap_or(false)
+            })
+            .collect();
+        signatures.sort_by_key(|path| path.to_string_lossy().to_ascii_lowercase());
+        for signature_path in signatures {
+            if is_official_signature(version_dir, &signature_path) {
+                return Some(signature_path);
+            }
+        }
+    }
+    None
+}
+
+fn is_official_signature(version_dir: &Path, signature_path: &Path) -> bool {
+    let paired_pak = signature_path.with_extension("pak");
+    if !paired_pak.is_file() {
+        return false;
+    }
+    let Ok(relative) = signature_path.strip_prefix(version_dir) else {
+        return false;
+    };
+    let relative = relative.to_string_lossy().replace('\\', "/");
+    let mount_name = if relative.starts_with("Lang_en/") {
+        "MountLang_en.txt"
+    } else if relative.starts_with("Resource/") {
+        "MountResource.txt"
+    } else {
+        return false;
+    };
+    let Some(mount_entry) = relative.strip_suffix(".sig") else {
+        return false;
+    };
+    let mount_path = version_dir.join("Mount").join(mount_name);
+    if !mount_path.is_file() {
+        return false;
+    }
+    let Ok(pak_sha1) = compute_sha1(&paired_pak) else {
+        return false;
+    };
+    let Ok(signature_sha1) = compute_sha1(signature_path) else {
+        return false;
+    };
+    let Ok(content) = fs::read_to_string(mount_path) else {
+        return false;
+    };
+    content.lines().any(|line| {
+        let fields: Vec<_> = line.split(',').collect();
+        fields.len() >= 4
+            && fields[0].eq_ignore_ascii_case(mount_entry)
+            && fields[2].eq_ignore_ascii_case(&pak_sha1)
+            && fields[3].eq_ignore_ascii_case(&signature_sha1)
+    })
+}
+
 pub fn deploy_resource_mount(
     plan: &ResourceMountPlan,
     pak_source: &Path,
-    game_path: &Path,
+    _game_path: &Path,
 ) -> Result<(), String> {
     // A downloaded PAK must be a structurally valid Unreal PAK before it can
     // replace anything in the game directory.
@@ -762,35 +933,28 @@ pub fn deploy_resource_mount(
 
         let _ = fs::remove_file(&staging_pak);
         fs::copy(pak_source, &staging_pak).map_err(|e| format!("Gagal staging PAK: {}", e))?;
-        let sha1 = compute_sha1(&staging_pak)
+        let pak_sha1 = compute_sha1(&staging_pak)
             .map_err(|e| format!("Gagal menghitung SHA-1 staged PAK: {}", e))?;
         fs::rename(&staging_pak, &plan.pak_path)
             .map_err(|e| format!("Gagal atomic rename PAK: {}", e))?;
 
-        let orig_sig = signature::get_sig_path(game_path);
-        let backup_sig = signature::get_sig_backup_path(game_path);
-        let source_sig = if orig_sig.is_file() {
-            Some(orig_sig)
-        } else if backup_sig.is_file() {
-            Some(backup_sig)
-        } else {
-            None
-        };
-        let source_sig =
-            source_sig.ok_or_else(|| "Signature game asli tidak ditemukan.".to_string())?;
-        fs::copy(source_sig, &plan.sig_path)
+        if !plan.source_signature_path.is_file() {
+            return Err("Signature resmi tidak ditemukan pada resource game aktif.".to_string());
+        }
+        fs::copy(&plan.source_signature_path, &plan.sig_path)
             .map_err(|e| format!("Gagal menyalin signature Resource Mount: {}", e))?;
+        let signature_sha1 = compute_sha1(&plan.sig_path)
+            .map_err(|e| format!("Gagal menghitung SHA-1 signature: {}", e))?;
+        let pak_sha256 = downloader::compute_sha256(&plan.pak_path)
+            .map_err(|e| format!("Gagal menghitung SHA-256 PAK: {}", e))?;
 
         fs::write(
             &plan.owner_marker_path,
-            format!("wuwaid-managed-mod:sha1={}", sha1).as_bytes(),
+            format!("WuwaID Resource Mount v1\nsha256={}\n", pak_sha256).as_bytes(),
         )
         .map_err(|e| format!("Gagal menulis owner marker: {}", e))?;
 
-        let mount_content = format!(
-            "99\n../Patch/{}/{}\n../Patch/{}/{}\n",
-            PATCH_FOLDER_NAME, PATCH_PAK_FILE_NAME, PATCH_FOLDER_NAME, PATCH_SIG_FILE_NAME
-        );
+        let mount_content = mount_content(&pak_sha1, &signature_sha1);
         fs::write(&plan.mount_path, mount_content.as_bytes())
             .map_err(|e| format!("Gagal menulis mount file: {}", e))?;
 
@@ -845,6 +1009,55 @@ mod tests {
         fs::write(path, bytes).unwrap();
     }
 
+    #[test]
+    fn native_resource_mount_manifest_is_accepted() {
+        let tmp = tempdir().unwrap();
+        let mount_path = tmp.path().join(MOUNT_FILE_NAME);
+        let content = format!(
+            "::Mount::\nPatch/{}/{},99,{},{},,\n::Del::\n",
+            PATCH_FOLDER_NAME,
+            PATCH_PAK_FILE_NAME.trim_end_matches(".pak"),
+            "A".repeat(40),
+            "B".repeat(40),
+        );
+        fs::write(&mount_path, content).unwrap();
+
+        assert!(validate_mount_file(&mount_path).unwrap());
+    }
+
+    #[test]
+    fn native_resource_mount_manifest_formats_path_and_hashes_like_game() {
+        let content = mount_content(&"a".repeat(40), &"b".repeat(40));
+
+        assert_eq!(
+            content,
+            format!(
+                "::Mount::\nPatch/{}/{},99,{},{},,\n::Del::\n",
+                PATCH_FOLDER_NAME,
+                PATCH_PAK_FILE_NAME.trim_end_matches(".pak"),
+                "A".repeat(40),
+                "B".repeat(40),
+            )
+        );
+    }
+
+    #[test]
+    fn resource_mount_accepts_directory_res_manifest() {
+        let (_tmp, game_dir) = setup_mock_game_dir();
+        let manifest = game_dir
+            .join("Client")
+            .join("Saved")
+            .join("Resources")
+            .join("2.6.0")
+            .join("ResManifest");
+        fs::remove_file(&manifest).unwrap();
+        fs::create_dir(&manifest).unwrap();
+
+        let plan = probe_resource_mount(&game_dir).unwrap();
+
+        assert_eq!(plan.version_name, "2.6.0");
+    }
+
     fn setup_mock_game_dir() -> (tempfile::TempDir, PathBuf) {
         let tmp = tempdir().unwrap();
         let game_dir = tmp.path().to_path_buf();
@@ -852,13 +1065,30 @@ mod tests {
         let paks_dir = game_dir.join("Client").join("Content").join("Paks");
         let res_root = game_dir.join("Client").join("Saved").join("Resources");
         let v2_dir = res_root.join("2.6.0");
+        let mount_dir = v2_dir.join("Mount");
+        let official_dir = v2_dir.join("Lang_en").join("Base");
         let binaries_dir = game_dir.join("Client").join("Binaries").join("Win64");
 
         fs::create_dir_all(&paks_dir).unwrap();
-        fs::create_dir_all(&v2_dir).unwrap();
+        fs::create_dir_all(&mount_dir).unwrap();
+        fs::create_dir_all(&official_dir).unwrap();
         fs::create_dir_all(&binaries_dir).unwrap();
         fs::write(v2_dir.join("ResManifest"), b"manifest 2.6.0").unwrap();
         fs::write(binaries_dir.join("Client-Win64-Shipping.exe"), b"mock exe").unwrap();
+
+        let official_pak = official_dir.join("pakchunk10-WindowsNoEditor.pak");
+        let official_sig = official_dir.join("pakchunk10-WindowsNoEditor.sig");
+        fs::write(&official_pak, b"OFFICIAL_RESOURCE_PAK").unwrap();
+        fs::write(&official_sig, b"OFFICIAL_RESOURCE_SIG").unwrap();
+        fs::write(
+            mount_dir.join("MountLang_en.txt"),
+            format!(
+                "::Mount::\nLang_en/Base/pakchunk10-WindowsNoEditor,4,{},{},,\n::Del::\n",
+                compute_sha1(&official_pak).unwrap(),
+                compute_sha1(&official_sig).unwrap(),
+            ),
+        )
+        .unwrap();
 
         let sig_path = signature::get_sig_path(&game_dir);
         fs::write(&sig_path, b"ORIGINAL_GAME_SIG").unwrap();
@@ -884,7 +1114,7 @@ mod tests {
         assert!(plan.sig_path.exists());
         assert_eq!(
             fs::read_to_string(&plan.sig_path).unwrap(),
-            "ORIGINAL_GAME_SIG"
+            "OFFICIAL_RESOURCE_SIG"
         );
 
         assert!(validate_mount_file(&plan.mount_path).unwrap());
@@ -893,6 +1123,25 @@ mod tests {
         remove_all_owned_artifacts(&game_dir);
         assert!(!plan.pak_path.exists());
         assert!(!plan.mount_path.exists());
+        assert!(!plan.owner_marker_path.exists());
+    }
+
+    #[test]
+    fn cleanup_removes_legacy_resource_mount_with_explicit_launcher_marker() {
+        let (_tmp, game_dir) = setup_mock_game_dir();
+        let plan = probe_resource_mount(&game_dir).unwrap();
+
+        fs::create_dir_all(plan.pak_path.parent().unwrap()).unwrap();
+        fs::write(&plan.pak_path, b"legacy-placeholder-pak").unwrap();
+        fs::write(&plan.sig_path, []).unwrap();
+        fs::write(&plan.owner_marker_path, b"wuwaid-managed-mod").unwrap();
+
+        let report = cleanup_owned_artifacts(&game_dir).unwrap();
+
+        assert!(report.failures.is_empty(), "unexpected failures: {report:?}");
+        assert!(report.preserved.is_empty(), "unexpected preserved paths: {report:?}");
+        assert!(!plan.pak_path.exists());
+        assert!(!plan.sig_path.exists());
         assert!(!plan.owner_marker_path.exists());
     }
 
@@ -912,7 +1161,8 @@ mod tests {
         assert!(plan.sig_path.exists());
 
         let mount_content = fs::read_to_string(&plan.mount_path).unwrap();
-        assert!(mount_content.contains("99\n../Patch/wuwaindonesia/WuWaID_99_P.pak"));
+        assert!(mount_content.starts_with("::Mount::\nPatch/wuwaindonesia/WuWaID_99_P,99,"));
+        assert!(mount_content.ends_with("::Del::\n"));
 
         assert!(validate_installed_resource_mount(&plan).unwrap());
 

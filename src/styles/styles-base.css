@@ -128,24 +128,6 @@ body.game-runtime-readonly a {
     opacity: 1;
 }
 
-body[data-visual-mode="light"] #audioViz,
-body[data-visual-mode="light"] #waterFx,
-body[data-visual-mode="light"] #stageLights,
-body[data-visual-mode="off"] #audioViz,
-body[data-visual-mode="off"] #waterFx,
-body[data-visual-mode="off"] #particleCanvas,
-body[data-visual-mode="off"] #stageLights {
-    display: none !important;
-}
-
-.launcher-reduced-motion *,
-.launcher-reduced-motion *::before,
-.launcher-reduced-motion *::after {
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
-}
-
 .bg-vignette {
     position: absolute;
     inset: 0;

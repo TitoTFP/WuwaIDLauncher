@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use tempfile::tempdir;
 use wuwaid_launcher_lib::engine::installer::{
-    deploy_resource_mount, probe_resource_mount, validate_pak_file,
+    compute_sha1, deploy_resource_mount, probe_resource_mount, validate_pak_file,
 };
 use wuwaid_launcher_lib::engine::method::InstallMethod;
 use wuwaid_launcher_lib::engine::pak;
@@ -38,12 +38,28 @@ fn setup_mock_game() -> (tempfile::TempDir, PathBuf) {
         .join("Saved")
         .join("Resources")
         .join("2.6.0");
+    let mount_dir = resources.join("Mount");
+    let official_dir = resources.join("Lang_en").join("Base");
     let binaries = game.join("Client").join("Binaries").join("Win64");
     fs::create_dir_all(&paks).unwrap();
-    fs::create_dir_all(&resources).unwrap();
+    fs::create_dir_all(&mount_dir).unwrap();
+    fs::create_dir_all(&official_dir).unwrap();
     fs::create_dir_all(&binaries).unwrap();
     fs::write(resources.join("ResManifest"), b"manifest").unwrap();
     fs::write(binaries.join("Client-Win64-Shipping.exe"), b"game").unwrap();
+    let official_pak = official_dir.join("pakchunk10-WindowsNoEditor.pak");
+    let official_sig = official_dir.join("pakchunk10-WindowsNoEditor.sig");
+    fs::write(&official_pak, b"OFFICIAL_RESOURCE_PAK").unwrap();
+    fs::write(&official_sig, b"OFFICIAL_RESOURCE_SIG").unwrap();
+    fs::write(
+        mount_dir.join("MountLang_en.txt"),
+        format!(
+            "::Mount::\nLang_en/Base/pakchunk10-WindowsNoEditor,4,{},{},,\n::Del::\n",
+            compute_sha1(&official_pak).unwrap(),
+            compute_sha1(&official_sig).unwrap(),
+        ),
+    )
+    .unwrap();
     fs::write(signature::get_sig_path(&game), b"original signature").unwrap();
     (tmp, game)
 }
@@ -102,7 +118,10 @@ fn settings_recover_invalid_json_and_normalize_partial_legacy_values() {
         partial.settings.install_method,
         InstallMethod::SignatureBypass
     );
-    assert_eq!(partial.settings.launcher_visual_mode, "full");
+    assert!(partial
+        .diagnostics
+        .iter()
+        .any(|message| message.contains("mode Penuh")));
     assert!(!partial.settings.dx11);
     assert!(!partial.settings.auto_check_update);
     assert_eq!(partial.settings.bgm_volume, 1.0);
@@ -115,7 +134,6 @@ fn settings_persistence_keeps_valid_game_path_and_canonical_schema() {
     let raw = serde_json::json!({
         "gamePath": game,
         "installMethod": "method3",
-        "launcherVisualMode": "light",
         "dx11": true,
         "autoCheckUpdate": false,
         "bgmVolume": 0.7,
@@ -129,11 +147,12 @@ fn settings_persistence_keeps_valid_game_path_and_canonical_schema() {
         normalized.settings.install_method,
         InstallMethod::ResourceMount
     );
-    assert_eq!(normalized.settings.launcher_visual_mode, "light");
 
     let encoded = serde_json::to_string(&normalized.settings).unwrap();
     assert!(encoded.contains("resource_mount"));
     assert!(!encoded.contains("method3"));
+    assert!(!encoded.contains("launcherVisualMode"));
+    assert!(!encoded.contains("perf"));
     let round_trip = normalize_settings_json(&encoded);
     assert_eq!(round_trip.settings, normalized.settings);
 }

@@ -4,7 +4,7 @@ use tempfile::tempdir;
 use wuwaid_launcher_lib::engine::atom_feed::{parse_atom_feed, ReleaseNoteEntry};
 use wuwaid_launcher_lib::engine::downloader;
 use wuwaid_launcher_lib::engine::installer::{
-    deploy_resource_mount, probe_resource_mount, remove_all_owned_artifacts,
+    compute_sha1, deploy_resource_mount, probe_resource_mount, remove_all_owned_artifacts,
 };
 use wuwaid_launcher_lib::engine::pak;
 use wuwaid_launcher_lib::engine::path::validate_game_path;
@@ -36,13 +36,30 @@ fn setup_mock_environment() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let paks_dir = game_dir.join("Client").join("Content").join("Paks");
     let res_root = game_dir.join("Client").join("Saved").join("Resources");
     let v2_dir = res_root.join("2.6.0");
+    let mount_dir = v2_dir.join("Mount");
+    let official_dir = v2_dir.join("Lang_en").join("Base");
     let binaries_dir = game_dir.join("Client").join("Binaries").join("Win64");
 
     fs::create_dir_all(&paks_dir).unwrap();
-    fs::create_dir_all(&v2_dir).unwrap();
+    fs::create_dir_all(&mount_dir).unwrap();
+    fs::create_dir_all(&official_dir).unwrap();
     fs::create_dir_all(&binaries_dir).unwrap();
     fs::write(v2_dir.join("ResManifest"), b"manifest 2.6.0").unwrap();
     fs::write(binaries_dir.join("Client-Win64-Shipping.exe"), b"mock exe").unwrap();
+
+    let official_pak = official_dir.join("pakchunk10-WindowsNoEditor.pak");
+    let official_sig = official_dir.join("pakchunk10-WindowsNoEditor.sig");
+    fs::write(&official_pak, b"OFFICIAL_RESOURCE_PAK").unwrap();
+    fs::write(&official_sig, b"OFFICIAL_RESOURCE_SIG").unwrap();
+    fs::write(
+        mount_dir.join("MountLang_en.txt"),
+        format!(
+            "::Mount::\nLang_en/Base/pakchunk10-WindowsNoEditor,4,{},{},,\n::Del::\n",
+            compute_sha1(&official_pak).unwrap(),
+            compute_sha1(&official_sig).unwrap(),
+        ),
+    )
+    .unwrap();
 
     let sig_path = signature::get_sig_path(&game_dir);
     fs::write(&sig_path, b"ORIGINAL_GAME_SIG").unwrap();

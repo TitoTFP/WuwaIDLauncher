@@ -2,7 +2,7 @@ pub mod engine;
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::http::{Request, Response};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -16,6 +16,14 @@ const WUWAID_LATEST_CHECKSUMS_URL: &str =
 
 fn media_manifest_url() -> String {
     std::env::var("WUWAID_ASSETS_URL").unwrap_or_else(|_| engine::media::ASSETS_URL.to_string())
+}
+
+fn media_url(asset_name: &str) -> String {
+    if cfg!(windows) {
+        format!("http://media.localhost/{asset_name}")
+    } else {
+        format!("media://localhost/{asset_name}")
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -59,6 +67,7 @@ fn get_settings_path() -> PathBuf {
 struct RuntimeCoordinator {
     launcher_pid: Mutex<Option<u32>>,
     game_path: Mutex<Option<PathBuf>>,
+    force_quit_requested: Mutex<bool>,
 }
 
 fn coordinator_launcher_pid<R: Runtime>(app: &AppHandle<R>) -> Option<u32> {
@@ -75,6 +84,114 @@ fn set_launcher_process<R: Runtime>(app: &AppHandle<R>, pid: Option<u32>, path: 
         if let Ok(mut value) = state.game_path.lock() {
             *value = path;
         }
+        if pid.is_some() {
+            if let Ok(mut value) = state.force_quit_requested.lock() {
+                *value = false;
+            }
+        }
+    }
+}
+
+fn mark_force_quit_requested<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(state) = app.try_state::<RuntimeCoordinator>() {
+        if let Ok(mut value) = state.force_quit_requested.lock() {
+            *value = true;
+        }
+    }
+}
+
+fn take_force_quit_requested<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.try_state::<RuntimeCoordinator>()
+        .and_then(|state| {
+            state.force_quit_requested.lock().ok().map(|mut value| {
+                let requested = *value;
+                *value = false;
+                requested
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn save_launch_evidence(mut evidence: engine::runtime::LaunchEvidence) -> Option<PathBuf> {
+    let diagnostics_dir = get_appdata_dir().join("Diagnostics");
+    if std::fs::create_dir_all(&diagnostics_dir).is_err() {
+        return None;
+    }
+
+    let stem = format!(
+        "launch-{}-{}",
+        evidence.started_at_ms,
+        evidence
+            .pid
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_string())
+    );
+    let path = diagnostics_dir.join(format!("{stem}.json"));
+    evidence.evidence_path = Some(path.clone());
+    let Ok(serialized) = serde_json::to_vec_pretty(&evidence) else {
+        return None;
+    };
+    if std::fs::write(&path, serialized).is_err() {
+        return None;
+    }
+    Some(path)
+}
+
+fn launch_error_message(
+    mut evidence: engine::runtime::LaunchEvidence,
+) -> String {
+    let path = save_launch_evidence(evidence.clone());
+    evidence.evidence_path = path;
+    evidence.user_message()
+}
+
+fn finish_launch_lifecycle<R: Runtime>(
+    app: &AppHandle<R>,
+    game_path: &Path,
+    restore_signature: bool,
+) {
+    if restore_signature {
+        let _ = engine::signature::restore_sig(game_path);
+    }
+    set_launcher_process(app, None, None);
+    emit_runtime_state(
+        app,
+        engine::runtime::RuntimeState {
+            active: false,
+            origin: engine::runtime::ProcessOrigin::Launcher,
+        },
+    );
+    let _ = app.emit("onGameLaunchFinished", ());
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+enum LaunchDetection {
+    Detected,
+    Exited(engine::runtime::ProcessResult),
+}
+
+async fn wait_for_launch_detection(
+    process: &mut engine::runtime::LaunchedGame,
+) -> Result<LaunchDetection, String> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if engine::runtime::find_game_process_id() == Some(process.id()) {
+            return Ok(LaunchDetection::Detected);
+        }
+        if let Some(result) = process.try_wait()? {
+            return Ok(LaunchDetection::Exited(result));
+        }
+        if Instant::now() >= deadline {
+            // A process handle that is still alive is enough to keep the
+            // signature bypass in place. Process enumeration can lag or be
+            // blocked by the game's elevated token, so never restore the
+            // signature merely because discovery timed out.
+            return Ok(LaunchDetection::Detected);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -217,7 +334,11 @@ pub fn parse_range_header(range_header: &str, total_len: u64) -> Option<(u64, u6
 
 #[tauri::command]
 fn minimize_window<R: Runtime>(window: WebviewWindow<R>) {
-    let _ = window.minimize();
+    if engine::runtime::is_game_running() {
+        let _ = window.hide();
+    } else {
+        let _ = window.minimize();
+    }
 }
 
 #[tauri::command]
@@ -491,8 +612,8 @@ fn check_and_sync_media<R: Runtime>(app: AppHandle<R>) {
         }));
         if cached_valid {
             let _ = app_handle.emit("onMediaReady", serde_json::json!({
-                "bgmUrl": "media://localhost/bgm.mp3",
-                "videoUrl": "media://localhost/bg-video.mp4"
+                "bgmUrl": media_url("bgm.mp3"),
+                "videoUrl": media_url("bg-video.mp4")
             }));
         }
 
@@ -520,8 +641,8 @@ fn check_and_sync_media<R: Runtime>(app: AppHandle<R>) {
                 match res {
                     Ok(_) => {
                         let _ = app_handle.emit("onMediaReady", serde_json::json!({
-                            "bgmUrl": "media://localhost/bgm.mp3",
-                            "videoUrl": "media://localhost/bg-video.mp4"
+                            "bgmUrl": media_url("bgm.mp3"),
+                            "videoUrl": media_url("bg-video.mp4")
                         }));
                         let _ = app_handle.emit("onMediaStatus", serde_json::json!({
                             "status": "ready",
@@ -1246,19 +1367,63 @@ fn launch_game<R: Runtime>(
 
     tauri::async_runtime::spawn(async move {
         let _ = app_handle.emit("onGameLaunchStarted", ());
+        let command = engine::runtime::build_launch_command(&p, dx11);
 
         if method == engine::method::InstallMethod::SignatureBypass {
             if let Err(error) = engine::signature::bypass_sig(&p) {
-                let _ = app_handle.emit("onLaunchError", format!("signature_bypass_failed: {error}"));
-                let _ = app_handle.emit("onGameLaunchFinished", ());
+                let mut evidence = engine::runtime::LaunchEvidence::for_failure(
+                    command,
+                    engine::runtime::SpawnFailureKind::SpawnFailed,
+                    None,
+                );
+                evidence.error = Some(format!("signature_bypass_failed: {error}"));
+                evidence.game_log_tail = engine::runtime::collect_game_log_tail(&p);
+                let _ = app_handle.emit("onLaunchError", launch_error_message(evidence));
+                finish_launch_lifecycle(&app_handle, &p, true);
                 return;
             }
         }
 
         match engine::runtime::launch_game(&p, dx11) {
-            Ok(mut child) => {
-                let child_pid = child.id();
-                set_launcher_process(&app_handle, Some(child_pid), Some(p.clone()));
+            Ok(mut process) => {
+                let mut evidence = engine::runtime::LaunchEvidence::for_process(
+                    command,
+                    process.mode,
+                    process.id(),
+                );
+                match wait_for_launch_detection(&mut process).await {
+                    Ok(LaunchDetection::Exited(result)) => {
+                        evidence.failure_kind = Some(engine::runtime::SpawnFailureKind::ImmediateExit);
+                        evidence.exit_code = result.exit_code;
+                        evidence.stdout = result.stdout;
+                        evidence.stderr = result.stderr;
+                        evidence.game_log_tail = engine::runtime::collect_game_log_tail(&p);
+                        evidence.mark_finished();
+                        let _ = app_handle.emit("onLaunchError", launch_error_message(evidence));
+                        finish_launch_lifecycle(
+                            &app_handle,
+                            &p,
+                            method == engine::method::InstallMethod::SignatureBypass,
+                        );
+                        return;
+                    }
+                    Ok(LaunchDetection::Detected) => {}
+                    Err(error) => {
+                        evidence.failure_kind = Some(engine::runtime::SpawnFailureKind::SpawnFailed);
+                        evidence.error = Some(error);
+                        evidence.game_log_tail = engine::runtime::collect_game_log_tail(&p);
+                        let _ = app_handle.emit("onLaunchError", launch_error_message(evidence));
+                        finish_launch_lifecycle(
+                            &app_handle,
+                            &p,
+                            method == engine::method::InstallMethod::SignatureBypass,
+                        );
+                        return;
+                    }
+                }
+
+                evidence.mark_detected();
+                set_launcher_process(&app_handle, Some(process.id()), Some(p.clone()));
                 emit_runtime_state(
                     &app_handle,
                     engine::runtime::RuntimeState {
@@ -1267,7 +1432,7 @@ fn launch_game<R: Runtime>(
                     },
                 );
 
-                // Auto-minimize window and trim memory
+                // Auto-minimize window and trim memory only after process detection.
                 if let Some(window) = app_handle.get_webview_window("main") {
                     let _ = window.hide();
                 }
@@ -1282,6 +1447,7 @@ fn launch_game<R: Runtime>(
                 let (restore_tx, restore_rx) = tokio::sync::watch::channel(false);
                 if method == engine::method::InstallMethod::SignatureBypass {
                     let p_auto_restore = p.clone();
+                    let child_pid = process.id();
                     let mut restore_rx = restore_rx;
                     tauri::async_runtime::spawn(async move {
                         loop {
@@ -1303,40 +1469,59 @@ fn launch_game<R: Runtime>(
                     });
                 }
 
-                // Monitor process in background
+                // Monitor process in background and persist final evidence.
                 let app_for_monitor = app_handle.clone();
                 let p_for_monitor = p.clone();
+                let restore_signature = method == engine::method::InstallMethod::SignatureBypass;
                 tokio::task::spawn_blocking(move || {
-                    let _ = child.wait();
-
-                    // Restore signature when game exits
-                    let _ = engine::signature::restore_sig(&p_for_monitor);
-                    let _ = restore_tx.send(true);
-                    set_launcher_process(&app_for_monitor, None, None);
-
-                    emit_runtime_state(
-                        &app_for_monitor,
-                        engine::runtime::RuntimeState {
-                            active: false,
-                            origin: engine::runtime::ProcessOrigin::Launcher,
-                        },
-                    );
-                    let _ = app_for_monitor.emit("onGameLaunchFinished", ());
-
-                    // Show window back
-                    if let Some(window) = app_for_monitor.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
+                    let process_result = process.wait();
+                    match process_result {
+                        Ok(result) => {
+                            evidence.exit_code = result.exit_code;
+                            evidence.stdout = result.stdout;
+                            evidence.stderr = result.stderr;
+                            evidence.game_log_tail =
+                                engine::runtime::collect_game_log_tail(&p_for_monitor);
+                            evidence.mark_finished();
+                            let force_quit = take_force_quit_requested(&app_for_monitor);
+                            if !force_quit && result.exit_code.unwrap_or(0) != 0 {
+                                evidence.failure_kind =
+                                    Some(engine::runtime::SpawnFailureKind::ProcessCrashed);
+                                evidence.error = Some(
+                                    "game process exited with a non-zero exit code".to_string(),
+                                );
+                                let _ = app_for_monitor.emit(
+                                    "onLaunchError",
+                                    launch_error_message(evidence.clone()),
+                                );
+                            } else {
+                                let _ = save_launch_evidence(evidence.clone());
+                            }
+                        }
+                        Err(error) => {
+                            evidence.failure_kind =
+                                Some(engine::runtime::SpawnFailureKind::ProcessCrashed);
+                            evidence.error = Some(error);
+                            evidence.game_log_tail =
+                                engine::runtime::collect_game_log_tail(&p_for_monitor);
+                            let _ = app_for_monitor.emit(
+                                "onLaunchError",
+                                launch_error_message(evidence.clone()),
+                            );
+                        }
                     }
+                    let _ = restore_tx.send(true);
+                    finish_launch_lifecycle(&app_for_monitor, &p_for_monitor, restore_signature);
                 });
             }
-            Err(e) => {
-                // If launch failed, restore signature immediately
-                if method == engine::method::InstallMethod::SignatureBypass {
-                    let _ = engine::signature::restore_sig(&p);
-                }
-                let _ = app_handle.emit("onLaunchError", format!("spawn_failed: {e}"));
-                let _ = app_handle.emit("onGameLaunchFinished", ());
+            Err(mut error) => {
+                error.evidence.game_log_tail = engine::runtime::collect_game_log_tail(&p);
+                let _ = app_handle.emit("onLaunchError", launch_error_message(error.evidence));
+                finish_launch_lifecycle(
+                    &app_handle,
+                    &p,
+                    method == engine::method::InstallMethod::SignatureBypass,
+                );
             }
         }
     });
@@ -1348,6 +1533,9 @@ fn force_quit_game<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let active_path = app
         .try_state::<RuntimeCoordinator>()
         .and_then(|state| state.game_path.lock().ok().and_then(|value| value.clone()));
+    if active_path.is_some() {
+        mark_force_quit_requested(&app);
+    }
     let result = engine::runtime::force_quit_game();
     if let Err(error) = result {
         if engine::runtime::find_game_process_id().is_none() {
@@ -1570,6 +1758,14 @@ mod tests {
     use tauri::test::{assert_ipc_response, INVOKE_KEY};
     use tauri::webview::InvokeRequest;
 
+    static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_test_environment() -> std::sync::MutexGuard<'static, ()> {
+        TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn ipc_request(command: &str, args: serde_json::Value) -> InvokeRequest {
         InvokeRequest {
             cmd: command.to_string(),
@@ -1606,10 +1802,26 @@ mod tests {
             .join("Saved")
             .join("Resources")
             .join("2.6.0");
+        let mount_dir = resource_dir.join("Mount");
+        let official_dir = resource_dir.join("Lang_en").join("Base");
         std::fs::create_dir_all(&exe_dir).unwrap();
-        std::fs::create_dir_all(&resource_dir).unwrap();
+        std::fs::create_dir_all(&mount_dir).unwrap();
+        std::fs::create_dir_all(&official_dir).unwrap();
         std::fs::write(exe_dir.join("Client-Win64-Shipping.exe"), b"mock exe").unwrap();
         std::fs::write(resource_dir.join("ResManifest"), b"manifest").unwrap();
+        let official_pak = official_dir.join("pakchunk10-WindowsNoEditor.pak");
+        let official_sig = official_dir.join("pakchunk10-WindowsNoEditor.sig");
+        std::fs::write(&official_pak, b"OFFICIAL_RESOURCE_PAK").unwrap();
+        std::fs::write(&official_sig, b"OFFICIAL_RESOURCE_SIG").unwrap();
+        std::fs::write(
+            mount_dir.join("MountLang_en.txt"),
+            format!(
+                "::Mount::\nLang_en/Base/pakchunk10-WindowsNoEditor,4,{},{},,\n::Del::\n",
+                engine::installer::compute_sha1(&official_pak).unwrap(),
+                engine::installer::compute_sha1(&official_sig).unwrap(),
+            ),
+        )
+        .unwrap();
         assert_ipc_response(
             &window,
             ipc_request("check_game_folder_write_access", serde_json::json!({
@@ -1625,16 +1837,20 @@ mod tests {
             let _ = tx.send(event.payload().to_string());
         });
         app.emit("onMediaReady", serde_json::json!({
-            "bgmUrl": "media://localhost/bgm.mp3",
-            "videoUrl": "media://localhost/bg-video.mp4",
+            "bgmUrl": media_url("bgm.mp3"),
+            "videoUrl": media_url("bg-video.mp4"),
         })).unwrap();
         let payload = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert_eq!(serde_json::from_str::<serde_json::Value>(&payload).unwrap()["videoUrl"], "media://localhost/bg-video.mp4");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&payload).unwrap()["videoUrl"],
+            media_url("bg-video.mp4")
+        );
         app.unlisten(listener);
     }
 
     #[tokio::test]
     async fn test_media_command_failure_emits_status_without_ready() {
+        let _env_lock = lock_test_environment();
         let appdata = tempfile::tempdir().unwrap();
         let listener_addr = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener_addr.local_addr().unwrap();
@@ -1681,6 +1897,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_media_command_emits_ready_immediately_when_cached() {
+        let _env_lock = lock_test_environment();
         let appdata = tempfile::tempdir().unwrap();
         let cache_dir = appdata.path().join("Cache");
         std::fs::create_dir_all(&cache_dir).unwrap();
@@ -1723,8 +1940,18 @@ mod tests {
         check_and_sync_media(app.handle().clone());
         let payload = ready_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
-        assert_eq!(json["bgmUrl"], "media://localhost/bgm.mp3");
-        assert_eq!(json["videoUrl"], "media://localhost/bg-video.mp4");
+        let expected_bgm_url = if cfg!(windows) {
+            "http://media.localhost/bgm.mp3"
+        } else {
+            "media://localhost/bgm.mp3"
+        };
+        let expected_video_url = if cfg!(windows) {
+            "http://media.localhost/bg-video.mp4"
+        } else {
+            "media://localhost/bg-video.mp4"
+        };
+        assert_eq!(json["bgmUrl"], expected_bgm_url);
+        assert_eq!(json["videoUrl"], expected_video_url);
 
         app.unlisten(ready_listener);
         std::env::remove_var("WUWAID_ASSETS_URL");
@@ -1787,11 +2014,12 @@ mod tests {
 
     #[test]
     fn settings_commands_persist_only_normalized_canonical_values() {
+        let _env_lock = lock_test_environment();
         let appdata = tempfile::tempdir().unwrap();
         std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
 
         save_settings(
-            r#"{"installMethod":"method2","bgmVolume":4,"launcherVisualMode":"invalid"}"#
+            r#"{"installMethod":"method2","bgmVolume":4,"perf":{"shadows":true},"launcherVisualMode":"off"}"#
                 .to_string(),
         )
         .unwrap();
@@ -1799,6 +2027,8 @@ mod tests {
         assert!(saved.contains("loader"));
         assert!(!saved.contains("method2"));
         assert!(saved.contains("\"bgmVolume\":1.0"));
+        assert!(!saved.contains("perf"));
+        assert!(!saved.contains("launcherVisualMode"));
 
         std::fs::write(appdata.path().join("settings.json"), b"{").unwrap();
         let repaired = load_settings().unwrap();
@@ -1836,6 +2066,7 @@ mod tests {
 
     #[test]
     fn switch_method_rejects_invalid_game_path_before_metadata_mutation() {
+        let _env_lock = lock_test_environment();
         let appdata = tempfile::tempdir().unwrap();
         std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
         std::fs::write(
@@ -1859,6 +2090,7 @@ mod tests {
 
     #[test]
     fn switch_method_keeps_metadata_when_foreign_artifact_is_preserved() {
+        let _env_lock = lock_test_environment();
         let appdata = tempfile::tempdir().unwrap();
         let game = tempfile::tempdir().unwrap();
         std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
@@ -1885,7 +2117,73 @@ mod tests {
     }
 
     #[test]
+    fn switch_method_migrates_legacy_resource_mount_artifacts() {
+        let _env_lock = lock_test_environment();
+        let appdata = tempfile::tempdir().unwrap();
+        let game = tempfile::tempdir().unwrap();
+        std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
+
+        let exe_dir = game.path().join("Client").join("Binaries").join("Win64");
+        let resources = game
+            .path()
+            .join("Client")
+            .join("Saved")
+            .join("Resources")
+            .join("3.5.0");
+        let mount_dir = resources.join("Mount");
+        let official_dir = resources.join("Lang_en").join("Base");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+        std::fs::create_dir_all(&mount_dir).unwrap();
+        std::fs::create_dir_all(&official_dir).unwrap();
+        std::fs::write(exe_dir.join("Client-Win64-Shipping.exe"), b"mock exe").unwrap();
+        std::fs::write(resources.join("ResManifest"), b"manifest").unwrap();
+        let official_pak = official_dir.join("pakchunk10-WindowsNoEditor.pak");
+        let official_sig = official_dir.join("pakchunk10-WindowsNoEditor.sig");
+        std::fs::write(&official_pak, b"OFFICIAL_RESOURCE_PAK").unwrap();
+        std::fs::write(&official_sig, b"OFFICIAL_RESOURCE_SIG").unwrap();
+        std::fs::write(
+            mount_dir.join("MountLang_en.txt"),
+            format!(
+                "::Mount::\nLang_en/Base/pakchunk10-WindowsNoEditor,4,{},{},,\n::Del::\n",
+                engine::installer::compute_sha1(&official_pak).unwrap(),
+                engine::installer::compute_sha1(&official_sig).unwrap(),
+            ),
+        )
+        .unwrap();
+
+        let plan = engine::installer::probe_resource_mount(game.path()).unwrap();
+        std::fs::create_dir_all(plan.pak_path.parent().unwrap()).unwrap();
+        std::fs::write(&plan.pak_path, b"legacy-placeholder-pak").unwrap();
+        std::fs::write(&plan.sig_path, []).unwrap();
+        std::fs::write(&plan.owner_marker_path, b"wuwaid-managed-mod").unwrap();
+        let versions = appdata.path().join("versions.json");
+        std::fs::write(&versions, br#"{"_installMethod":"resource_mount"}"#).unwrap();
+
+        let report = switch_method(
+            game.path().to_string_lossy().to_string(),
+            "loader".to_string(),
+        )
+        .unwrap();
+
+        assert!(report.failures.is_empty());
+        assert!(report.preserved.is_empty());
+        assert!(!plan.pak_path.exists());
+        assert!(!plan.sig_path.exists());
+        assert!(!plan.owner_marker_path.exists());
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &std::fs::read_to_string(&versions).unwrap()
+            )
+            .unwrap()["_installMethod"],
+            "loader"
+        );
+
+        std::env::remove_var("WUWAID_E2E_APPDATA");
+    }
+
+    #[test]
     fn uninstall_keeps_metadata_when_foreign_artifact_prevents_cleanup() {
+        let _env_lock = lock_test_environment();
         let appdata = tempfile::tempdir().unwrap();
         let game = tempfile::tempdir().unwrap();
         std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
@@ -1909,6 +2207,7 @@ mod tests {
 
     #[test]
     fn core_commands_run_through_mock_ipc_with_deterministic_results() {
+        let _env_lock = lock_test_environment();
         let appdata = tempfile::tempdir().unwrap();
         let game = tempfile::tempdir().unwrap();
         std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());

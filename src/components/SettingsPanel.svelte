@@ -2,7 +2,7 @@
   import { bridge } from '../lib/bridge';
   import { appState } from '../lib/launcherState.svelte';
   import { INSTALL_METHOD_OPTIONS } from '../lib/types';
-  import type { InstallMethod, VisualMode } from '../lib/types';
+  import type { InstallMethod } from '../lib/types';
 
   let saving = $state(false);
 
@@ -45,16 +45,6 @@
     } catch (error) {
       appState.config.installMethod = previous;
       appState.setStatus('Gagal mengganti metode instalasi.', errorMessage(error));
-    }
-  }
-
-  async function changeVisual(event: Event) {
-    const previous = appState.config.launcherVisualMode;
-    appState.config.launcherVisualMode = (event.currentTarget as HTMLSelectElement).value as VisualMode;
-    appState.visualMode = appState.config.launcherVisualMode;
-    if (!(await persist('Mode visual diperbarui.'))) {
-      appState.config.launcherVisualMode = previous;
-      appState.visualMode = previous;
     }
   }
 
@@ -141,14 +131,7 @@
 
     <section class="settings-card">
       <h2>Visual & audio</h2>
-      <label>
-        <span>Mode visual</span>
-        <select value={appState.config.launcherVisualMode} onchange={changeVisual}>
-          <option value="full">Full — video dan efek</option>
-          <option value="light">Light — efek ringan</option>
-          <option value="off">Off — tanpa efek</option>
-        </select>
-      </label>
+      <p class="settings-note">Mode visual launcher selalu Full dengan video dan semua efek.</p>
       <label>
         <span>Volume BGM: {Math.round(appState.config.bgmVolume * 100)}%</span>
         <input type="range" min="0" max="1" step="0.01" value={appState.config.bgmVolume} onchange={changeVolume} />

@@ -39,8 +39,24 @@ fn setup_game() -> (TempDir, PathBuf) {
         .join("Saved")
         .join("Resources")
         .join("2.6.0");
-    fs::create_dir_all(&resource_version).unwrap();
+    let mount_dir = resource_version.join("Mount");
+    let official_dir = resource_version.join("Lang_en").join("Base");
+    fs::create_dir_all(&mount_dir).unwrap();
+    fs::create_dir_all(&official_dir).unwrap();
     fs::write(resource_version.join("ResManifest"), b"manifest").unwrap();
+    let official_pak = official_dir.join("pakchunk10-WindowsNoEditor.pak");
+    let official_sig = official_dir.join("pakchunk10-WindowsNoEditor.sig");
+    fs::write(&official_pak, b"OFFICIAL_RESOURCE_PAK").unwrap();
+    fs::write(&official_sig, b"OFFICIAL_RESOURCE_SIG").unwrap();
+    fs::write(
+        mount_dir.join("MountLang_en.txt"),
+        format!(
+            "::Mount::\nLang_en/Base/pakchunk10-WindowsNoEditor,4,{},{},,\n::Del::\n",
+            installer::compute_sha1(&official_pak).unwrap(),
+            installer::compute_sha1(&official_sig).unwrap(),
+        ),
+    )
+    .unwrap();
 
     (temp, game)
 }
