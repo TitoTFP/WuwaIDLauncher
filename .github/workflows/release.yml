@@ -103,7 +103,7 @@ jobs:
           $hash = (Get-FileHash -LiteralPath $zipName -Algorithm SHA256).Hash.ToLowerInvariant()
           Set-Content -LiteralPath "SHA256sums.txt" -Value "$hash  *$zipName" -Encoding ascii
           "zip=$zipName" >> $env:GITHUB_OUTPUT
-          Write-Host "$zipName: $hash"
+          Write-Host "$($zipName): $hash"
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
