@@ -40,7 +40,7 @@ Kontrak utama launcher sudah diimplementasikan dan diverifikasi melalui test sui
 | Home, Settings, About, navigation lock, progress/error/reset state | **Implemented** | Svelte check 0 error/0 warning |
 | Media cache hash, offline fallback, staged replacement, release-note sanitization | **Implemented** | milestone5_contract_tests.rs, media event tests |
 | Self-update checksum, ZIP validation, staging, rollback handoff, cleanup | **Implemented + manual restart smoke** | Checksum/ZIP/handoff tests; valid release asset diperlukan untuk restart end-to-end |
-| Local runtime diagnostics tanpa upload remote | **Implemented** | Legacy upload/telemetry settings dinormalisasi dan tidak dikirim ke server |
+| Local runtime diagnostics tanpa upload log | **Implemented** | Isi diagnostics tetap lokal; heartbeat active-player hanya mengirim payload minimal |
 | Standalone EXE, updater ZIP, SHA256 manifest | **Implemented** | Artifact gate dan workflow release; MSI/NSIS sengaja tidak dibuat |
 | Real game/admin/read-only/tray/offline/restart acceptance | **Partial / manual** | Jalankan matrix acceptance pada Windows release machine |
 | Future features di luar WUT-5 sampai WUT-29 | **Planned** | Tidak menjadi bagian release gate ini |
@@ -72,7 +72,7 @@ Dokumen acceptance lengkap berada di docs/acceptance/windows-game-matrix.md.
 ### ⚡ Mode Tray & Penghematan Resource Ekstrem
 
 - **Window Minimization ke System Tray:** Launcher otomatis menyembunyikan jendela ke system tray saat game berjalan dengan footprint RAM ultra-rendah (<15MB Working Set).
-- **Operasi Lokal:** Launcher menyimpan diagnostics lokal untuk troubleshooting; belum ada pengiriman log atau telemetry karena server belum tersedia.
+- **Operasi Lokal & Active Player:** Launcher menyimpan diagnostics lokal dan tidak mengunggah log. Statistik active player memakai heartbeat minimal tanpa path game, username Windows, akun, atau isi log.
 
 ### 🛡️ Keamanan, Diagnostik & Menu Cepat (7 Hamburger Actions)
 
@@ -122,9 +122,11 @@ Lokasi artefak runtime:
 
 ### Privacy dan Consent
 
-Launcher tidak mengirim log atau telemetry ke server. Diagnostics hanya dipakai
-secara lokal untuk menampilkan detail operasi; isi log game dapat memuat data yang
-ditulis oleh game, jadi tinjau sebelum membagikannya secara manual.
+Launcher tidak mengirim log atau isi diagnostics ke server. Untuk statistik active
+player, launcher hanya mengirim `client_id` acak, versi launcher, metode instalasi,
+dan jenis event. Tidak ada path game, username Windows, akun, atau isi log yang
+dikirim; isi log game tetap lokal dan dapat memuat data yang ditulis oleh game,
+jadi tinjau sebelum membagikannya secara manual.
 
 ---
 

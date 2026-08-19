@@ -8,8 +8,8 @@
     <button type="button" onclick={() => (appState.page = 'home')}>Kembali</button>
   </div>
   <section class="about-card"><h2>Versi terpasang</h2><p class="version">v{appState.appVersion}</p><p>Versi Patch ID: {appState.vhVersion || 'Belum diketahui'}</p><p>Method aktif: {appState.config.installMethod}</p></section>
-  <section class="about-card"><h2>Status fitur</h2><ul><li>Installer tiga metode dengan validasi ownership dan rollback.</li><li>Status patch, media, dan operasi diteruskan ke UI.</li><li>Verifikasi packaging Windows tetap menjadi release gate.</li></ul></section>
-  <section class="about-card"><h2>Privasi</h2><p>Launcher tidak mengirim log atau telemetry ke server. Detail teknis hanya ditampilkan saat operasi gagal agar dapat diperiksa secara lokal.</p></section>
+  <section class="about-card"><h2>Status fitur</h2><ul><li>Installer tiga metode dengan validasi integritas dan rollback.</li><li>Status patch, media, dan operasi diteruskan ke UI.</li><li>Verifikasi packaging Windows tetap menjadi release gate.</li></ul></section>
+  <section class="about-card"><h2>Privasi</h2><p>Launcher tidak mengirim log atau isi diagnostics. Statistik active player hanya memakai heartbeat minimal berisi client ID acak, versi launcher, metode instalasi, dan event.</p></section>
 </main>
 
 <style>
