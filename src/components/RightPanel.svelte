@@ -12,7 +12,8 @@
   });
 
   $effect(() => {
-    if (!targetDateMs) return;
+    if (!targetDateMs || appState.gameRunning || appState.launching) return;
+    now = Date.now();
     const iv = setInterval(() => {
       now = Date.now();
     }, 1000);
@@ -150,13 +151,13 @@
 
   function promptUninstall() {
     closeDropdown();
-    if (!appState.gamePath) return;
+    if (!appState.gamePath || appState.gameRunning || appState.installing || appState.launching) return;
     showUninstallConfirm = true;
   }
 
   async function handleConfirmUninstall() {
     showUninstallConfirm = false;
-    if (!appState.gamePath) return;
+    if (!appState.gamePath || appState.gameRunning || appState.installing || appState.launching) return;
     try {
       const res = await bridge.uninstall(appState.gamePath);
       if (res === 'ok') {
@@ -226,7 +227,6 @@
         await bridge.startInstallation(
           appState.gamePath,
           'standard',
-          true,
           appState.config.installMethod,
         );
       }

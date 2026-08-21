@@ -15,6 +15,26 @@ pub struct DownloadProgress {
     pub status: String,
 }
 
+pub async fn read_response_body_limited(
+    mut response: reqwest::Response,
+    max_bytes: u64,
+) -> Result<Vec<u8>, String> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("Gagal membaca HTTP response: {error}"))?
+    {
+        if body.len() as u64 > max_bytes
+            || chunk.len() as u64 > max_bytes.saturating_sub(body.len() as u64)
+        {
+            return Err(format!("HTTP response melebihi batas {} bytes.", max_bytes));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
 pub fn parse_sha256sums(content: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for line in content.lines() {
@@ -112,7 +132,10 @@ where
         .map_err(|e| format!("Failed to send GET request: {}", e))?;
 
     if !response.status().is_success() {
-        return Err(format!("Download failed with status: {}", response.status()));
+        return Err(format!(
+            "Download failed with status: {}",
+            response.status()
+        ));
     }
 
     let get_content_len = response
@@ -213,11 +236,7 @@ where
     Ok(downloaded)
 }
 
-pub async fn download_file<F>(
-    url: &str,
-    dest_path: &Path,
-    on_progress: F,
-) -> Result<(), String>
+pub async fn download_file<F>(url: &str, dest_path: &Path, on_progress: F) -> Result<(), String>
 where
     F: Fn(DownloadProgress) + Send + 'static,
 {
@@ -233,7 +252,8 @@ mod tests {
 
     #[test]
     fn test_parse_sha256sums() {
-        let content = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  empty.pak\n\
+        let content =
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  empty.pak\n\
                        a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e *test.dll";
         let parsed = parse_sha256sums(content);
         assert_eq!(

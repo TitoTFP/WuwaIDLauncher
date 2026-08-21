@@ -3,15 +3,13 @@ use std::fmt;
 
 /// The only identifiers that may cross the frontend/backend boundary.
 ///
-/// `method1`, `method2`, and `method3` are accepted only as explicit legacy
-/// aliases so existing settings can be migrated without silently selecting a
-/// different installer.
+/// `method2` and `method3` remain accepted as legacy aliases for the two
+/// supported installers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InstallMethod {
     ResourceMount,
     Loader,
-    SignatureBypass,
 }
 
 impl InstallMethod {
@@ -19,7 +17,6 @@ impl InstallMethod {
         match self {
             Self::ResourceMount => "resource_mount",
             Self::Loader => "loader",
-            Self::SignatureBypass => "signature_bypass",
         }
     }
 
@@ -27,11 +24,9 @@ impl InstallMethod {
         match value.trim().to_ascii_lowercase().as_str() {
             "resource_mount" => Ok(Self::ResourceMount),
             "loader" => Ok(Self::Loader),
-            "signature_bypass" => Ok(Self::SignatureBypass),
             // Explicit migration map for settings written by older builds.
             "method3" => Ok(Self::ResourceMount),
             "method2" => Ok(Self::Loader),
-            "method1" => Ok(Self::SignatureBypass),
             other => Err(format!("Metode instalasi tidak dikenal: {other}")),
         }
     }

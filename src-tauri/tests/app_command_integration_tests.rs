@@ -71,7 +71,8 @@ fn test_app_settings_persistence() {
     let (_tmp, _game_dir, appdata_dir) = setup_mock_environment();
     let settings_file = appdata_dir.join("settings.json");
 
-    let sample_json = r#"{"gamePath":"C:\\Games\\WuWa","installMethod":"resource_mount","dx11":true}"#;
+    let sample_json =
+        r#"{"gamePath":"C:\\Games\\WuWa","installMethod":"resource_mount","dx11":true}"#;
     fs::write(&settings_file, sample_json).unwrap();
 
     let read_back = fs::read_to_string(&settings_file).unwrap();
@@ -79,14 +80,13 @@ fn test_app_settings_persistence() {
 }
 
 #[test]
-fn test_app_patch_status_evaluation_all_methods() {
+fn test_app_patch_status_evaluation_supported_methods() {
     let (_tmp, game_dir, _appdata_dir) = setup_mock_environment();
     assert!(validate_game_path(&game_dir).is_some());
 
     // 1. Initial State -> Not Installed
     let plan = probe_resource_mount(&game_dir).unwrap();
     assert!(!plan.pak_path.exists());
-    assert!(!signature::get_signature_bypass_pak_path(&game_dir).exists());
     assert!(!signature::get_loader_pak_path(&game_dir).exists());
 
     // 2. Deploy Method 1 (Resource Mount)
@@ -106,42 +106,10 @@ fn test_app_patch_status_evaluation_all_methods() {
     fs::write(&loader_dll, b"LOADER_DLL").unwrap();
     assert!(loader_pak.exists() && loader_dll.exists());
 
-    // 4. Switch to Method 3 (Sig Bypass)
+    // 4. Cleanup after the two supported methods.
     remove_all_owned_artifacts(&game_dir);
     assert!(!loader_pak.exists());
     assert!(!loader_dll.exists());
-
-    let bypass_pak = signature::get_signature_bypass_pak_path(&game_dir);
-    release_like_pak(&bypass_pak);
-    assert!(bypass_pak.exists());
-
-    // 5. Cleanup
-    remove_all_owned_artifacts(&game_dir);
-    assert!(!bypass_pak.exists());
-}
-
-#[test]
-fn test_app_signature_bypass_and_restore_full_lifecycle() {
-    let (_tmp, game_dir, _appdata_dir) = setup_mock_environment();
-
-    // 1. Initial State: active .sig exists
-    let sig_path = signature::get_sig_path(&game_dir);
-    let backup_path = signature::get_sig_backup_path(&game_dir);
-    assert!(sig_path.exists());
-    assert!(!backup_path.exists());
-
-    // 2. Bypass on launch: moves active .sig to backup
-    assert!(signature::bypass_sig(&game_dir).unwrap());
-    assert!(!sig_path.exists());
-    assert!(backup_path.exists());
-    assert!(signature::is_sig_bypassed(&game_dir));
-
-    // 3. Auto-restore on exit/timer: moves backup back to active .sig
-    assert!(signature::restore_sig(&game_dir).unwrap());
-    assert!(sig_path.exists());
-    assert!(!backup_path.exists());
-    assert!(!signature::is_sig_bypassed(&game_dir));
-    assert_eq!(fs::read_to_string(&sig_path).unwrap(), "ORIGINAL_GAME_SIG");
 }
 
 #[test]

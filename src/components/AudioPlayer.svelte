@@ -37,7 +37,11 @@
   $effect(() => {
     if (!audioElement) return;
 
-    if (!appState.bgmUrl) {
+    const runtimeBlocked = appState.gameRunning || appState.launching;
+    const playbackAllowed = userWantsPlayback && appState.config.bgmEnabled !== false;
+
+    if (!appState.bgmUrl || runtimeBlocked) {
+      if (runtimeBlocked && isPlaying) wasPlayingBeforeGame = true;
       audioElement.pause();
       audioElement.removeAttribute('src');
       audioElement.load();
@@ -46,35 +50,17 @@
       return;
     }
 
-    if (appState.bgmUrl && audioElement.src !== appState.bgmUrl) {
+    if (!playbackAllowed) wasPlayingBeforeGame = false;
+
+    const sourceChanged = audioElement.src !== appState.bgmUrl;
+    if (sourceChanged) {
       audioElement.src = appState.bgmUrl;
       audioElement.volume = isMuted ? 0 : volumePercent / 100;
       audioElement.muted = isMuted;
-
-      if (userWantsPlayback && !appState.gameRunning && appState.config.bgmEnabled !== false) {
-        void audioElement.play().then(() => {
-          isPlaying = true;
-          appState.bgmPlaying = true;
-        }).catch(() => {
-          isPlaying = false;
-          appState.bgmPlaying = false;
-        });
-      }
+      audioElement.load();
     }
-  });
 
-  // Handle game running suspension and resumption
-  $effect(() => {
-    if (!audioElement) return;
-
-    if (appState.gameRunning) {
-      if (isPlaying) {
-        wasPlayingBeforeGame = true;
-        audioElement.pause();
-        isPlaying = false;
-        appState.bgmPlaying = false;
-      }
-    } else if (wasPlayingBeforeGame && userWantsPlayback && appState.config.bgmEnabled !== false) {
+    if ((sourceChanged || wasPlayingBeforeGame) && playbackAllowed) {
       wasPlayingBeforeGame = false;
       void audioElement.play().then(() => {
         isPlaying = true;
@@ -89,7 +75,7 @@
   // Browser Autoplay Policy: attempt play on user's first document interaction
   onMount(() => {
     const handleFirstInteraction = () => {
-      if (audioElement && userWantsPlayback && !isPlaying && !appState.gameRunning && appState.bgmUrl) {
+      if (audioElement && userWantsPlayback && !isPlaying && !appState.gameRunning && !appState.launching && appState.bgmUrl) {
         void audioElement.play().then(() => {
           isPlaying = true;
           appState.bgmPlaying = true;
@@ -122,6 +108,7 @@
       });
     } else {
       userWantsPlayback = true;
+      wasPlayingBeforeGame = false;
       appState.config.bgmEnabled = true;
       void persistAudioConfig().then((saved) => {
         if (!saved) {
@@ -186,7 +173,7 @@
     bind:this={audioElement}
     id="bgMusic"
     loop
-    preload="auto"
+    preload="metadata"
     onplay={() => { isPlaying = true; appState.bgmPlaying = true; }}
     onpause={() => { isPlaying = false; appState.bgmPlaying = false; }}
     onerror={() => { isPlaying = false; appState.bgmPlaying = false; appState.setStatus('Audio BGM tidak dapat diputar.'); }}

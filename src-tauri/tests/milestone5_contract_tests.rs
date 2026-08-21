@@ -67,14 +67,18 @@ fn cached_media_manifest_round_trips_atomically() {
 #[test]
 fn update_checksum_and_archive_validation_rejects_bad_payloads() {
     let valid_hash = "a".repeat(64);
-    let checksums = updater::parse_checksum_manifest(
-        &format!("{valid_hash} *WuwaIDLauncher.zip\ndef456 WuwaIDLauncher.exe\n"),
-    );
+    let checksums = updater::parse_checksum_manifest(&format!(
+        "{valid_hash} *WuwaIDLauncher.zip\ndef456 WuwaIDLauncher.exe\n"
+    ));
     assert_eq!(checksums.get("WuwaIDLauncher.zip"), Some(&valid_hash));
     assert!(updater::is_valid_sha256(&valid_hash));
     assert!(!updater::is_valid_sha256("abc123"));
-    assert!(updater::is_safe_download_url("https://example.com/WuwaIDLauncher.zip"));
-    assert!(!updater::is_safe_download_url("http://example.com/WuwaIDLauncher.zip"));
+    assert!(updater::is_safe_download_url(
+        "https://example.com/WuwaIDLauncher.zip"
+    ));
+    assert!(!updater::is_safe_download_url(
+        "http://example.com/WuwaIDLauncher.zip"
+    ));
 
     let valid = zip_with(&[("WuwaIDLauncher.exe", b"exe")]);
     assert!(updater::validate_update_archive(&valid, "WuwaIDLauncher.exe").is_ok());
@@ -99,7 +103,10 @@ fn update_archive_preserves_canonical_packaged_executable_name() {
     let staging = tempfile::tempdir().unwrap();
     let payload = zip_with(&[("WuwaIDLauncher.exe", b"exe")]);
     let extracted = updater::extract_zip_update(&payload, staging.path()).unwrap();
-    assert_eq!(extracted.file_name().and_then(|name| name.to_str()), Some("WuwaIDLauncher.exe"));
+    assert_eq!(
+        extracted.file_name().and_then(|name| name.to_str()),
+        Some("WuwaIDLauncher.exe")
+    );
     assert!(extracted.exists());
 }
 

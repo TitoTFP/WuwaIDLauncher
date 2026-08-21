@@ -1,8 +1,9 @@
 pub mod engine;
 
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tauri::http::{Request, Response};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -100,49 +101,22 @@ fn window_minimize_action(tray_mode: bool) -> WindowMinimizeAction {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CloseAction {
-    Exit,
-    Blocked(u64),
-}
-
-fn close_action(signature_restore_remaining: Option<u64>) -> CloseAction {
-    match signature_restore_remaining {
-        Some(remaining) if remaining > 0 => CloseAction::Blocked(remaining),
-        _ => CloseAction::Exit,
-    }
-}
-
-fn remaining_signature_restore_seconds(deadline: Instant, now: Instant) -> Option<u64> {
-    let remaining = deadline.saturating_duration_since(now);
-    if remaining.is_zero() {
-        return None;
-    }
-    Some(remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0))
-}
-
 #[derive(Default)]
 struct RuntimeCoordinator {
     launcher_pid: Mutex<Option<u32>>,
-    game_path: Mutex<Option<PathBuf>>,
     force_quit_requested: Mutex<bool>,
     tray_mode: Mutex<bool>,
-    signature_restore_deadline: Mutex<Option<Instant>>,
 }
 
 fn coordinator_launcher_pid<R: Runtime>(app: &AppHandle<R>) -> Option<u32> {
-    app.try_state::<RuntimeCoordinator>().and_then(|state| {
-        state.launcher_pid.lock().ok().and_then(|value| *value)
-    })
+    app.try_state::<RuntimeCoordinator>()
+        .and_then(|state| state.launcher_pid.lock().ok().and_then(|value| *value))
 }
 
-fn set_launcher_process<R: Runtime>(app: &AppHandle<R>, pid: Option<u32>, path: Option<PathBuf>) {
+fn set_launcher_process<R: Runtime>(app: &AppHandle<R>, pid: Option<u32>) {
     if let Some(state) = app.try_state::<RuntimeCoordinator>() {
         if let Ok(mut value) = state.launcher_pid.lock() {
             *value = pid;
-        }
-        if let Ok(mut value) = state.game_path.lock() {
-            *value = path;
         }
         if pid.is_some() {
             if let Ok(mut value) = state.force_quit_requested.lock() {
@@ -166,90 +140,134 @@ fn is_tray_mode<R: Runtime>(app: &AppHandle<R>) -> bool {
         .unwrap_or(false)
 }
 
-fn set_signature_restore_deadline<R: Runtime>(app: &AppHandle<R>, deadline: Option<Instant>) {
-    if let Some(state) = app.try_state::<RuntimeCoordinator>() {
-        if let Ok(mut value) = state.signature_restore_deadline.lock() {
-            *value = deadline;
+fn configure_webview_memory_target<R: Runtime>(_app: &AppHandle<R>) {
+    #[cfg(windows)]
+    {
+        use webview2_com::Microsoft::Web::WebView2::Win32::{
+            ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+        };
+        use windows_core::Interface;
+
+        let Some(window) = _app.get_webview_window("main") else {
+            return;
+        };
+        if let Err(error) = window.with_webview(|webview| {
+            let result = unsafe {
+                webview
+                    .controller()
+                    .CoreWebView2()
+                    .and_then(|core| core.cast::<ICoreWebView2_19>())
+                    .and_then(|core| {
+                        core.SetMemoryUsageTargetLevel(COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW)
+                    })
+            };
+            if let Err(error) = result {
+                log::debug!("WebView2 low-memory target tidak tersedia: {error}");
+            }
+        }) {
+            log::debug!("Konfigurasi target memori WebView2 gagal: {error}");
         }
     }
 }
 
-fn signature_restore_remaining<R: Runtime>(app: &AppHandle<R>) -> Option<u64> {
-    let state = app.try_state::<RuntimeCoordinator>()?;
-    let mut deadline = state.signature_restore_deadline.lock().ok()?;
-    let remaining = deadline
-        .map(|value| remaining_signature_restore_seconds(value, Instant::now()))
-        .flatten();
-    if remaining.is_none() {
-        *deadline = None;
-    }
-    remaining
-}
-
-fn clear_signature_restore_deadline<R: Runtime>(app: &AppHandle<R>, expected: Instant) {
-    if let Some(state) = app.try_state::<RuntimeCoordinator>() {
-        if let Ok(mut value) = state.signature_restore_deadline.lock() {
-            if *value == Some(expected) {
-                *value = None;
-            }
-        }
+fn suspend_webview<R: Runtime + 'static>(_app: &AppHandle<R>) {
+    #[cfg(windows)]
+    {
+        suspend_webview_attempt(_app.clone(), 0);
     }
 }
 
-fn emit_signature_restore_countdown<R: Runtime>(app: &AppHandle<R>, remaining: Option<u64>) {
-    let _ = app.emit(
-        "onSignatureRestoreCountdown",
-        serde_json::json!({
-            "active": remaining.is_some(),
-            "remainingSeconds": remaining.unwrap_or(0),
-        }),
-    );
-}
+#[cfg(windows)]
+fn suspend_webview_attempt<R: Runtime + 'static>(app: AppHandle<R>, attempt: u8) {
+    use webview2_com::{
+        Microsoft::Web::WebView2::Win32::ICoreWebView2_3, TrySuspendCompletedHandler,
+    };
+    use windows_core::Interface;
 
-fn spawn_signature_restore_timer<R: Runtime>(
-    app: AppHandle<R>,
-    game_path: PathBuf,
-    deadline: Instant,
-) {
-    tauri::async_runtime::spawn(async move {
-        loop {
-            let remaining = remaining_signature_restore_seconds(deadline, Instant::now());
-            if let Some(remaining) = remaining {
-                emit_signature_restore_countdown(&app, Some(remaining));
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                continue;
-            }
-
-            if let Err(error) = engine::signature::restore_sig(&game_path) {
-                log::error!("Signature restore at 150s failed: {error}");
-            }
-            clear_signature_restore_deadline(&app, deadline);
-            emit_signature_restore_countdown(&app, None);
-            break;
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    if let Err(error) = window.with_webview(move |webview| {
+        let result = unsafe {
+            webview
+                .controller()
+                .SetIsVisible(false)
+                .and_then(|_| webview.controller().CoreWebView2())
+                .and_then(|core| core.cast::<ICoreWebView2_3>())
+                .and_then(|core| {
+                    let retry_app = app.clone();
+                    let callback =
+                        TrySuspendCompletedHandler::create(Box::new(move |result, suspended| {
+                            match result {
+                                Ok(()) if suspended => {
+                                    log::debug!("WebView2 berhasil disuspend");
+                                }
+                                Ok(()) if attempt < 3 => {
+                                    log::debug!(
+                                        "WebView2 menolak suspend; menjadwalkan percobaan ulang"
+                                    );
+                                    let retry_app = retry_app.clone();
+                                    tauri::async_runtime::spawn(async move {
+                                        tokio::time::sleep(Duration::from_millis(150)).await;
+                                        let Some(window) = retry_app.get_webview_window("main")
+                                        else {
+                                            return;
+                                        };
+                                        if matches!(window.is_visible(), Ok(false)) {
+                                            suspend_webview_attempt(retry_app, attempt + 1);
+                                        }
+                                    });
+                                }
+                                Ok(()) => {
+                                    log::debug!("WebView2 menolak suspend setelah percobaan ulang");
+                                }
+                                Err(error) => {
+                                    log::debug!("WebView2 suspend gagal: {error}");
+                                }
+                            }
+                            Ok(())
+                        }));
+                    core.TrySuspend(&callback)
+                })
+        };
+        if let Err(error) = result {
+            log::debug!("Permintaan suspend WebView2 gagal: {error}");
         }
-    });
+    }) {
+        log::debug!("WebView2 tidak dapat disuspend: {error}");
+    }
 }
 
-fn notify_close_blocked<R: Runtime>(app: &AppHandle<R>, remaining: u64) {
-    emit_signature_restore_countdown(app, Some(remaining));
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.set_focus();
+fn resume_webview<R: Runtime>(_app: &AppHandle<R>) {
+    #[cfg(windows)]
+    {
+        use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_3;
+        use windows_core::Interface;
+
+        let Some(window) = _app.get_webview_window("main") else {
+            return;
+        };
+        if let Err(error) = window.with_webview(|webview| {
+            let result = unsafe {
+                webview
+                    .controller()
+                    .SetIsVisible(true)
+                    .and_then(|_| webview.controller().CoreWebView2())
+                    .and_then(|core| core.cast::<ICoreWebView2_3>())
+                    .and_then(|core| core.Resume())
+            };
+            if let Err(error) = result {
+                log::debug!("Resume WebView2 tidak diperlukan atau gagal: {error}");
+            }
+        }) {
+            log::debug!("WebView2 tidak dapat di-resume: {error}");
+        }
     }
 }
 
 fn request_close<R: Runtime>(app: &AppHandle<R>) {
-    match close_action(signature_restore_remaining(app)) {
-        CloseAction::Blocked(remaining) => {
-            log::info!("Close blocked while Method 3 signature guard has {remaining}s left");
-            notify_close_blocked(app, remaining);
-        }
-        CloseAction::Exit => {
-            set_tray_mode(app, false);
-            restore_tracked_signature(app);
-            app.exit(0);
-        }
-    }
+    set_tray_mode(app, false);
+    app.exit(0);
 }
 
 fn mark_force_quit_requested<R: Runtime>(app: &AppHandle<R>) {
@@ -297,23 +315,14 @@ fn save_launch_evidence(mut evidence: engine::runtime::LaunchEvidence) -> Option
     Some(path)
 }
 
-fn launch_error_message(
-    mut evidence: engine::runtime::LaunchEvidence,
-) -> String {
+fn launch_error_message(mut evidence: engine::runtime::LaunchEvidence) -> String {
     let path = save_launch_evidence(evidence.clone());
     evidence.evidence_path = path;
     evidence.user_message()
 }
 
-fn finish_launch_lifecycle<R: Runtime>(
-    app: &AppHandle<R>,
-    game_path: &Path,
-    restore_signature: bool,
-) {
-    if restore_signature {
-        let _ = engine::signature::restore_sig(game_path);
-    }
-    set_launcher_process(app, None, None);
+fn finish_launch_lifecycle<R: Runtime>(app: &AppHandle<R>) {
+    set_launcher_process(app, None);
     set_tray_mode(app, false);
     emit_runtime_state(
         app,
@@ -322,54 +331,12 @@ fn finish_launch_lifecycle<R: Runtime>(
             origin: engine::runtime::ProcessOrigin::Launcher,
         },
     );
-    let _ = app.emit("onGameLaunchFinished", ());
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.set_focus();
+        resume_webview(app);
     }
-}
-
-enum LaunchDetection {
-    Detected,
-    Exited(engine::runtime::ProcessResult),
-}
-
-async fn wait_for_launch_detection(
-    process: &mut engine::runtime::LaunchedGame,
-) -> Result<LaunchDetection, String> {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        if engine::runtime::find_game_process_id() == Some(process.id()) {
-            return Ok(LaunchDetection::Detected);
-        }
-        if let Some(result) = process.try_wait()? {
-            return Ok(LaunchDetection::Exited(result));
-        }
-        if Instant::now() >= deadline {
-            // A process handle that is still alive is enough to keep the
-            // signature bypass in place. Process enumeration can lag or be
-            // blocked by the game's elevated token, so never restore the
-            // signature merely because discovery timed out.
-            return Ok(LaunchDetection::Detected);
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
-fn restore_tracked_signature<R: Runtime>(app: &AppHandle<R>) {
-    if engine::runtime::is_game_running() {
-        return;
-    }
-    if let Some(state) = app.try_state::<RuntimeCoordinator>() {
-        if let Ok(mut game_path) = state.game_path.lock() {
-            if let Some(path) = game_path.take() {
-                let _ = engine::signature::restore_sig(&path);
-            }
-        }
-        if let Ok(mut launcher_pid) = state.launcher_pid.lock() {
-            *launcher_pid = None;
-        }
-    }
+    let _ = app.emit("onGameLaunchFinished", ());
 }
 
 fn emit_runtime_state<R: Runtime>(app: &AppHandle<R>, state: engine::runtime::RuntimeState) {
@@ -402,7 +369,7 @@ fn spawn_runtime_monitor<R: Runtime>(app: AppHandle<R>) {
                 previous = Some(state);
             }
             if detected_pid.is_none() && coordinator_launcher_pid(&app).is_some() {
-                set_launcher_process(&app, None, None);
+                set_launcher_process(&app, None);
             }
         }
     });
@@ -452,6 +419,7 @@ fn minimize_window<R: Runtime>(window: WebviewWindow<R>) {
         WindowMinimizeAction::Hide => {
             set_tray_mode(app, true);
             let _ = window.hide();
+            suspend_webview(app);
             notify_tray_minimized(app);
         }
     }
@@ -504,8 +472,7 @@ fn save_settings(settings_json: String) -> Result<(), String> {
     }
     let serialized = serde_json::to_string(&normalized.settings)
         .map_err(|e| format!("Failed to serialize settings: {e}"))?;
-    std::fs::write(&path, serialized)
-        .map_err(|e| format!("Failed to save settings: {e}"))?;
+    std::fs::write(&path, serialized).map_err(|e| format!("Failed to save settings: {e}"))?;
     log::info!("Settings saved to {:?}", path);
     Ok(())
 }
@@ -514,8 +481,8 @@ fn save_settings(settings_json: String) -> Result<(), String> {
 fn load_settings() -> Result<engine::settings::SettingsLoadResult, String> {
     let path = get_settings_path();
     let result = if path.exists() {
-        let raw = std::fs::read_to_string(&path)
-            .map_err(|e| format!("Failed to read settings: {e}"))?;
+        let raw =
+            std::fs::read_to_string(&path).map_err(|e| format!("Failed to read settings: {e}"))?;
         engine::settings::normalize_settings_json(&raw)
     } else {
         engine::settings::SettingsLoadResult {
@@ -531,8 +498,7 @@ fn load_settings() -> Result<engine::settings::SettingsLoadResult, String> {
         }
         let serialized = serde_json::to_string(&result.settings)
             .map_err(|e| format!("Failed to serialize default settings: {e}"))?;
-        std::fs::write(&path, serialized)
-            .map_err(|e| format!("Failed to repair settings: {e}"))?;
+        std::fs::write(&path, serialized).map_err(|e| format!("Failed to repair settings: {e}"))?;
     }
     Ok(result)
 }
@@ -586,22 +552,27 @@ fn media_response_from_path(appdata: &Path, request: &Request<Vec<u8>>) -> Respo
     } else {
         "application/octet-stream"
     };
-    let full_data = match std::fs::read(&file_path) {
-        Ok(data) => data,
+    let total_len = match std::fs::metadata(&file_path) {
+        Ok(metadata) => metadata.len(),
         Err(_) => return Response::builder().status(404).body(vec![]).unwrap(),
     };
-    let total_len = full_data.len() as u64;
 
     if let Some(range_val) = request.headers().get("range").and_then(|v| v.to_str().ok()) {
         if let Some((start, end)) = parse_range_header(range_val, total_len) {
+            let Ok(data) = read_media_range(&file_path, start, end) else {
+                return Response::builder().status(404).body(vec![]).unwrap();
+            };
             return Response::builder()
                 .status(206)
                 .header("Content-Type", mime)
-                .header("Content-Range", format!("bytes {}-{}/{}", start, end, total_len))
+                .header(
+                    "Content-Range",
+                    format!("bytes {}-{}/{}", start, end, total_len),
+                )
                 .header("Content-Length", (end - start + 1).to_string())
                 .header("Accept-Ranges", "bytes")
                 .header("Access-Control-Allow-Origin", "*")
-                .body(full_data[start as usize..=end as usize].to_vec())
+                .body(data)
                 .unwrap();
         }
         let mut response = Response::builder()
@@ -613,6 +584,14 @@ fn media_response_from_path(appdata: &Path, request: &Request<Vec<u8>>) -> Respo
         return response.body(vec![]).unwrap();
     }
 
+    let full_data = if total_len == 0 {
+        Vec::new()
+    } else {
+        let Ok(data) = read_media_range(&file_path, 0, total_len - 1) else {
+            return Response::builder().status(404).body(vec![]).unwrap();
+        };
+        data
+    };
     Response::builder()
         .status(200)
         .header("Content-Type", mime)
@@ -621,6 +600,27 @@ fn media_response_from_path(appdata: &Path, request: &Request<Vec<u8>>) -> Respo
         .header("Access-Control-Allow-Origin", "*")
         .body(full_data)
         .unwrap()
+}
+
+fn read_media_range(path: &Path, start: u64, end: u64) -> Result<Vec<u8>, std::io::Error> {
+    if end < start {
+        return Ok(Vec::new());
+    }
+    let length = end - start + 1;
+    let capacity = usize::try_from(length).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "media range too large")
+    })?;
+    let mut file = std::fs::File::open(path)?;
+    file.seek(SeekFrom::Start(start))?;
+    let mut data = Vec::with_capacity(capacity);
+    file.take(length).read_to_end(&mut data)?;
+    if data.len() != capacity {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "media range shorter than requested",
+        ));
+    }
+    Ok(data)
 }
 
 #[tauri::command]
@@ -664,9 +664,7 @@ fn launcher_release_note_payload(release: &engine::updater::ReleaseInfo) -> serd
     })
 }
 
-fn validate_launcher_release_note_payload(
-    payload: serde_json::Value,
-) -> Option<serde_json::Value> {
+fn validate_launcher_release_note_payload(payload: serde_json::Value) -> Option<serde_json::Value> {
     serde_json::from_value::<engine::atom_feed::ReleaseNoteEntry>(payload)
         .ok()
         .and_then(|entry| engine::atom_feed::validate_release_note(&entry).ok())
@@ -744,17 +742,21 @@ fn check_launcher_update<R: Runtime>(app: AppHandle<R>) {
                         );
                         return;
                     }
-                    let _ = app_handle.emit("onLauncherUpdateAvailable", serde_json::json!({
-                        "version": release.version,
-                        "tag": release.tag_name,
-                        "body": release.body,
-                        "zipUrl": zip,
-                        "checksumsUrl": checksums
-                    }));
+                    let _ = app_handle.emit(
+                        "onLauncherUpdateAvailable",
+                        serde_json::json!({
+                            "version": release.version,
+                            "tag": release.tag_name,
+                            "body": release.body,
+                            "zipUrl": zip,
+                            "checksumsUrl": checksums
+                        }),
+                    );
                 } else {
                     let _ = app_handle.emit(
                         "onLauncherUpdateError",
-                        "Update launcher ditemukan tetapi ZIP atau checksum asset tidak tersedia.".to_string(),
+                        "Update launcher ditemukan tetapi ZIP atau checksum asset tidak tersedia."
+                            .to_string(),
                     );
                 }
             }
@@ -823,15 +825,21 @@ fn check_and_sync_media<R: Runtime>(app: AppHandle<R>) {
             })
             .unwrap_or(false);
 
-        let _ = app_handle.emit("onMediaStatus", serde_json::json!({
-            "status": "checking",
-            "message": "Memeriksa aset media..."
-        }));
+        let _ = app_handle.emit(
+            "onMediaStatus",
+            serde_json::json!({
+                "status": "checking",
+                "message": "Memeriksa aset media..."
+            }),
+        );
         if cached_valid {
-            let _ = app_handle.emit("onMediaReady", serde_json::json!({
-                "bgmUrl": media_url("bgm.mp3"),
-                "videoUrl": media_url("bg-video.mp4")
-            }));
+            let _ = app_handle.emit(
+                "onMediaReady",
+                serde_json::json!({
+                    "bgmUrl": media_url("bgm.mp3"),
+                    "videoUrl": media_url("bg-video.mp4")
+                }),
+            );
         }
 
         let client = reqwest::Client::builder()
@@ -847,50 +855,68 @@ fn check_and_sync_media<R: Runtime>(app: AppHandle<R>) {
 
                 let app_progress = app_handle.clone();
                 let res = engine::media::sync_media(&cache_dir, &manifest, move |asset_name, p| {
-                    let _ = app_progress.emit("onMediaProgress", serde_json::json!({
-                        "percent": p.percent,
-                        "text": format!("Mengunduh {}", asset_name),
-                        "speed": p.speed_mbps,
-                        "size": p.status
-                    }));
-                }).await;
+                    let _ = app_progress.emit(
+                        "onMediaProgress",
+                        serde_json::json!({
+                            "percent": p.percent,
+                            "text": format!("Mengunduh {}", asset_name),
+                            "speed": p.speed_mbps,
+                            "size": p.status
+                        }),
+                    );
+                })
+                .await;
 
                 match res {
                     Ok(_) => {
-                        let _ = app_handle.emit("onMediaReady", serde_json::json!({
-                            "bgmUrl": media_url("bgm.mp3"),
-                            "videoUrl": media_url("bg-video.mp4")
-                        }));
-                        let _ = app_handle.emit("onMediaStatus", serde_json::json!({
-                            "status": "ready",
-                            "message": ""
-                        }));
+                        let _ = app_handle.emit(
+                            "onMediaReady",
+                            serde_json::json!({
+                                "bgmUrl": media_url("bgm.mp3"),
+                                "videoUrl": media_url("bg-video.mp4")
+                            }),
+                        );
+                        let _ = app_handle.emit(
+                            "onMediaStatus",
+                            serde_json::json!({
+                                "status": "ready",
+                                "message": ""
+                            }),
+                        );
                     }
                     Err(e) => {
                         log::warn!("Media sync error: {}", e);
                         let status = if cached_valid { "offline" } else { "error" };
                         let message = if cached_valid {
-                            format!("Media baru gagal diverifikasi; memakai cache valid. Detail: {e}")
+                            format!(
+                                "Media baru gagal diverifikasi; memakai cache valid. Detail: {e}"
+                            )
                         } else {
                             e
                         };
-                        let _ = app_handle.emit("onMediaStatus", serde_json::json!({
-                            "status": status,
-                            "message": message
-                        }));
+                        let _ = app_handle.emit(
+                            "onMediaStatus",
+                            serde_json::json!({
+                                "status": status,
+                                "message": message
+                            }),
+                        );
                     }
                 }
             }
             Err(e) => {
                 log::warn!("Failed to fetch media manifest: {}", e);
-                let _ = app_handle.emit("onMediaStatus", serde_json::json!({
-                    "status": "offline",
-                    "message": if cached_valid {
-                        format!("Tidak terhubung; media cache tetap digunakan. Detail: {e}")
-                    } else {
-                        e
-                    }
-                }));
+                let _ = app_handle.emit(
+                    "onMediaStatus",
+                    serde_json::json!({
+                        "status": "offline",
+                        "message": if cached_valid {
+                            format!("Tidak terhubung; media cache tetap digunakan. Detail: {e}")
+                        } else {
+                            e
+                        }
+                    }),
+                );
             }
         }
     });
@@ -907,7 +933,10 @@ fn get_vh_release_notes<R: Runtime>(app: AppHandle<R>) {
         if let Ok(content) = std::fs::read_to_string(&versions_path) {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
                 if let Some(cached) = json.get("_cachedReleaseNotes") {
-                    if let Some(entry) = serde_json::from_value::<engine::atom_feed::ReleaseNoteEntry>(cached.clone())
+                    if let Some(entry) =
+                        serde_json::from_value::<engine::atom_feed::ReleaseNoteEntry>(
+                            cached.clone(),
+                        )
                         .ok()
                         .and_then(|entry| engine::atom_feed::validate_release_note(&entry).ok())
                     {
@@ -928,7 +957,12 @@ fn get_vh_release_notes<R: Runtime>(app: AppHandle<R>) {
             .build()
             .unwrap_or_default();
 
-        match engine::atom_feed::fetch_latest_release_notes(&client, engine::atom_feed::ATOM_FEED_URL).await {
+        match engine::atom_feed::fetch_latest_release_notes(
+            &client,
+            engine::atom_feed::ATOM_FEED_URL,
+        )
+        .await
+        {
             Ok(entry) => {
                 let entry = match engine::atom_feed::validate_release_note(&entry) {
                     Ok(entry) => entry,
@@ -947,12 +981,16 @@ fn get_vh_release_notes<R: Runtime>(app: AppHandle<R>) {
 
                 // Persist to versions.json cache
                 let mut map = if let Ok(c) = std::fs::read_to_string(&versions_path) {
-                    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&c).unwrap_or_default()
+                    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&c)
+                        .unwrap_or_default()
                 } else {
                     serde_json::Map::new()
                 };
                 map.insert("_cachedReleaseNotes".to_string(), note_json.clone());
-                let _ = std::fs::write(&versions_path, serde_json::to_string(&map).unwrap_or_default());
+                let _ = std::fs::write(
+                    &versions_path,
+                    serde_json::to_string(&map).unwrap_or_default(),
+                );
 
                 let _ = app_handle.emit("onVHReleaseNotes", note_json);
             }
@@ -986,7 +1024,11 @@ fn perform_launcher_update<R: Runtime>(
     zip_url: String,
     checksums_url: Option<String>,
 ) {
-    log::info!("Perform launcher update requested: {} -> {}", version, zip_url);
+    log::info!(
+        "Perform launcher update requested: {} -> {}",
+        version,
+        zip_url
+    );
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
         let temp_zip = get_appdata_dir().join("update.zip");
@@ -1020,11 +1062,15 @@ fn perform_launcher_update<R: Runtime>(
         let app_progress = app_handle.clone();
 
         let res = engine::downloader::download_file(&zip_url, &temp_zip, move |p| {
-            let _ = app_progress.emit("onLauncherUpdateProgress", serde_json::json!({
-                "percent": p.percent,
-                "status": p.status
-            }));
-        }).await;
+            let _ = app_progress.emit(
+                "onLauncherUpdateProgress",
+                serde_json::json!({
+                    "percent": p.percent,
+                    "status": p.status
+                }),
+            );
+        })
+        .await;
 
         match res {
             Ok(()) => {
@@ -1060,7 +1106,8 @@ fn perform_launcher_update<R: Runtime>(
                         return Err("Checksum ZIP update tidak cocok.".to_string());
                     }
                     Ok::<Vec<u8>, String>(zip_data)
-                }.await;
+                }
+                .await;
                 match verified_zip.and_then(|zip_data| {
                     if staging.exists() {
                         std::fs::remove_dir_all(&staging)
@@ -1075,7 +1122,9 @@ fn perform_launcher_update<R: Runtime>(
                                 cleanup_update_artifacts(&temp_zip, &staging, &handoff_path);
                                 let _ = app_handle.emit(
                                     "onLauncherUpdateError",
-                                    format!("Executable launcher saat ini tidak ditemukan: {error}"),
+                                    format!(
+                                        "Executable launcher saat ini tidak ditemukan: {error}"
+                                    ),
                                 );
                                 return;
                             }
@@ -1093,10 +1142,13 @@ fn perform_launcher_update<R: Runtime>(
                             );
                             return;
                         }
-                        let _ = app_handle.emit("onLauncherUpdateProgress", serde_json::json!({
-                            "percent": 100,
-                            "status": "Update terverifikasi dan siap diterapkan."
-                        }));
+                        let _ = app_handle.emit(
+                            "onLauncherUpdateProgress",
+                            serde_json::json!({
+                                "percent": 100,
+                                "status": "Update terverifikasi dan siap diterapkan."
+                            }),
+                        );
                         log::info!("Update staged at {:?}", exe_path);
                         let _ = app_handle.emit("onLauncherUpdateStaged", ());
                         for remaining_seconds in launcher_update_restart_countdown() {
@@ -1168,12 +1220,15 @@ async fn check_patch_status<R: Runtime>(
     let method = match engine::method::InstallMethod::parse(&install_method) {
         Ok(method) => method,
         Err(error) => {
-            let _ = app.emit("onPatchStatus", serde_json::json!({
-                "status": "invalid",
-                "gamePath": game_path,
-                "installMethod": install_method,
-                "message": error
-            }));
+            let _ = app.emit(
+                "onPatchStatus",
+                serde_json::json!({
+                    "status": "invalid",
+                    "gamePath": game_path,
+                    "installMethod": install_method,
+                    "message": error
+                }),
+            );
             return Ok(());
         }
     };
@@ -1181,12 +1236,15 @@ async fn check_patch_status<R: Runtime>(
     let normalized_path = match engine::path::normalize_game_path(&game_path) {
         Some(path) => path,
         None => {
-            let _ = app.emit("onPatchStatus", serde_json::json!({
-                "status": "invalid",
-                "gamePath": game_path,
-                "installMethod": method.as_str(),
-                "message": "Folder game tidak valid atau executable game tidak ditemukan."
-            }));
+            let _ = app.emit(
+                "onPatchStatus",
+                serde_json::json!({
+                    "status": "invalid",
+                    "gamePath": game_path,
+                    "installMethod": method.as_str(),
+                    "message": "Folder game tidak valid atau executable game tidak ditemukan."
+                }),
+            );
             return Ok(());
         }
     };
@@ -1205,13 +1263,16 @@ async fn check_patch_status<R: Runtime>(
         latest_version.as_deref(),
     );
 
-    let _ = app.emit("onPatchStatus", serde_json::json!({
-        "status": status.as_str(),
-        "gamePath": normalized_path,
-        "installMethod": method.as_str(),
-        "currentVersion": current_version,
-        "latestVersion": latest_version
-    }));
+    let _ = app.emit(
+        "onPatchStatus",
+        serde_json::json!({
+            "status": status.as_str(),
+            "gamePath": normalized_path,
+            "installMethod": method.as_str(),
+            "currentVersion": current_version,
+            "latestVersion": latest_version
+        }),
+    );
     Ok(())
 }
 
@@ -1253,7 +1314,6 @@ fn start_installation<R: Runtime>(
     app: AppHandle<R>,
     game_path: String,
     _vh_mode: String,
-    backup: bool,
     install_method: String,
 ) {
     let method = match engine::method::InstallMethod::parse(&install_method) {
@@ -1263,23 +1323,19 @@ fn start_installation<R: Runtime>(
             return;
         }
     };
-    let normalized_game_path = match engine::installer::validate_installation_preconditions(
-        &game_path,
-        method,
-    ) {
-        Ok(path) => path.to_string_lossy().to_string(),
-        Err(error) => {
-            let _ = app.emit("onInstallError", error);
-            return;
-        }
-    };
+    let normalized_game_path =
+        match engine::installer::validate_installation_preconditions(&game_path, method) {
+            Ok(path) => path.to_string_lossy().to_string(),
+            Err(error) => {
+                let _ = app.emit("onInstallError", error);
+                return;
+            }
+        };
     let canonical_method = method.as_str().to_string();
-    // Keep the IPC argument for compatibility. SignatureBypass creates its
-    // temporary backup only at launch, matching the release launcher.
-    let _ = backup;
     log::info!(
         "Start installation: path={}, method={}",
-        normalized_game_path, canonical_method
+        normalized_game_path,
+        canonical_method
     );
 
     let app_handle = app.clone();
@@ -1287,10 +1343,13 @@ fn start_installation<R: Runtime>(
         let game_path = normalized_game_path;
         let p = Path::new(&game_path);
 
-        let _ = app_handle.emit("onProgressUpdate", serde_json::json!({
-            "percent": 5,
-            "status": "Memeriksa rilis mod terbaru..."
-        }));
+        let _ = app_handle.emit(
+            "onProgressUpdate",
+            serde_json::json!({
+                "percent": 5,
+                "status": "Memeriksa rilis mod terbaru..."
+            }),
+        );
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
@@ -1308,22 +1367,35 @@ fn start_installation<R: Runtime>(
             .await
             .unwrap_or_else(|| "unknown".to_string());
 
-        let cache_pak = get_appdata_dir().join("Cache").join(engine::path::PAK_FILE_NAME);
+        let cache_pak = get_appdata_dir()
+            .join("Cache")
+            .join(engine::path::PAK_FILE_NAME);
         if let Some(parent) = cache_pak.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
 
         let target_asset_name = engine::path::PAK_FILE_NAME;
-        let expected_hash = checksums.get(target_asset_name).cloned().unwrap_or_default();
+        let expected_hash = checksums
+            .get(target_asset_name)
+            .cloned()
+            .unwrap_or_default();
 
         if expected_hash.is_empty() {
             log::error!("Checksum for {} not found in manifest", target_asset_name);
-            let _ = app_handle.emit("onInstallError", format!("Checksum SHA-256 untuk file {} tidak ditemukan pada server release.", target_asset_name));
+            let _ = app_handle.emit(
+                "onInstallError",
+                format!(
+                    "Checksum SHA-256 untuk file {} tidak ditemukan pada server release.",
+                    target_asset_name
+                ),
+            );
             return;
         }
 
         let mut need_download = true;
-        if cache_pak.exists() && engine::downloader::verify_sha256(&cache_pak, &expected_hash).unwrap_or(false) {
+        if cache_pak.exists()
+            && engine::downloader::verify_sha256(&cache_pak, &expected_hash).unwrap_or(false)
+        {
             need_download = false;
         }
 
@@ -1336,7 +1408,10 @@ fn start_installation<R: Runtime>(
                 Ok(len) => len,
                 Err(e) => {
                     log::error!("Failed to fetch asset metadata: {}", e);
-                    let _ = app_handle.emit("onInstallError", format!("Gagal memverifikasi metadata asset rilis: {}", e));
+                    let _ = app_handle.emit(
+                        "onInstallError",
+                        format!("Gagal memverifikasi metadata asset rilis: {}", e),
+                    );
                     return;
                 }
             };
@@ -1346,25 +1421,35 @@ fn start_installation<R: Runtime>(
                 &cache_pak,
                 Some(content_len),
                 move |prog| {
-                    let _ = app_progress.emit("onProgressUpdate", serde_json::json!({
-                        "percent": (prog.percent as f32 * 0.85) as u8,
-                        "status": format!("Mengunduh patch... {}", prog.status),
-                        "downloadedBytes": prog.downloaded_bytes,
-                        "totalBytes": prog.total_bytes,
-                        "speedMbps": prog.speed_mbps
-                    }));
+                    let _ = app_progress.emit(
+                        "onProgressUpdate",
+                        serde_json::json!({
+                            "percent": (prog.percent as f32 * 0.85) as u8,
+                            "status": format!("Mengunduh patch... {}", prog.status),
+                            "downloadedBytes": prog.downloaded_bytes,
+                            "totalBytes": prog.total_bytes,
+                            "speedMbps": prog.speed_mbps
+                        }),
+                    );
                 },
-            ).await;
+            )
+            .await;
 
             if let Err(e) = dl_res {
                 log::error!("Patch download failed: {}", e);
-                let _ = app_handle.emit("onInstallError", format!("Gagal mengunduh patch mod: {}", e));
+                let _ = app_handle.emit(
+                    "onInstallError",
+                    format!("Gagal mengunduh patch mod: {}", e),
+                );
                 return;
             }
 
             if !engine::downloader::verify_sha256(&cache_pak, &expected_hash).unwrap_or(false) {
                 let _ = std::fs::remove_file(&cache_pak);
-                let _ = app_handle.emit("onInstallError", "Integritas file patch gagal diverifikasi (SHA-256 mismatch).".to_string());
+                let _ = app_handle.emit(
+                    "onInstallError",
+                    "Integritas file patch gagal diverifikasi (SHA-256 mismatch).".to_string(),
+                );
                 return;
             }
         }
@@ -1383,24 +1468,23 @@ fn start_installation<R: Runtime>(
 
             let mut need_loader_download = true;
             if loader_cache.exists()
-                && engine::downloader::verify_sha256(&loader_cache, &loader_hash)
-                    .unwrap_or(false)
+                && engine::downloader::verify_sha256(&loader_cache, &loader_hash).unwrap_or(false)
             {
                 need_loader_download = false;
             }
             if need_loader_download {
                 let loader_url = format!("{}{}", WUWAID_LATEST_DOWNLOAD_BASE_URL, "winhttp.dll");
-                let loader_len = match engine::downloader::get_asset_content_length(&loader_url).await
-                {
-                    Ok(len) => len,
-                    Err(error) => {
-                        let _ = app_handle.emit(
-                            "onInstallError",
-                            format!("Gagal memeriksa metadata loader winhttp.dll: {error}"),
-                        );
-                        return;
-                    }
-                };
+                let loader_len =
+                    match engine::downloader::get_asset_content_length(&loader_url).await {
+                        Ok(len) => len,
+                        Err(error) => {
+                            let _ = app_handle.emit(
+                                "onInstallError",
+                                format!("Gagal memeriksa metadata loader winhttp.dll: {error}"),
+                            );
+                            return;
+                        }
+                    };
                 if let Err(error) = engine::downloader::download_file_with_expected_size(
                     &loader_url,
                     &loader_cache,
@@ -1431,10 +1515,13 @@ fn start_installation<R: Runtime>(
             None
         };
 
-        let _ = app_handle.emit("onProgressUpdate", serde_json::json!({
-            "percent": 90,
-            "status": "Memasang file mod..."
-        }));
+        let _ = app_handle.emit(
+            "onProgressUpdate",
+            serde_json::json!({
+                "percent": 90,
+                "status": "Memasang file mod..."
+            }),
+        );
 
         if let Err(error) = engine::installer::install_patch_transaction(
             p,
@@ -1478,10 +1565,13 @@ fn start_installation<R: Runtime>(
             return;
         }
 
-        let _ = app_handle.emit("onProgressUpdate", serde_json::json!({
-            "percent": 100,
-            "status": "Instalasi selesai!"
-        }));
+        let _ = app_handle.emit(
+            "onProgressUpdate",
+            serde_json::json!({
+                "percent": 100,
+                "status": "Instalasi selesai!"
+            }),
+        );
         let _ = app_handle.emit("onInstallComplete", ());
     });
 }
@@ -1498,11 +1588,7 @@ fn check_game_folder_write_access(
     };
     match engine::installer::validate_installation_preconditions(&game_path, method) {
         Ok(_) => "ok".to_string(),
-        Err(error) => error
-            .split(':')
-            .next()
-            .unwrap_or("needs_admin")
-            .to_string(),
+        Err(error) => error.split(':').next().unwrap_or("needs_admin").to_string(),
     }
 }
 
@@ -1520,14 +1606,14 @@ fn launch_game<R: Runtime>(
             return Err(error);
         }
     };
-    let normalized_game_path = match engine::runtime::validate_launch_preconditions(&game_path, method)
-    {
-        Ok(path) => path,
-        Err(error) => {
-            let _ = app.emit("onLaunchError", error.clone());
-            return Err(error);
-        }
-    };
+    let normalized_game_path =
+        match engine::runtime::validate_launch_preconditions(&game_path, method) {
+            Ok(path) => path,
+            Err(error) => {
+                let _ = app.emit("onLaunchError", error.clone());
+                return Err(error);
+            }
+        };
     let canonical_method = method.as_str().to_string();
     log::info!(
         "Launch game: path={}, dx11={}, method={}",
@@ -1542,89 +1628,55 @@ fn launch_game<R: Runtime>(
         let _ = app_handle.emit("onGameLaunchStarted", ());
         let command = engine::runtime::build_launch_command(&p, dx11);
 
-        if method == engine::method::InstallMethod::SignatureBypass {
-            match engine::signature::bypass_sig(&p) {
-                Ok(true) => {}
-                Ok(false) => {
-                    let mut evidence = engine::runtime::LaunchEvidence::for_failure(
-                        command,
-                        engine::runtime::SpawnFailureKind::SpawnFailed,
-                        None,
-                    );
-                    evidence.error = Some(
-                        "signature_bypass_failed: signature file tidak ditemukan".to_string(),
-                    );
-                    evidence.game_log_tail = engine::runtime::collect_game_log_tail(&p);
-                    let _ = app_handle.emit("onLaunchError", launch_error_message(evidence));
-                    finish_launch_lifecycle(&app_handle, &p, true);
-                    return;
-                }
-                Err(error) => {
-                    let mut evidence = engine::runtime::LaunchEvidence::for_failure(
-                        command,
-                        engine::runtime::SpawnFailureKind::SpawnFailed,
-                        None,
-                    );
-                    evidence.error = Some(format!("signature_bypass_failed: {error}"));
-                    evidence.game_log_tail = engine::runtime::collect_game_log_tail(&p);
-                    let _ = app_handle.emit("onLaunchError", launch_error_message(evidence));
-                    finish_launch_lifecycle(&app_handle, &p, true);
-                    return;
-                }
-            }
-        }
-
         match engine::runtime::launch_game(&p, dx11) {
             Ok(mut process) => {
-                if let Some(service) = app_handle
-                    .try_state::<engine::active_player::ActivePlayerService>()
+                if let Some(service) =
+                    app_handle.try_state::<engine::active_player::ActivePlayerService>()
                 {
                     service.send_launch(method);
-                }
-                if method == engine::method::InstallMethod::SignatureBypass {
-                    let deadline = Instant::now() + Duration::from_secs(150);
-                    set_signature_restore_deadline(&app_handle, Some(deadline));
-                    emit_signature_restore_countdown(&app_handle, Some(150));
-                    spawn_signature_restore_timer(app_handle.clone(), p.clone(), deadline);
                 }
                 let mut evidence = engine::runtime::LaunchEvidence::for_process(
                     command,
                     process.mode,
                     process.id(),
                 );
-                match wait_for_launch_detection(&mut process).await {
-                    Ok(LaunchDetection::Exited(result)) => {
-                        evidence.failure_kind = Some(engine::runtime::SpawnFailureKind::ImmediateExit);
+                // Hide immediately after a successful spawn. Process discovery is
+                // still handled by the runtime monitor and no longer delays this.
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    set_tray_mode(&app_handle, true);
+                    let _ = window.hide();
+                    suspend_webview(&app_handle);
+                    notify_tray_minimized(&app_handle);
+                }
+                engine::runtime::trim_memory_working_set();
+
+                match process.try_wait() {
+                    Ok(Some(result)) => {
+                        evidence.failure_kind =
+                            Some(engine::runtime::SpawnFailureKind::ImmediateExit);
                         evidence.exit_code = result.exit_code;
                         evidence.stdout = result.stdout;
                         evidence.stderr = result.stderr;
                         evidence.game_log_tail = engine::runtime::collect_game_log_tail(&p);
                         evidence.mark_finished();
                         let _ = app_handle.emit("onLaunchError", launch_error_message(evidence));
-                        finish_launch_lifecycle(
-                            &app_handle,
-                            &p,
-                            method == engine::method::InstallMethod::SignatureBypass,
-                        );
+                        finish_launch_lifecycle(&app_handle);
                         return;
                     }
-                    Ok(LaunchDetection::Detected) => {}
+                    Ok(None) => {}
                     Err(error) => {
-                        evidence.failure_kind = Some(engine::runtime::SpawnFailureKind::SpawnFailed);
+                        evidence.failure_kind =
+                            Some(engine::runtime::SpawnFailureKind::SpawnFailed);
                         evidence.error = Some(error);
                         evidence.game_log_tail = engine::runtime::collect_game_log_tail(&p);
                         let _ = app_handle.emit("onLaunchError", launch_error_message(evidence));
-                        finish_launch_lifecycle(
-                            &app_handle,
-                            &p,
-                            method == engine::method::InstallMethod::SignatureBypass,
-                        );
+                        finish_launch_lifecycle(&app_handle);
                         return;
                     }
                 }
 
                 evidence.mark_detected();
-                set_launcher_process(&app_handle, Some(process.id()), Some(p.clone()));
+                set_launcher_process(&app_handle, Some(process.id()));
                 emit_runtime_state(
                     &app_handle,
                     engine::runtime::RuntimeState {
@@ -1633,18 +1685,9 @@ fn launch_game<R: Runtime>(
                     },
                 );
 
-                // Auto-minimize window and trim memory only after process detection.
-                if let Some(window) = app_handle.get_webview_window("main") {
-                    set_tray_mode(&app_handle, true);
-                    let _ = window.hide();
-                    notify_tray_minimized(&app_handle);
-                }
-                engine::runtime::trim_memory_working_set();
-
                 // Monitor process in background and persist final evidence.
                 let app_for_monitor = app_handle.clone();
                 let p_for_monitor = p.clone();
-                let restore_signature = method == engine::method::InstallMethod::SignatureBypass;
                 tokio::task::spawn_blocking(move || {
                     let process_result = process.wait();
                     match process_result {
@@ -1662,10 +1705,8 @@ fn launch_game<R: Runtime>(
                                 evidence.error = Some(
                                     "game process exited with a non-zero exit code".to_string(),
                                 );
-                                let _ = app_for_monitor.emit(
-                                    "onLaunchError",
-                                    launch_error_message(evidence.clone()),
-                                );
+                                let _ = app_for_monitor
+                                    .emit("onLaunchError", launch_error_message(evidence.clone()));
                             } else {
                                 let _ = save_launch_evidence(evidence.clone());
                             }
@@ -1676,23 +1717,17 @@ fn launch_game<R: Runtime>(
                             evidence.error = Some(error);
                             evidence.game_log_tail =
                                 engine::runtime::collect_game_log_tail(&p_for_monitor);
-                            let _ = app_for_monitor.emit(
-                                "onLaunchError",
-                                launch_error_message(evidence.clone()),
-                            );
+                            let _ = app_for_monitor
+                                .emit("onLaunchError", launch_error_message(evidence.clone()));
                         }
                     }
-                    finish_launch_lifecycle(&app_for_monitor, &p_for_monitor, restore_signature);
+                    finish_launch_lifecycle(&app_for_monitor);
                 });
             }
             Err(mut error) => {
                 error.evidence.game_log_tail = engine::runtime::collect_game_log_tail(&p);
                 let _ = app_handle.emit("onLaunchError", launch_error_message(error.evidence));
-                finish_launch_lifecycle(
-                    &app_handle,
-                    &p,
-                    method == engine::method::InstallMethod::SignatureBypass,
-                );
+                finish_launch_lifecycle(&app_handle);
             }
         }
     });
@@ -1701,29 +1736,20 @@ fn launch_game<R: Runtime>(
 
 #[tauri::command]
 fn force_quit_game<R: Runtime>(app: AppHandle<R>) -> Result<bool, String> {
-    let active_path = app
-        .try_state::<RuntimeCoordinator>()
-        .and_then(|state| state.game_path.lock().ok().and_then(|value| value.clone()));
-    if active_path.is_some() {
+    if coordinator_launcher_pid(&app).is_some() {
         mark_force_quit_requested(&app);
     }
     let terminated = match engine::runtime::force_quit_game() {
         Ok(terminated) => terminated,
         Err(error) => {
             if engine::runtime::find_game_process_id().is_none() {
-                if let Some(path) = active_path {
-                    let _ = engine::signature::restore_sig(&path);
-                }
-                set_launcher_process(&app, None, None);
+                set_launcher_process(&app, None);
             }
             let _ = app.emit("onLaunchError", format!("force_quit_failed: {error}"));
             return Err(error);
         }
     };
-    if let Some(path) = active_path {
-        let _ = engine::signature::restore_sig(&path);
-    }
-    set_launcher_process(&app, None, None);
+    set_launcher_process(&app, None);
     set_tray_mode(&app, false);
     emit_runtime_state(
         &app,
@@ -1732,11 +1758,12 @@ fn force_quit_game<R: Runtime>(app: AppHandle<R>) -> Result<bool, String> {
             origin: engine::runtime::ProcessOrigin::External,
         },
     );
-    let _ = app.emit("onGameLaunchFinished", ());
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.set_focus();
+        resume_webview(&app);
     }
+    let _ = app.emit("onGameLaunchFinished", ());
     log::info!("Force quit game requested");
     Ok(terminated)
 }
@@ -1748,40 +1775,39 @@ fn switch_method(
 ) -> Result<engine::installer::CleanupReport, String> {
     let method = engine::method::InstallMethod::parse(&new_method)?;
     let normalized = engine::installer::validate_installation_preconditions(&game_path, method)?;
-    log::info!("Switching method for {} to {}", normalized.display(), method);
+    log::info!(
+        "Switching method for {} to {}",
+        normalized.display(),
+        method
+    );
     let versions_path = get_appdata_dir().join("versions.json");
-    let report = engine::installer::cleanup_owned_artifacts_with_commit(
-        &normalized,
-        None,
-        || {
-            if versions_path.exists() {
-                let original = std::fs::read(&versions_path)
-                    .map_err(|error| format!("metadata_read_failed: {error}"))?;
-                let content = String::from_utf8(original.clone())
-                    .map_err(|error| format!("metadata_read_failed: {error}"))?;
-                let mut json = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
-                    &content,
-                )
-                .map_err(|error| format!("metadata_parse_failed: {error}"))?;
-                json.insert(
-                    "_installMethod".to_string(),
-                    serde_json::Value::String(method.as_str().to_string()),
-                );
-                let serialized = serde_json::to_string(&json)
-                    .map_err(|error| format!("metadata_encode_failed: {error}"))?;
-                if let Err(error) = std::fs::write(&versions_path, serialized) {
-                    let restore = std::fs::write(&versions_path, original);
-                    return Err(match restore {
-                        Ok(()) => format!("metadata_write_failed: {error}"),
-                        Err(restore_error) => format!(
-                            "metadata_write_failed: {error}; metadata_rollback_failed: {restore_error}"
-                        ),
-                    });
-                }
+    let report = engine::installer::cleanup_owned_artifacts_with_commit(&normalized, None, || {
+        if versions_path.exists() {
+            let original = std::fs::read(&versions_path)
+                .map_err(|error| format!("metadata_read_failed: {error}"))?;
+            let content = String::from_utf8(original.clone())
+                .map_err(|error| format!("metadata_read_failed: {error}"))?;
+            let mut json =
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&content)
+                    .map_err(|error| format!("metadata_parse_failed: {error}"))?;
+            json.insert(
+                "_installMethod".to_string(),
+                serde_json::Value::String(method.as_str().to_string()),
+            );
+            let serialized = serde_json::to_string(&json)
+                .map_err(|error| format!("metadata_encode_failed: {error}"))?;
+            if let Err(error) = std::fs::write(&versions_path, serialized) {
+                let restore = std::fs::write(&versions_path, original);
+                return Err(match restore {
+                    Ok(()) => format!("metadata_write_failed: {error}"),
+                    Err(restore_error) => format!(
+                        "metadata_write_failed: {error}; metadata_rollback_failed: {restore_error}"
+                    ),
+                });
             }
-            Ok(())
-        },
-    )?;
+        }
+        Ok(())
+    })?;
     Ok(report)
 }
 
@@ -1794,17 +1820,14 @@ fn uninstall(game_path: String) -> Result<String, String> {
                 .ok_or_else(|| "invalid_game_path: executable game tidak ditemukan".to_string())
         })?;
     let versions_path = get_appdata_dir().join("versions.json");
-    let _report = engine::installer::cleanup_owned_artifacts_with_commit(
-        &normalized,
-        None,
-        || {
+    let _report =
+        engine::installer::cleanup_owned_artifacts_with_commit(&normalized, None, || {
             if versions_path.exists() {
                 std::fs::remove_file(&versions_path)
                     .map_err(|error| format!("metadata_remove_failed: {error}"))?;
             }
             Ok(())
-        },
-    )?;
+        })?;
     log::info!("Uninstall patch completed for: {}", normalized.display());
     Ok("ok".to_string())
 }
@@ -1823,13 +1846,16 @@ fn restart_as_admin() {
 pub fn run() {
     tauri::Builder::default()
         .manage(RuntimeCoordinator::default())
-        .manage(engine::active_player::ActivePlayerService::new(get_appdata_dir()))
+        .manage(engine::active_player::ActivePlayerService::new(
+            get_appdata_dir(),
+        ))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
         .register_uri_scheme_protocol("media", media_protocol_handler)
         .setup(|app| {
             let app_handle = app.handle().clone();
+            configure_webview_memory_target(&app_handle);
             spawn_runtime_monitor(app_handle.clone());
 
             // Tray icon setup
@@ -1848,6 +1874,7 @@ pub fn run() {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
+                            resume_webview(app);
                         }
                     }
                     _ => {}
@@ -1864,6 +1891,7 @@ pub fn run() {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
+                            resume_webview(app);
                         }
                     }
                 })
@@ -1901,12 +1929,10 @@ pub fn run() {
         .expect("error while building wuwaid launcher application")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
-                if let Some(service) = app
-                    .try_state::<engine::active_player::ActivePlayerService>()
+                if let Some(service) = app.try_state::<engine::active_player::ActivePlayerService>()
                 {
                     service.stop();
                 }
-                restore_tracked_signature(app);
             }
         });
 }
@@ -1916,10 +1942,10 @@ mod tests {
     use super::*;
     use std::sync::mpsc::sync_channel;
     use std::time::Duration;
-    use tauri::{Emitter, Listener};
     use tauri::ipc::{CallbackFn, InvokeBody};
     use tauri::test::{assert_ipc_response, INVOKE_KEY};
     use tauri::webview::InvokeRequest;
+    use tauri::{Emitter, Listener};
 
     static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -1948,7 +1974,10 @@ mod tests {
 
     #[test]
     fn window_minimize_action_distinguishes_normal_and_tray_modes() {
-        assert_eq!(window_minimize_action(false), WindowMinimizeAction::Minimize);
+        assert_eq!(
+            window_minimize_action(false),
+            WindowMinimizeAction::Minimize
+        );
         assert_eq!(window_minimize_action(true), WindowMinimizeAction::Hide);
     }
 
@@ -1990,38 +2019,23 @@ mod tests {
     }
 
     #[test]
-    fn close_action_is_blocked_only_while_signature_guard_has_time_left() {
-        assert_eq!(close_action(Some(42)), CloseAction::Blocked(42));
-        assert_eq!(close_action(Some(1)), CloseAction::Blocked(1));
-        assert_eq!(close_action(Some(0)), CloseAction::Exit);
-        assert_eq!(close_action(None), CloseAction::Exit);
-    }
-
-    #[test]
-    fn signature_restore_countdown_rounds_up_until_deadline() {
-        let now = Instant::now();
-        assert_eq!(remaining_signature_restore_seconds(now + Duration::from_secs(150), now), Some(150));
-        assert_eq!(
-            remaining_signature_restore_seconds(
-                now + Duration::from_millis(1_500),
-                now + Duration::from_millis(600),
-            ),
-            Some(1)
-        );
-        assert_eq!(remaining_signature_restore_seconds(now, now), None);
-    }
-
-    #[test]
     fn test_real_tauri_command_path_and_event_delivery() {
         let app = tauri::test::mock_builder()
-            .invoke_handler(tauri::generate_handler![get_app_version, check_game_folder_write_access])
+            .invoke_handler(tauri::generate_handler![
+                get_app_version,
+                check_game_folder_write_access
+            ])
             .build(tauri::generate_context!())
             .unwrap();
         let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
             .unwrap();
 
-        assert_ipc_response(&window, ipc_request("get_app_version", serde_json::json!({})), Ok(env!("CARGO_PKG_VERSION").to_string()));
+        assert_ipc_response(
+            &window,
+            ipc_request("get_app_version", serde_json::json!({})),
+            Ok(env!("CARGO_PKG_VERSION").to_string()),
+        );
         let tmp = tempfile::tempdir().unwrap();
         let exe_dir = tmp.path().join("Client").join("Binaries").join("Win64");
         let resource_dir = tmp
@@ -2052,11 +2066,14 @@ mod tests {
         .unwrap();
         assert_ipc_response(
             &window,
-            ipc_request("check_game_folder_write_access", serde_json::json!({
-                "gamePath": tmp.path().to_string_lossy(),
-                "installMethod": "resource_mount",
-                "forInstallation": true,
-            })),
+            ipc_request(
+                "check_game_folder_write_access",
+                serde_json::json!({
+                    "gamePath": tmp.path().to_string_lossy(),
+                    "installMethod": "resource_mount",
+                    "forInstallation": true,
+                }),
+            ),
             Ok("ok".to_string()),
         );
 
@@ -2064,10 +2081,14 @@ mod tests {
         let listener = app.listen_any("onMediaReady", move |event| {
             let _ = tx.send(event.payload().to_string());
         });
-        app.emit("onMediaReady", serde_json::json!({
-            "bgmUrl": media_url("bgm.mp3"),
-            "videoUrl": media_url("bg-video.mp4"),
-        })).unwrap();
+        app.emit(
+            "onMediaReady",
+            serde_json::json!({
+                "bgmUrl": media_url("bgm.mp3"),
+                "videoUrl": media_url("bg-video.mp4"),
+            }),
+        )
+        .unwrap();
         let payload = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&payload).unwrap()["videoUrl"],
@@ -2145,10 +2166,8 @@ mod tests {
                     engine::media::AssetEntry {
                         name: "bg-video.mp4".to_string(),
                         url: "http://127.0.0.1/bg-video.mp4".to_string(),
-                        sha256: engine::downloader::compute_sha256(
-                            &cache_dir.join("bg-video.mp4"),
-                        )
-                        .unwrap(),
+                        sha256: engine::downloader::compute_sha256(&cache_dir.join("bg-video.mp4"))
+                            .unwrap(),
                     },
                 ],
             },
@@ -2201,13 +2220,19 @@ mod tests {
         let response = registered_media_protocol_response(appdata.path(), request);
         assert_eq!(response.status(), 206);
         assert_eq!(response.body(), b"2345");
-        assert_eq!(response.headers().get("Content-Range").unwrap(), "bytes 2-5/10");
+        assert_eq!(
+            response.headers().get("Content-Range").unwrap(),
+            "bytes 2-5/10"
+        );
 
         let missing = tauri::http::Request::builder()
             .uri("media://localhost/missing.mp4")
             .body(Vec::new())
             .unwrap();
-        assert_eq!(registered_media_protocol_response(appdata.path(), missing).status(), 404);
+        assert_eq!(
+            registered_media_protocol_response(appdata.path(), missing).status(),
+            404
+        );
 
         let invalid_range = tauri::http::Request::builder()
             .uri("media://localhost/bg-video.mp4")
@@ -2216,13 +2241,19 @@ mod tests {
             .unwrap();
         let invalid_response = registered_media_protocol_response(appdata.path(), invalid_range);
         assert_eq!(invalid_response.status(), 416);
-        assert_eq!(invalid_response.headers().get("Content-Range").unwrap(), "bytes */10");
+        assert_eq!(
+            invalid_response.headers().get("Content-Range").unwrap(),
+            "bytes */10"
+        );
 
         let traversal = tauri::http::Request::builder()
             .uri("media://localhost/../outside.mp4")
             .body(Vec::new())
             .unwrap();
-        assert_eq!(registered_media_protocol_response(appdata.path(), traversal).status(), 404);
+        assert_eq!(
+            registered_media_protocol_response(appdata.path(), traversal).status(),
+            404
+        );
     }
 
     #[test]
@@ -2231,7 +2262,10 @@ mod tests {
 
         assert_eq!(parse_range_header("bytes=0-499", total), Some((0, 499)));
         assert_eq!(parse_range_header("bytes=500-", total), Some((500, 999)));
-        assert_eq!(parse_range_header("bytes=900-2000", total), Some((900, 999)));
+        assert_eq!(
+            parse_range_header("bytes=900-2000", total),
+            Some((900, 999))
+        );
         assert_eq!(parse_range_header("bytes=-100", total), Some((900, 999)));
         assert_eq!(parse_range_header("items=0-10", total), None);
         assert_eq!(parse_range_header("bytes=500-200", total), None);
@@ -2265,9 +2299,11 @@ mod tests {
             repaired.settings.install_method,
             engine::method::InstallMethod::ResourceMount
         );
-        assert!(std::fs::read_to_string(appdata.path().join("settings.json"))
-            .unwrap()
-            .contains("resource_mount"));
+        assert!(
+            std::fs::read_to_string(appdata.path().join("settings.json"))
+                .unwrap()
+                .contains("resource_mount")
+        );
 
         std::env::remove_var("WUWAID_E2E_APPDATA");
     }
@@ -2304,8 +2340,12 @@ mod tests {
         .unwrap();
 
         let error = switch_method(
-            appdata.path().join("not-a-game").to_string_lossy().to_string(),
-            "signature_bypass".to_string(),
+            appdata
+                .path()
+                .join("not-a-game")
+                .to_string_lossy()
+                .to_string(),
+            "loader".to_string(),
         )
         .unwrap_err();
         assert!(error.contains("invalid_game_path"));
@@ -2317,7 +2357,7 @@ mod tests {
     }
 
     #[test]
-    fn switch_method_replaces_canonical_artifact_and_cleans_legacy_markers() {
+    fn switch_method_cleans_unsupported_legacy_artifacts() {
         let _env_lock = lock_test_environment();
         let appdata = tempfile::tempdir().unwrap();
         let game = tempfile::tempdir().unwrap();
@@ -2328,8 +2368,8 @@ mod tests {
         std::fs::create_dir_all(&exe_dir).unwrap();
         std::fs::create_dir_all(&pak_dir).unwrap();
         std::fs::write(exe_dir.join("Client-Win64-Shipping.exe"), b"mock exe").unwrap();
-        let foreign = engine::signature::get_signature_bypass_pak_path(game.path());
-        let legacy_marker = engine::signature::get_signature_bypass_marker_path(game.path());
+        let foreign = pak_dir.join(engine::path::PAK_FILE_NAME);
+        let legacy_marker = pak_dir.join(".wuwaid-managed-signature-bypass");
         std::fs::write(&foreign, b"foreign artifact").unwrap();
         std::fs::write(&legacy_marker, b"legacy marker").unwrap();
         let versions = appdata.path().join("versions.json");
@@ -2337,7 +2377,7 @@ mod tests {
 
         let report = switch_method(
             game.path().to_string_lossy().to_string(),
-            "signature_bypass".to_string(),
+            "loader".to_string(),
         )
         .unwrap();
         assert!(report.failures.is_empty());
@@ -2352,11 +2392,9 @@ mod tests {
         assert!(!foreign.exists());
         assert!(!legacy_marker.exists());
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(
-                &std::fs::read_to_string(&versions).unwrap()
-            )
-            .unwrap()["_installMethod"],
-            "signature_bypass"
+            serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&versions).unwrap())
+                .unwrap()["_installMethod"],
+            "loader"
         );
         std::env::remove_var("WUWAID_E2E_APPDATA");
     }
@@ -2373,14 +2411,14 @@ mod tests {
         std::fs::create_dir_all(&exe_dir).unwrap();
         std::fs::create_dir_all(&pak_dir).unwrap();
         std::fs::write(exe_dir.join("Client-Win64-Shipping.exe"), b"mock exe").unwrap();
-        let canonical = engine::signature::get_signature_bypass_pak_path(game.path());
+        let canonical = pak_dir.join(engine::path::PAK_FILE_NAME);
         std::fs::write(&canonical, b"legacy artifact").unwrap();
         let versions = appdata.path().join("versions.json");
         std::fs::write(&versions, b"not-json").unwrap();
 
         let error = switch_method(
             game.path().to_string_lossy().to_string(),
-            "signature_bypass".to_string(),
+            "loader".to_string(),
         )
         .unwrap_err();
 
@@ -2445,10 +2483,8 @@ mod tests {
         assert!(!plan.sig_path.exists());
         assert!(!plan.owner_marker_path.exists());
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(
-                &std::fs::read_to_string(&versions).unwrap()
-            )
-            .unwrap()["_installMethod"],
+            serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&versions).unwrap())
+                .unwrap()["_installMethod"],
             "loader"
         );
 
@@ -2467,7 +2503,7 @@ mod tests {
         std::fs::create_dir_all(&exe_dir).unwrap();
         std::fs::create_dir_all(&pak_dir).unwrap();
         std::fs::write(exe_dir.join("Client-Win64-Shipping.exe"), b"mock exe").unwrap();
-        let foreign = engine::signature::get_signature_bypass_pak_path(game.path());
+        let foreign = pak_dir.join(engine::path::PAK_FILE_NAME);
         std::fs::write(&foreign, b"foreign artifact").unwrap();
         let versions = appdata.path().join("versions.json");
         std::fs::write(&versions, br#"{"_vhVersion":"3.0.0"}"#).unwrap();
@@ -2491,7 +2527,7 @@ mod tests {
         std::fs::create_dir_all(&exe_dir).unwrap();
         std::fs::create_dir_all(&pak_dir).unwrap();
         std::fs::write(exe_dir.join("Client-Win64-Shipping.exe"), b"mock exe").unwrap();
-        let canonical = engine::signature::get_signature_bypass_pak_path(game.path());
+        let canonical = pak_dir.join(engine::path::PAK_FILE_NAME);
         std::fs::write(&canonical, b"legacy artifact").unwrap();
         std::fs::create_dir(appdata.path().join("versions.json")).unwrap();
 
@@ -2564,7 +2600,6 @@ mod tests {
                 serde_json::json!({
                     "gamePath": game.path().to_string_lossy(),
                     "vhMode": "standard",
-                    "backup": true,
                     "installMethod": "unknown",
                 }),
             ),
@@ -2593,7 +2628,7 @@ mod tests {
         assert_eq!(event["status"], "invalid");
         app.unlisten(listener);
 
-        let foreign = engine::signature::get_signature_bypass_pak_path(game.path());
+        let foreign = pak_dir.join(engine::path::PAK_FILE_NAME);
         std::fs::write(&foreign, b"foreign").unwrap();
         assert_ipc_response(
             &window,
@@ -2601,7 +2636,7 @@ mod tests {
                 "switch_method",
                 serde_json::json!({
                     "gamePath": game.path().to_string_lossy(),
-                    "newMethod": "signature_bypass",
+                    "newMethod": "loader",
                 }),
             ),
             Ok(serde_json::json!({
@@ -2611,11 +2646,9 @@ mod tests {
             })),
         );
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(
-                &std::fs::read_to_string(&versions).unwrap()
-            )
-            .unwrap()["_installMethod"],
-            "signature_bypass"
+            serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&versions).unwrap())
+                .unwrap()["_installMethod"],
+            "loader"
         );
 
         assert_ipc_response(
@@ -2624,7 +2657,7 @@ mod tests {
                 "switch_method",
                 serde_json::json!({
                     "gamePath": game.path().to_string_lossy(),
-                    "newMethod": "signature_bypass",
+                    "newMethod": "loader",
                 }),
             ),
             Ok(serde_json::json!({
@@ -2633,29 +2666,6 @@ mod tests {
                 "failures": [],
             })),
         );
-        assert_ipc_response(
-            &window,
-            ipc_request(
-                "switch_method",
-                serde_json::json!({
-                    "gamePath": game.path().to_string_lossy(),
-                    "newMethod": "signature_bypass",
-                }),
-            ),
-            Ok(serde_json::json!({
-                "removed": [],
-                "preserved": [],
-                "failures": [],
-            })),
-        );
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(
-                &std::fs::read_to_string(&versions).unwrap()
-            )
-            .unwrap()["_installMethod"],
-            "signature_bypass"
-        );
-
         assert_ipc_response(
             &window,
             ipc_request(

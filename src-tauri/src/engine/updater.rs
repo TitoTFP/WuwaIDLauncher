@@ -1,9 +1,12 @@
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use std::collections::HashMap;
 
-pub const GITHUB_API_LATEST_RELEASE: &str = "https://api.github.com/repos/TitoTFP/WuwaIDLauncher/releases/latest";
+use crate::engine::downloader::read_response_body_limited;
+
+pub const GITHUB_API_LATEST_RELEASE: &str =
+    "https://api.github.com/repos/TitoTFP/WuwaIDLauncher/releases/latest";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ReleaseInfo {
@@ -18,6 +21,7 @@ pub struct ReleaseInfo {
 }
 
 pub const RELEASE_EXECUTABLE_NAME: &str = "WuwaIDLauncher.exe";
+const MAX_RELEASE_RESPONSE_BYTES: u64 = 2 * 1024 * 1024;
 
 fn is_release_executable(path: &Path) -> bool {
     path.file_name()
@@ -32,9 +36,9 @@ pub fn is_valid_sha256(value: &str) -> bool {
 pub fn is_safe_download_url(value: &str) -> bool {
     let trimmed = value.trim();
     trimmed.starts_with("https://")
-        && trimmed
-            .strip_prefix("https://")
-            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|character| !character.is_whitespace()))
+        && trimmed.strip_prefix("https://").is_some_and(|rest| {
+            !rest.is_empty() && rest.chars().all(|character| !character.is_whitespace())
+        })
 }
 
 pub fn parse_checksum_manifest(content: &str) -> HashMap<String, String> {
@@ -68,7 +72,11 @@ pub fn validate_update_archive(zip_data: &[u8], expected_executable: &str) -> Re
         let Some(path) = file.enclosed_name() else {
             return Err("ZIP update memiliki path traversal atau path absolut.".to_string());
         };
-        if !file.is_dir() && path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("exe")) {
+        if !file.is_dir()
+            && path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+        {
             if path.file_name().and_then(|name| name.to_str()) == Some(expected_executable) {
                 found_expected = true;
             } else {
@@ -235,9 +243,16 @@ pub async fn fetch_latest_release() -> Result<ReleaseInfo, String> {
         return Err(format!("GitHub API returned status: {}", response.status()));
     }
 
-    let json: serde_json::Value = response
-        .json()
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_RELEASE_RESPONSE_BYTES)
+    {
+        return Err("Response release launcher terlalu besar.".to_string());
+    }
+    let body = read_response_body_limited(response, MAX_RELEASE_RESPONSE_BYTES)
         .await
+        .map_err(|error| format!("Failed to read release JSON: {error}"))?;
+    let json: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|e| format!("Failed to parse release JSON: {}", e))?;
 
     parse_latest_release_json(&json)
@@ -254,21 +269,26 @@ pub async fn check_latest_release(current_version: &str) -> Result<Option<Releas
 
 pub fn extract_zip_update(zip_data: &[u8], target_dir: &Path) -> Result<PathBuf, String> {
     let reader = Cursor::new(zip_data);
-    let mut archive = zip::ZipArchive::new(reader).map_err(|e| format!("Invalid ZIP archive: {}", e))?;
+    let mut archive =
+        zip::ZipArchive::new(reader).map_err(|e| format!("Invalid ZIP archive: {}", e))?;
 
     fs::create_dir_all(target_dir).map_err(|e| format!("Failed to create staging dir: {}", e))?;
 
     let mut main_exe_path = None;
 
     for i in 0..archive.len() {
-        let mut file = archive.by_index(i).map_err(|e| format!("Failed to read entry: {}", e))?;
+        let mut file = archive
+            .by_index(i)
+            .map_err(|e| format!("Failed to read entry: {}", e))?;
         let outpath = match file.enclosed_name() {
             Some(path) => target_dir.join(path),
             None => continue,
         };
 
         if !file.is_dir()
-            && outpath.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+            && outpath
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
             && !is_release_executable(&outpath)
         {
             return Err(format!("ZIP memuat executable tak dikenal: {:?}", outpath));
@@ -285,11 +305,14 @@ pub fn extract_zip_update(zip_data: &[u8], target_dir: &Path) -> Result<PathBuf,
             };
             if let Some(p) = normalized_outpath.parent() {
                 if !p.exists() {
-                    fs::create_dir_all(p).map_err(|e| format!("Failed to create parent dir: {}", e))?;
+                    fs::create_dir_all(p)
+                        .map_err(|e| format!("Failed to create parent dir: {}", e))?;
                 }
             }
-            let mut outfile = File::create(&normalized_outpath).map_err(|e| format!("Failed to create file: {}", e))?;
-            std::io::copy(&mut file, &mut outfile).map_err(|e| format!("Failed to extract file: {}", e))?;
+            let mut outfile = File::create(&normalized_outpath)
+                .map_err(|e| format!("Failed to create file: {}", e))?;
+            std::io::copy(&mut file, &mut outfile)
+                .map_err(|e| format!("Failed to extract file: {}", e))?;
 
             if release_executable {
                 main_exe_path = Some(normalized_outpath);
@@ -297,7 +320,12 @@ pub fn extract_zip_update(zip_data: &[u8], target_dir: &Path) -> Result<PathBuf,
         }
     }
 
-    main_exe_path.ok_or_else(|| format!("No executable {} found in update ZIP", RELEASE_EXECUTABLE_NAME))
+    main_exe_path.ok_or_else(|| {
+        format!(
+            "No executable {} found in update ZIP",
+            RELEASE_EXECUTABLE_NAME
+        )
+    })
 }
 
 #[cfg(test)]
@@ -347,7 +375,10 @@ mod tests {
         assert_eq!(release.body, "## Perubahan\n- Perbaikan launcher");
         assert_eq!(release.date, "2026-08-18T12:00:00Z");
         assert_eq!(release.author, "TitoTFP");
-        assert!(release.zip_url.unwrap().ends_with("WuwaIDLauncher-v2.6.2.zip"));
+        assert!(release
+            .zip_url
+            .unwrap()
+            .ends_with("WuwaIDLauncher-v2.6.2.zip"));
         assert!(release.checksums_url.unwrap().ends_with("SHA256sums.txt"));
     }
 
@@ -360,7 +391,11 @@ mod tests {
         let mut buf = Cursor::new(Vec::new());
         {
             let mut zip = zip::ZipWriter::new(&mut buf);
-            zip.start_file("WuwaIDLauncher.exe", zip::write::SimpleFileOptions::default()).unwrap();
+            zip.start_file(
+                "WuwaIDLauncher.exe",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
             std::io::Write::write_all(&mut zip, b"MOCK_EXE_DATA").unwrap();
             zip.finish().unwrap();
         }

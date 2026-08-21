@@ -5,11 +5,23 @@
   let videoElement: HTMLVideoElement | null = $state(null);
   let canvasElement: HTMLCanvasElement | null = $state(null);
   let videoLoaded = $state(false);
+  let particleAnimationControl: {
+    schedule: () => void;
+    stop: () => void;
+  } | null = null;
 
-  let isVideoAllowed = $derived(!appState.gameRunning);
+  let isVideoAllowed = $derived(!appState.gameRunning && !appState.launching);
 
   $effect(() => {
     if (!videoElement) return;
+
+    if (!appState.videoUrl || !isVideoAllowed) {
+      videoElement.pause();
+      videoElement.removeAttribute('src');
+      videoElement.load();
+      videoLoaded = false;
+      return;
+    }
 
     if (appState.videoUrl && isVideoAllowed) {
       if (videoElement.src !== appState.videoUrl) {
@@ -17,9 +29,14 @@
         videoElement.load();
       }
       void videoElement.play().catch(() => {});
-    } else {
-      videoElement.pause();
     }
+  });
+
+  $effect(() => {
+    const runtimeBlocked = appState.gameRunning || appState.launching;
+    if (!particleAnimationControl) return;
+    if (runtimeBlocked) particleAnimationControl.stop();
+    else particleAnimationControl.schedule();
   });
 
   function handleVideoPlaying() {
@@ -37,6 +54,7 @@
     const canvas = canvasElement;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    const context = ctx;
 
     let width = (canvas.width = window.innerWidth);
     let height = (canvas.height = window.innerHeight);
@@ -83,17 +101,34 @@
       particles.push(resetParticle());
     }
 
-    let animFrameId: number;
+    let animFrameId: number | null = null;
+
+    function stopRender() {
+      if (animFrameId !== null) {
+        cancelAnimationFrame(animFrameId);
+        animFrameId = null;
+      }
+      context.clearRect(0, 0, width, height);
+    }
+
+    function scheduleRender() {
+      if (
+        animFrameId === null &&
+        !appState.gameRunning &&
+        !appState.launching
+      ) {
+        animFrameId = requestAnimationFrame(render);
+      }
+    }
 
     function render() {
-      if (!ctx) return;
-      if (appState.gameRunning) {
-        ctx.clearRect(0, 0, width, height);
-        animFrameId = requestAnimationFrame(render);
+      animFrameId = null;
+      if (appState.gameRunning || appState.launching) {
+        context.clearRect(0, 0, width, height);
         return;
       }
 
-      ctx.clearRect(0, 0, width, height);
+      context.clearRect(0, 0, width, height);
 
       for (let i = 0; i < particles.length; i++) {
         const p = particles[i];
@@ -108,20 +143,25 @@
           particles[i] = resetParticle({ y: height + 10 });
         }
 
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(${p.r}, ${p.g}, ${p.b}, ${p.alpha})`;
-        ctx.fill();
+        context.beginPath();
+        context.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        context.fillStyle = `rgba(${p.r}, ${p.g}, ${p.b}, ${p.alpha})`;
+        context.fill();
       }
 
-      animFrameId = requestAnimationFrame(render);
+      scheduleRender();
     }
 
-    animFrameId = requestAnimationFrame(render);
+    particleAnimationControl = {
+      schedule: scheduleRender,
+      stop: stopRender,
+    };
+    scheduleRender();
 
     return () => {
+      particleAnimationControl = null;
+      stopRender();
       window.removeEventListener('resize', handleResize);
-      cancelAnimationFrame(animFrameId);
     };
   });
 </script>
@@ -133,7 +173,7 @@
     muted
     loop
     playsinline
-    preload="auto"
+    preload="metadata"
     onplaying={handleVideoPlaying}
     oncanplay={handleVideoPlaying}
     onerror={handleVideoError}

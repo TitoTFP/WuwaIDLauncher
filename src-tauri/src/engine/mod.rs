@@ -1,5 +1,5 @@
-pub mod atom_feed;
 pub mod active_player;
+pub mod atom_feed;
 pub mod downloader;
 pub mod elevation;
 pub mod installer;

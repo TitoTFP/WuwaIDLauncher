@@ -117,7 +117,7 @@
       </label>
       <label>
         <span>Metode instalasi</span>
-        <select value={appState.config.installMethod} onchange={changeMethod} disabled={appState.gameRunning || saving}>
+        <select value={appState.config.installMethod} onchange={changeMethod} disabled={appState.gameRunning || appState.installing || appState.launching || saving}>
           {#each INSTALL_METHOD_OPTIONS as option}
             <option value={option.value}>{option.title} — {option.description}</option>
           {/each}

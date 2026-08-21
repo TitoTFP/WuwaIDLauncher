@@ -25,18 +25,18 @@ _Nikmati petualangan di Sol3 dengan teks Bahasa Indonesia yang presisi, launcher
 
 **WuwaID Launcher** adalah aplikasi launcher generasi baru yang dibangun menggunakan **Tauri v2**, **Rust backend**, dan **Svelte 5 frontend**. Dirancang khusus untuk mempermudah komunitas Indonesia dalam menginstal, memperbarui, dan mengelola patch lokalisasi Bahasa Indonesia untuk game **Wuthering Waves**.
 
-Rebuild dari arsitektur terdahulu (.NET 8 WPF) ke Tauri v2 memberikan keunggulan utama dalam **kecepatan startup instan, konsumsi memori/CPU yang sangat minim (<15MB RAM saat game berjalan), verifikasi integritas data yang ketat (SHA-256), serta antarmuka modern yang responsif**.
+Rebuild dari arsitektur terdahulu (.NET 8 WPF) ke Tauri v2 memberikan fondasi untuk **startup cepat, konsumsi resource rendah saat game berjalan, verifikasi integritas data yang ketat (SHA-256), serta antarmuka modern yang responsif**. Angka resource final tetap perlu diukur pada mesin Windows release.
 
 ---
 
 ## ✅ Status Implementasi & Release Gate
 
-Kontrak utama launcher sudah diimplementasikan dan diverifikasi melalui test suite Rust, Svelte check, frontend production build, serta packaging Windows. Status yang masih membutuhkan mesin game Windows release ditandai sebagai **partial/manual**; ini bukan asumsi bahwa smoke test game nyata sudah lulus.
+Kontrak utama launcher sudah diimplementasikan dan diverifikasi melalui test suite Rust, Svelte check, frontend production build, serta cross-target check Windows. Status yang masih membutuhkan mesin game Windows release ditandai sebagai **partial/manual**; ini bukan asumsi bahwa smoke test game nyata sudah lulus.
 
 | Area | Status | Bukti / batasan |
 | :--- | :--- | :--- |
-| Path game, tiga metode, artefak kanonis, transaksi, rollback, switch, uninstall | **Implemented** | src-tauri/tests/milestone1_contract_tests.rs, milestone2_contract_tests.rs, installer safety |
-| Launch, external process, signature restore, force quit, error event | **Implemented + manual game smoke** | Contract tests lulus; perlu executable game nyata untuk taskkill dan lifecycle Windows |
+| Path game, dua metode, artefak kanonis, transaksi, rollback, switch, uninstall | **Implemented** | src-tauri/tests/milestone1_contract_tests.rs, milestone2_contract_tests.rs, installer safety |
+| Launch, external process, force quit, error event | **Implemented + manual game smoke** | Contract tests lulus; perlu executable game nyata untuk taskkill dan lifecycle Windows |
 | Home, Settings, About, navigation lock, progress/error/reset state | **Implemented** | Svelte check 0 error/0 warning |
 | Media cache hash, offline fallback, staged replacement, release-note sanitization | **Implemented** | milestone5_contract_tests.rs, media event tests |
 | Self-update checksum, ZIP validation, staging, rollback handoff, cleanup | **Implemented + manual restart smoke** | Checksum/ZIP/handoff tests; valid release asset diperlukan untuk restart end-to-end |
@@ -45,7 +45,7 @@ Kontrak utama launcher sudah diimplementasikan dan diverifikasi melalui test sui
 | Real game/admin/read-only/tray/offline/restart acceptance | **Partial / manual** | Jalankan matrix acceptance pada Windows release machine |
 | Future features di luar WUT-5 sampai WUT-29 | **Planned** | Tidak menjadi bagian release gate ini |
 
-Dokumen acceptance lengkap berada di docs/acceptance/windows-game-matrix.md.
+Acceptance manual Windows tetap diperlukan untuk memvalidasi game nyata, mode admin/read-only, tray, offline, dan restart self-update pada mesin release.
 
 ---
 
@@ -54,10 +54,9 @@ Dokumen acceptance lengkap berada di docs/acceptance/windows-game-matrix.md.
 ### 🛠️ Manajemen Patch & Engine Mod Terpadu
 
 - **Instalasi & Perbaruan Sekali Klik:** Mengunduh, memverifikasi integritas hash SHA-256, dan menerapkan patch Bahasa Indonesia secara otomatis.
-- **Tiga Metode Instalasi Fleksibel:** mapping internal selalu memakai identifier semantik berikut; `method1/2/3` hanya alias legacy yang dimigrasikan saat membaca settings lama.
+- **Dua Metode Instalasi:** mapping internal memakai identifier semantik berikut; `method2/3` hanya alias legacy yang dimigrasikan saat membaca settings lama.
   - **Metode 1 — `resource_mount` (Resource Mount):** Deploy file PAK + signature + berkas mount ke folder resource game aktif (`Client/Saved/Resources/<ver>/Mount/`) tanpa menyentuh signature utama game. Dilengkapi proteksi rollback transaksional dan verifikasi integritas struktur Unreal PAK.
   - **Metode 2 — `loader` (Loader):** Menempatkan loader `winhttp.dll` dan folder `wuwaIndonesia/` pada direktori binaries game (`Client/Binaries/Win64/`).
-  - **Metode 3 — `signature_bypass` (Signature Bypass):** Deploy PAK ke `Client/Content/Paks/` dengan siklus hidup pencadangan `.sig` dan pemulihan otomatis saat game dijalankan.
 - **Dynamic Method Switcher:** Berpindah metode instalasi secara instan dengan pembersihan artefak pada path kanonis metode sebelumnya. Path kanonis diperlakukan sebagai target launcher, termasuk saat artefak berasal dari launcher lama.
 - **Deteksi Folder Game Otomatis:** Mendeteksi lokasi direktori game melalui Windows Registry dan jalur default sistem.
 - **Engine PAK Packer & FNV64:** Modul Rust murni untuk pembuatan paket PAK Unreal Engine kompatibel dengan hashing FNV64 & index SHA-1.
@@ -71,7 +70,7 @@ Dokumen acceptance lengkap berada di docs/acceptance/windows-game-matrix.md.
 
 ### ⚡ Mode Tray & Penghematan Resource Ekstrem
 
-- **Window Minimization ke System Tray:** Launcher otomatis menyembunyikan jendela ke system tray saat game berjalan dengan footprint RAM ultra-rendah (<15MB Working Set).
+- **Window Minimization ke System Tray:** Launcher otomatis menyembunyikan jendela ke system tray saat game berjalan dan menangguhkan WebView2 untuk menekan penggunaan resource.
 - **Operasi Lokal & Active Player:** Launcher menyimpan diagnostics lokal dan tidak mengunggah log. Statistik active player memakai heartbeat minimal tanpa path game, username Windows, akun, atau isi log.
 
 ### 🛡️ Keamanan, Diagnostik & Menu Cepat (7 Hamburger Actions)
@@ -81,7 +80,7 @@ Dokumen acceptance lengkap berada di docs/acceptance/windows-game-matrix.md.
 - **Paksa Tutup Game:** Terminasi proses `Client-Win64-Shipping.exe` secara aman jika terjadi crash/hang.
 - **Jalankan sebagai Admin:** Alur restart aplikasi dengan elevasi hak akses Administrator Windows (`runas`).
 - **Reset Cache Tampilan:** Pembersihan data cache webview dan media cache lokal.
-- **Hapus Patch ID:** Penghapusan bersih seluruh artefak mod yang dikelola launcher dan pemulihan signature asli.
+- **Hapus Patch ID:** Penghapusan bersih seluruh artefak mod yang dikelola launcher.
 
 ---
 
@@ -107,11 +106,10 @@ Dokumen acceptance lengkap berada di docs/acceptance/windows-game-matrix.md.
 
 Gunakan identifier canonical berikut pada settings atau command bridge:
 
-- resource_mount — resource mount tanpa signature bypass.
+- resource_mount — resource mount terisolasi.
 - loader — winhttp.dll loader.
-- signature_bypass — bypass signature sementara ketika game berjalan.
 
-method1, method2, dan method3 hanya alias legacy saat migrasi settings lama. Launcher menolak path yang tidak mengandung executable game, mengelola artefak pada path kanonis metode yang dipilih, dan menulis metadata hanya setelah cleanup berhasil. File pada path kanonis dianggap milik workflow launcher meskipun dibuat oleh versi launcher lama; file di luar path kanonis tidak disentuh. Jika instalasi atau update gagal, jangan hapus file game manual: simpan diagnostics lokal, jalankan pemeriksaan status, dan ulangi setelah penyebab permission/network diperbaiki.
+method2 dan method3 hanya alias legacy saat migrasi settings lama. Nilai metode yang sudah dihapus dari versi lama dipulihkan ke `resource_mount`. Launcher menolak path yang tidak mengandung executable game, mengelola artefak pada path kanonis metode yang dipilih, dan menulis metadata hanya setelah cleanup berhasil. File pada path kanonis dianggap milik workflow launcher meskipun dibuat oleh versi launcher lama; file di luar path kanonis tidak disentuh. Jika instalasi atau update gagal, jangan hapus file game manual: simpan diagnostics lokal, jalankan pemeriksaan status, dan ulangi setelah penyebab permission/network diperbaiki.
 
 Lokasi artefak runtime:
 
@@ -202,27 +200,17 @@ Checklist sebelum publish:
 - [ ] npm run check dan npm run build lulus.
 - [ ] cargo test --all-targets lulus dengan fixture deterministic.
 - [ ] EXE, updater ZIP, dan SHA256sums.txt ada serta versinya 2.8.0.
-- [ ] Jalankan docs/acceptance/windows-game-matrix.md pada Windows dengan fixture reversible.
+- [ ] Jalankan acceptance manual pada Windows dengan fixture reversible.
 - [ ] Uji read-only/admin, tray, force quit, offline media, dan self-update restart pada mesin release.
 - [ ] Tinjau diagnostics lokal sebelum membagikannya secara manual.
 
-Bukti gate lokal terbaru tersimpan di `docs/acceptance/windows-game-matrix-results-2026-08-18.md`.
+Gate otomatis terbaru diverifikasi melalui test suite Rust, `npm run check`, dan `npm run build`; acceptance game nyata tetap memerlukan mesin Windows release.
 
 ---
 
-## 📊 Benchmark & Performa
+## 📊 Performa
 
-Hasil perbandingan antara arsitektur lama (.NET 8 WPF) dan arsitektur baru (Tauri v2 + Rust + Svelte 5):
-
-| Metrik                      | .NET 8 WPF (Lama) | Tauri v2 + Rust (Baru) | Peningkatan          |
-| :-------------------------- | :---------------- | :--------------------- | :------------------- |
-| **Ukuran Binary**           | ~68.4 MB          | ~5.2 MB                | **~92.4% lebih kecil** |
-| **Cold Startup Time**       | ~1.85 detik       | ~0.28 detik            | **~6.6x lebih cepat**  |
-| **RAM (Idle UI)**           | ~85 MB            | ~28 MB                 | **~67% lebih hemat**   |
-| **RAM (Tray Mode)**         | ~42 MB            | ~9.5 MB                | **~77% lebih hemat**   |
-| **CPU Usage (Background)**  | ~0.8%             | 0.0%                   | **Beban nol**        |
-
-_Lihat dokumentasi lengkap di `docs/benchmark-rebuild.md`._
+Optimasi resource yang diterapkan mencakup target memori rendah WebView2, suspend/resume saat game berjalan, pembacaan media berbasis HTTP Range, capture output proses yang dibatasi, dan response metadata HTTP yang dibaca dengan hard limit. Angka benchmark tidak dicantumkan sampai profiling dilakukan pada mesin Windows release.
 
 ---
 
@@ -244,7 +232,6 @@ WuwaIDLauncher/
 │   │   └── 📄 main.rs            # Application Runner
 │   ├── 📁 tests/                 # Integration tests (app command, download, installer safety, media events)
 │   └── 📄 Cargo.toml             # Konfigurasi dependensi Rust
-├── 📁 docs/                      # Dokumentasi teknis, benchmark report, dan audit evidence
 ├── 📄 package.json               # Konfigurasi npm & dependensi frontend
 ├── 📄 tauri.conf.json            # Konfigurasi utama Tauri v2 (window size 1280x720, bundle, identifier)
 └── 📄 README.md                  # Dokumentasi Proyek

@@ -75,11 +75,6 @@ fn canonical_install_methods_migrate_legacy_ids_and_reject_unknown_values() {
         InstallMethod::Loader
     );
     assert_eq!(
-        InstallMethod::parse("signature_bypass").unwrap(),
-        InstallMethod::SignatureBypass
-    );
-
-    assert_eq!(
         InstallMethod::parse("method3").unwrap(),
         InstallMethod::ResourceMount
     );
@@ -87,11 +82,8 @@ fn canonical_install_methods_migrate_legacy_ids_and_reject_unknown_values() {
         InstallMethod::parse("method2").unwrap(),
         InstallMethod::Loader
     );
-    assert_eq!(
-        InstallMethod::parse("method1").unwrap(),
-        InstallMethod::SignatureBypass
-    );
     assert!(InstallMethod::parse("unknown").is_err());
+    assert!(InstallMethod::parse("method1").is_err());
 }
 
 #[test]
@@ -116,7 +108,7 @@ fn settings_recover_invalid_json_and_normalize_partial_legacy_values() {
     assert_eq!(partial.settings.game_path, "");
     assert_eq!(
         partial.settings.install_method,
-        InstallMethod::SignatureBypass
+        InstallMethod::ResourceMount
     );
     assert!(partial
         .diagnostics
@@ -200,19 +192,6 @@ fn patch_status_distinguishes_missing_corrupt_owned_and_valid_installations() {
     fs::write(&loader_dll, b"loader").unwrap();
     assert_eq!(
         classify_installation(&game, InstallMethod::Loader).unwrap(),
-        LocalPatchState::Ready
-    );
-
-    fs::remove_file(loader_pak).unwrap();
-    fs::remove_file(loader_dll).unwrap();
-    assert_eq!(
-        classify_installation(&game, InstallMethod::SignatureBypass).unwrap(),
-        LocalPatchState::NotInstalled
-    );
-    let bypass_pak = signature::get_signature_bypass_pak_path(&game);
-    release_like_pak(&bypass_pak);
-    assert_eq!(
-        classify_installation(&game, InstallMethod::SignatureBypass).unwrap(),
         LocalPatchState::Ready
     );
 }

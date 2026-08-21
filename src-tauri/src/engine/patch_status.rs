@@ -39,13 +39,9 @@ pub fn classify_installation(
                 Ok(plan) => plan,
                 Err(_) => return Ok(LocalPatchState::NotInstalled),
             };
-            let any_artifact = [
-                &plan.pak_path,
-                &plan.sig_path,
-                &plan.mount_path,
-            ]
-            .iter()
-            .any(|path| path.exists());
+            let any_artifact = [&plan.pak_path, &plan.sig_path, &plan.mount_path]
+                .iter()
+                .any(|path| path.exists());
             if !any_artifact {
                 return Ok(LocalPatchState::NotInstalled);
             }
@@ -70,23 +66,6 @@ pub fn classify_installation(
             } else {
                 LocalPatchState::Invalid
             })
-        }
-        InstallMethod::SignatureBypass => {
-            let any_artifact = [
-                installer::signature_bypass_pak_path(game_path),
-            ]
-            .iter()
-            .any(|path| path.exists());
-            if !any_artifact {
-                return Ok(LocalPatchState::NotInstalled);
-            }
-            Ok(
-                if installer::validate_installed_signature_bypass(game_path)? {
-                    LocalPatchState::Ready
-                } else {
-                    LocalPatchState::Invalid
-                },
-            )
         }
     }
 }

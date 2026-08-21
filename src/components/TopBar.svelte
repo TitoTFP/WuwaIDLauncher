@@ -7,6 +7,7 @@
   let methodMenuOpen = $state(false);
 
   async function selectMethod(method: InstallMethod) {
+    if (appState.gameRunning || appState.installing || appState.launching) return;
     if (appState.config.installMethod === method) {
       methodMenuOpen = false;
       return;
@@ -68,9 +69,10 @@
 
       <button
         class="top-nav__item top-nav__item--menu"
-        class:open={methodMenuOpen}
-        id="methodNavBtn"
-        onclick={toggleMethodMenu}
+         class:open={methodMenuOpen}
+         id="methodNavBtn"
+         disabled={appState.gameRunning || appState.installing || appState.launching}
+         onclick={toggleMethodMenu}
         type="button"
       >
         METODE
