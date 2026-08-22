@@ -74,7 +74,7 @@ function Initialize-Artifact {
         $executable = Join-Path $Path "WuwaIDLauncher.exe"
         Set-Content -LiteralPath $executable -Value "fixture executable" -NoNewline
 
-        $zip = Join-Path $Path "WuwaIDLauncher-v2.8.0.zip"
+        $zip = Join-Path $Path "WuwaIDLauncher-v2.9.0.zip"
         Compress-Archive -LiteralPath $executable -DestinationPath $zip
 
         $manifestLines = @($zip | ForEach-Object {
@@ -209,7 +209,7 @@ try {
 
     $invalidZipCase = New-CaseDirectory -Name "invalid-zip"
     Initialize-Artifact -Path $invalidZipCase.artifact
-    $invalidZip = Join-Path $invalidZipCase.artifact "WuwaIDLauncher-v2.8.0.zip"
+    $invalidZip = Join-Path $invalidZipCase.artifact "WuwaIDLauncher-v2.9.0.zip"
     Set-UnsafeArtifactZip -Path $invalidZip
     $invalidZipManifest = Join-Path $invalidZipCase.artifact "SHA256sums.txt"
     $invalidZipLines = @(Get-Content -LiteralPath $invalidZipManifest)

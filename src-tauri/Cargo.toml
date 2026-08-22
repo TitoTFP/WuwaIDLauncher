@@ -1,6 +1,6 @@
 [package]
 name = "wuwaid-launcher"
-version = "2.8.0"
+version = "2.9.0"
 description = "Launcher & Patch Installer Bahasa Indonesia untuk Wuthering Waves"
 authors = ["WuwaID Team"]
 license = "GPL-3.0"
