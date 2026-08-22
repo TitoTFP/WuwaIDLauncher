@@ -87,6 +87,44 @@ fn get_settings_path() -> PathBuf {
     get_appdata_dir().join("settings.json")
 }
 
+fn restore_legacy_signature_from_settings() {
+    let settings_path = get_settings_path();
+    let raw = match std::fs::read_to_string(&settings_path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            log::warn!("Tidak dapat membaca settings untuk migrasi signature legacy: {error}");
+            return;
+        }
+    };
+    let value = match serde_json::from_str::<serde_json::Value>(&raw) {
+        Ok(value) => value,
+        Err(error) => {
+            log::warn!("Settings tidak valid untuk migrasi signature legacy: {error}");
+            return;
+        }
+    };
+    let Some(game_path) = value
+        .get("gamePath")
+        .and_then(serde_json::Value::as_str)
+        .filter(|path| !path.trim().is_empty())
+    else {
+        return;
+    };
+
+    match engine::signature::restore_sig(Path::new(game_path)) {
+        Ok(true) => log::info!(
+            "Signature legacy dipulihkan dari backup saat lifecycle launcher: {}",
+            game_path
+        ),
+        Ok(false) => {}
+        Err(error) => log::warn!(
+            "Signature legacy tidak dapat dipulihkan untuk {}: {error}",
+            game_path
+        ),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WindowMinimizeAction {
     Minimize,
@@ -1854,6 +1892,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .register_uri_scheme_protocol("media", media_protocol_handler)
         .setup(|app| {
+            restore_legacy_signature_from_settings();
             let app_handle = app.handle().clone();
             configure_webview_memory_target(&app_handle);
             spawn_runtime_monitor(app_handle.clone());
@@ -1929,6 +1968,7 @@ pub fn run() {
         .expect("error while building wuwaid launcher application")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                restore_legacy_signature_from_settings();
                 if let Some(service) = app.try_state::<engine::active_player::ActivePlayerService>()
                 {
                     service.stop();
@@ -2396,6 +2436,34 @@ mod tests {
                 .unwrap()["_installMethod"],
             "loader"
         );
+        std::env::remove_var("WUWAID_E2E_APPDATA");
+    }
+
+    #[test]
+    fn startup_signature_migration_restores_backup_only() {
+        let _env_lock = lock_test_environment();
+        let appdata = tempfile::tempdir().unwrap();
+        let game = tempfile::tempdir().unwrap();
+        std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
+
+        let pak_dir = game.path().join("Client").join("Content").join("Paks");
+        std::fs::create_dir_all(&pak_dir).unwrap();
+        let backup = engine::signature::get_sig_backup_path(game.path());
+        let signature = engine::signature::get_sig_path(game.path());
+        std::fs::write(&backup, b"ORIGINAL_GAME_SIG").unwrap();
+        std::fs::write(
+            appdata.path().join("settings.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "gamePath": game.path().to_string_lossy(),
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        restore_legacy_signature_from_settings();
+
+        assert_eq!(std::fs::read(&signature).unwrap(), b"ORIGINAL_GAME_SIG");
+        assert!(!backup.exists());
         std::env::remove_var("WUWAID_E2E_APPDATA");
     }
 
