@@ -383,6 +383,16 @@ pub fn validate_installation_preconditions(
     Ok(normalized)
 }
 
+/// Validate the configured game path before restoring a legacy signature.
+/// Restoration does not require a writable target, but it must use the same
+/// normalized game root and reparse-point protections as installer cleanup.
+pub fn validate_signature_restore_path(game_path: &str) -> Result<PathBuf, String> {
+    let normalized = path::normalize_game_path(game_path)
+        .ok_or_else(|| "invalid_game_path: executable game tidak ditemukan".to_string())?;
+    validate_canonical_paths(&normalized)?;
+    Ok(normalized)
+}
+
 fn known_artifact_paths(game_path: &Path) -> Vec<PathBuf> {
     let mut paths = vec![
         signature::get_sig_path(game_path),

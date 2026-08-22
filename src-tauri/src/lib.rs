@@ -112,15 +112,26 @@ fn restore_legacy_signature_from_settings() {
         return;
     };
 
-    match engine::signature::restore_sig(Path::new(game_path)) {
+    let normalized = match engine::installer::validate_signature_restore_path(game_path) {
+        Ok(path) => path,
+        Err(error) => {
+            log::warn!(
+                "Path game tidak aman untuk migrasi signature legacy ({}): {error}",
+                game_path
+            );
+            return;
+        }
+    };
+
+    match engine::signature::restore_sig(&normalized) {
         Ok(true) => log::info!(
             "Signature legacy dipulihkan dari backup saat lifecycle launcher: {}",
-            game_path
+            normalized.display()
         ),
         Ok(false) => {}
         Err(error) => log::warn!(
             "Signature legacy tidak dapat dipulihkan untuk {}: {error}",
-            game_path
+            normalized.display()
         ),
     }
 }
@@ -2446,8 +2457,11 @@ mod tests {
         let game = tempfile::tempdir().unwrap();
         std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
 
+        let exe_dir = game.path().join("Client").join("Binaries").join("Win64");
         let pak_dir = game.path().join("Client").join("Content").join("Paks");
+        std::fs::create_dir_all(&exe_dir).unwrap();
         std::fs::create_dir_all(&pak_dir).unwrap();
+        std::fs::write(exe_dir.join("Client-Win64-Shipping.exe"), b"mock exe").unwrap();
         let backup = engine::signature::get_sig_backup_path(game.path());
         let signature = engine::signature::get_sig_path(game.path());
         std::fs::write(&backup, b"ORIGINAL_GAME_SIG").unwrap();
@@ -2464,6 +2478,37 @@ mod tests {
 
         assert_eq!(std::fs::read(&signature).unwrap(), b"ORIGINAL_GAME_SIG");
         assert!(!backup.exists());
+        std::env::remove_var("WUWAID_E2E_APPDATA");
+    }
+
+    #[test]
+    fn startup_signature_migration_ignores_invalid_game_path() {
+        let _env_lock = lock_test_environment();
+        let appdata = tempfile::tempdir().unwrap();
+        let not_a_game = tempfile::tempdir().unwrap();
+        std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
+
+        let pak_dir = not_a_game
+            .path()
+            .join("Client")
+            .join("Content")
+            .join("Paks");
+        std::fs::create_dir_all(&pak_dir).unwrap();
+        let backup = engine::signature::get_sig_backup_path(not_a_game.path());
+        std::fs::write(&backup, b"DO_NOT_MOVE").unwrap();
+        std::fs::write(
+            appdata.path().join("settings.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "gamePath": not_a_game.path().to_string_lossy(),
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        restore_legacy_signature_from_settings();
+
+        assert!(backup.exists());
+        assert!(!engine::signature::get_sig_path(not_a_game.path()).exists());
         std::env::remove_var("WUWAID_E2E_APPDATA");
     }
 
