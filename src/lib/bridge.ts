@@ -47,10 +47,9 @@ export const bridge = {
   startInstallation: (
     gamePath: string,
     vhMode: string,
-    backup: boolean,
     installMethod: InstallMethod,
   ): Promise<void> =>
-    invoke("start_installation", { gamePath, vhMode, backup, installMethod }),
+    invoke("start_installation", { gamePath, vhMode, installMethod }),
   checkGameFolderWriteAccess: (
     gamePath: string,
     installMethod: InstallMethod,
@@ -94,7 +93,6 @@ export interface EventBridgeCallbacks {
   onLaunchError?: (error: string) => void;
   onGameLaunchStarted?: () => void;
   onGameLaunchFinished?: () => void;
-  onSignatureRestoreCountdown?: (remainingSeconds: number, active: boolean) => void;
   onLauncherUpdateProgress?: (percent: number, statusText: string) => void;
   onLauncherUpdateAvailable?: (payload: LauncherUpdatePayload) => void;
   onLauncherUpdateStatus?: (payload: LauncherUpdateStatusPayload) => void;
@@ -148,10 +146,6 @@ export async function setupEventBridge(
     ),
     addListener<void>("onGameLaunchFinished", () =>
       callbacks.onGameLaunchFinished?.(),
-    ),
-    addListener<{ remainingSeconds: number; active: boolean }>(
-      "onSignatureRestoreCountdown",
-      (p) => callbacks.onSignatureRestoreCountdown?.(p.remainingSeconds, p.active),
     ),
     addListener<{ percent: number; status: string }>(
       "onLauncherUpdateProgress",

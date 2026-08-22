@@ -1,8 +1,10 @@
-use serde::{Deserialize, Serialize};
+use crate::engine::downloader::read_response_body_limited;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
+use serde::{Deserialize, Serialize};
 
 pub const ATOM_FEED_URL: &str = "https://github.com/TitoTFP/WuwaID/releases.atom";
+const MAX_ATOM_FEED_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -26,9 +28,17 @@ pub fn validate_release_note(entry: &ReleaseNoteEntry) -> Result<ReleaseNoteEntr
         return Err("Release note cache melebihi batas ukuran.".to_string());
     }
     let body = entry.body.to_ascii_lowercase();
-    for marker in ["<script", "javascript:", "onerror=", "onload=", "onmouseover="] {
+    for marker in [
+        "<script",
+        "javascript:",
+        "onerror=",
+        "onload=",
+        "onmouseover=",
+    ] {
         if body.contains(marker) {
-            return Err(format!("Release note memuat marker HTML tidak aman: {marker}"));
+            return Err(format!(
+                "Release note memuat marker HTML tidak aman: {marker}"
+            ));
         }
     }
     Ok(entry.clone())
@@ -65,7 +75,9 @@ pub fn parse_atom_feed(xml: &str) -> Result<ReleaseNoteEntry, String> {
                 } else if in_entry {
                     match name.as_str() {
                         "id" => {
-                            let text_bytes = reader.read_text(e.to_end().name()).map_err(|e| format!("{}", e))?;
+                            let text_bytes = reader
+                                .read_text(e.to_end().name())
+                                .map_err(|e| format!("{}", e))?;
                             let text = unescape_text(&text_bytes)?;
                             if let Some(pos) = text.rfind('/') {
                                 tag = text[pos + 1..].to_string();
@@ -74,19 +86,27 @@ pub fn parse_atom_feed(xml: &str) -> Result<ReleaseNoteEntry, String> {
                             }
                         }
                         "title" => {
-                            let text_bytes = reader.read_text(e.to_end().name()).map_err(|e| format!("{}", e))?;
+                            let text_bytes = reader
+                                .read_text(e.to_end().name())
+                                .map_err(|e| format!("{}", e))?;
                             title = unescape_text(&text_bytes)?;
                         }
                         "updated" => {
-                            let text_bytes = reader.read_text(e.to_end().name()).map_err(|e| format!("{}", e))?;
+                            let text_bytes = reader
+                                .read_text(e.to_end().name())
+                                .map_err(|e| format!("{}", e))?;
                             date = unescape_text(&text_bytes)?;
                         }
                         "name" => {
-                            let text_bytes = reader.read_text(e.to_end().name()).map_err(|e| format!("{}", e))?;
+                            let text_bytes = reader
+                                .read_text(e.to_end().name())
+                                .map_err(|e| format!("{}", e))?;
                             author = unescape_text(&text_bytes)?;
                         }
                         "content" => {
-                            let text_bytes = reader.read_text(e.to_end().name()).map_err(|e| format!("{}", e))?;
+                            let text_bytes = reader
+                                .read_text(e.to_end().name())
+                                .map_err(|e| format!("{}", e))?;
                             body = unescape_text(&text_bytes)?;
                         }
                         _ => {}
@@ -119,7 +139,10 @@ pub fn parse_atom_feed(xml: &str) -> Result<ReleaseNoteEntry, String> {
     })
 }
 
-pub async fn fetch_latest_release_notes(client: &reqwest::Client, url: &str) -> Result<ReleaseNoteEntry, String> {
+pub async fn fetch_latest_release_notes(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<ReleaseNoteEntry, String> {
     let resp = client
         .get(url)
         .header("User-Agent", "WuwaIDLauncher-Tauri")
@@ -131,10 +154,17 @@ pub async fn fetch_latest_release_notes(client: &reqwest::Client, url: &str) -> 
         return Err(format!("Server response error: {}", resp.status()));
     }
 
-    let text = resp
-        .text()
+    if resp
+        .content_length()
+        .is_some_and(|length| length > MAX_ATOM_FEED_BYTES)
+    {
+        return Err("Response Atom feed terlalu besar.".to_string());
+    }
+    let body = read_response_body_limited(resp, MAX_ATOM_FEED_BYTES)
         .await
-        .map_err(|e| format!("Gagal membaca response Atom feed: {}", e))?;
+        .map_err(|error| format!("Gagal membaca response Atom feed: {error}"))?;
+    let text = String::from_utf8(body.to_vec())
+        .map_err(|e| format!("Response Atom feed bukan UTF-8 valid: {}", e))?;
 
     parse_atom_feed(&text).and_then(|entry| validate_release_note(&entry))
 }
@@ -159,7 +189,10 @@ mod tests {
 
         let entry = parse_atom_feed(xml).unwrap();
         assert_eq!(entry.tag, "v3.5.1-id.3");
-        assert_eq!(entry.title, "Wuthering Waves Lokalisasi Bahasa Indonesia v.3.5.1-id.3");
+        assert_eq!(
+            entry.title,
+            "Wuthering Waves Lokalisasi Bahasa Indonesia v.3.5.1-id.3"
+        );
         assert_eq!(entry.author, "TitoTFP");
         assert!(entry.body.contains("<h1>Judul</h1>"));
     }

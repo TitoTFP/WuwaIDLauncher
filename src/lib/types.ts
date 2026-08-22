@@ -1,4 +1,4 @@
-export type InstallMethod = "resource_mount" | "loader" | "signature_bypass";
+export type InstallMethod = "resource_mount" | "loader";
 
 export interface CleanupReport {
   removed: string[];
@@ -16,17 +16,12 @@ export const INSTALL_METHOD_OPTIONS: readonly InstallMethodOption[] = [
   {
     value: "resource_mount",
     title: "Metode 1",
-    description: "Resource Mount · tanpa signature bypass",
+    description: "Resource Mount · instalasi terisolasi",
   },
   {
     value: "loader",
     title: "Metode 2",
     description: "winhttp.dll loader",
-  },
-  {
-    value: "signature_bypass",
-    title: "Metode 3",
-    description: "Signature bypass",
   },
 ];
 
@@ -84,9 +79,6 @@ export function normalizeInstallMethod(value: unknown): InstallMethod {
     case "loader":
     case "method2":
       return "loader";
-    case "signature_bypass":
-    case "method1":
-      return "signature_bypass";
     default:
       return DEFAULT_LAUNCHER_CONFIG.installMethod;
   }
@@ -105,7 +97,7 @@ export function normalizeLauncherConfig(raw: unknown): NormalizedConfigResult {
   }
 
   const method = normalizeInstallMethod(value.installMethod);
-  if ("installMethod" in value && !["resource_mount", "loader", "signature_bypass", "method1", "method2", "method3"].includes(value.installMethod as string)) {
+  if ("installMethod" in value && !["resource_mount", "loader", "method2", "method3"].includes(value.installMethod as string)) {
     repaired = true;
     diagnostics.push("Metode instalasi tidak valid; memakai resource_mount.");
   }
@@ -207,7 +199,6 @@ export interface ILauncherState {
   installing: boolean;
   installed: boolean;
   launching: boolean;
-  signatureRestoreCountdown: number | null;
   gameRunning: boolean;
   gameOrigin: "launcher" | "external";
   gamePath: string;

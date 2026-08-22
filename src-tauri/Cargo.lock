@@ -5598,7 +5598,9 @@ dependencies = [
  "tauri-plugin-process",
  "tempfile",
  "tokio",
+ "webview2-com",
  "windows 0.58.0",
+ "windows-core 0.61.2",
  "winreg 0.52.0",
  "zip",
 ]

@@ -1,7 +1,7 @@
+use sha2::Digest;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tempfile::tempdir;
-use sha2::Digest;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use wuwaid_launcher_lib::engine::downloader::{
@@ -46,7 +46,8 @@ async fn spawn_mock_router(
                 let _ = socket.flush().await;
                 let _ = socket.shutdown().await;
             } else {
-                let not_found = "HTTP/1.1 404 NOT FOUND\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                let not_found =
+                    "HTTP/1.1 404 NOT FOUND\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
                 let _ = socket.write_all(not_found.as_bytes()).await;
                 let _ = socket.flush().await;
                 let _ = socket.shutdown().await;
@@ -76,16 +77,12 @@ async fn test_mock_http_download_success_and_sha_verification() {
     assert_eq!(meta_len, payload.len() as u64);
 
     // 2. Stream download with exact expected size
-    let downloaded_bytes = download_file_with_expected_size(
-        &download_url,
-        &dest,
-        Some(meta_len),
-        |p| {
+    let downloaded_bytes =
+        download_file_with_expected_size(&download_url, &dest, Some(meta_len), |p| {
             assert!(p.percent <= 100);
-        },
-    )
-    .await
-    .unwrap();
+        })
+        .await
+        .unwrap();
 
     assert_eq!(downloaded_bytes, payload.len() as u64);
     assert!(dest.exists());

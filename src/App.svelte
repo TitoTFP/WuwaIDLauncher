@@ -17,26 +17,21 @@
 
   $effect(() => {
     if (typeof document === 'undefined') return;
-    document.body.classList.toggle('game-runtime-readonly', appState.gameRunning);
+    document.body.classList.toggle(
+      'game-runtime-readonly',
+      appState.gameRunning || appState.installing || appState.launching,
+    );
   });
 
-  function formatCountdown(totalSeconds: number): string {
-    const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
-    const seconds = (totalSeconds % 60).toString().padStart(2, '0');
-    return `${minutes}:${seconds}`;
-  }
 </script>
 
-<div class="app-root" class:game-running={appState.gameRunning}>
+<div
+  class="app-root"
+  class:game-running={appState.gameRunning}
+  class:runtime-paused={appState.gameRunning || appState.launching}
+>
   <BackgroundFx />
   <TopBar />
-  {#if appState.signatureRestoreCountdown !== null}
-    <div class="signature-restore-notice" role="status" aria-live="polite">
-      <span>Metode 3 aktif — launcher belum dapat ditutup</span>
-      <strong>{formatCountdown(appState.signatureRestoreCountdown)}</strong>
-      <small>Menunggu pemulihan signature game.</small>
-    </div>
-  {/if}
   <SidePanel />
   <AudioPlayer />
   <RightPanel />
@@ -72,35 +67,4 @@
     filter: brightness(0.85);
   }
 
-  .signature-restore-notice {
-    position: fixed;
-    top: 56px;
-    left: 50%;
-    z-index: 700;
-    display: grid;
-    grid-template-columns: auto auto;
-    align-items: center;
-    gap: 0 14px;
-    padding: 9px 14px;
-    transform: translateX(-50%);
-    background: rgba(14, 18, 52, 0.94);
-    border: 1px solid rgba(212, 176, 108, 0.55);
-    border-left: 3px solid var(--gold);
-    box-shadow: 0 5px 22px rgba(0, 0, 0, 0.48);
-    color: var(--text-1);
-    font-size: 12px;
-    line-height: 1.35;
-    pointer-events: none;
-  }
-
-  .signature-restore-notice strong {
-    color: var(--gold);
-    font-size: 18px;
-    letter-spacing: 0.08em;
-  }
-
-  .signature-restore-notice small {
-    grid-column: 1 / -1;
-    color: var(--text-2);
-  }
 </style>

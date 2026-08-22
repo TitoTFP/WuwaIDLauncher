@@ -2,9 +2,8 @@
 use std::{env, fs, path::PathBuf};
 
 fn main() {
-    let attributes = tauri_build::Attributes::new().windows_attributes(
-        tauri_build::WindowsAttributes::new_without_app_manifest(),
-    );
+    let attributes = tauri_build::Attributes::new()
+        .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest());
     tauri_build::try_build(attributes).expect("failed to run tauri build script");
 
     #[cfg(windows)]

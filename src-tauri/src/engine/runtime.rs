@@ -5,7 +5,7 @@ use crate::engine::{
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread::JoinHandle;
@@ -322,7 +322,11 @@ pub fn collect_game_log_tail(game_path: &Path) -> String {
     let candidates = [
         game_path.join("game.log"),
         game_path.join("wuwaid_loader_log.txt"),
-        game_path.join("Client").join("Saved").join("Logs").join("Client.log"),
+        game_path
+            .join("Client")
+            .join("Saved")
+            .join("Logs")
+            .join("Client.log"),
     ];
     let newest = candidates
         .into_iter()
@@ -336,9 +340,24 @@ pub fn collect_game_log_tail(game_path: &Path) -> String {
     let Some(path) = newest else {
         return String::new();
     };
-    let Ok(bytes) = std::fs::read(&path) else {
+    let Ok(mut file) = std::fs::File::open(&path) else {
         return String::new();
     };
+    let Ok(file_len) = file.metadata().map(|metadata| metadata.len()) else {
+        return String::new();
+    };
+    let offset = file_len.saturating_sub(MAX_OUTPUT_TAIL_BYTES as u64);
+    if file.seek(SeekFrom::Start(offset)).is_err() {
+        return String::new();
+    }
+    let mut bytes = Vec::with_capacity((file_len - offset) as usize);
+    if file
+        .take(MAX_OUTPUT_TAIL_BYTES as u64)
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        return String::new();
+    }
     format!(
         "{}: {}",
         path.to_string_lossy(),
@@ -351,10 +370,35 @@ where
     T: Read + Send + 'static,
 {
     std::thread::spawn(move || {
-        let mut output = Vec::new();
-        let _ = stream.read_to_end(&mut output);
+        let mut output = Vec::with_capacity(MAX_OUTPUT_TAIL_BYTES);
+        let mut buffer = [0u8; 16 * 1024];
+        loop {
+            match stream.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => append_output_tail(&mut output, &buffer[..count]),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
         output
     })
+}
+
+fn append_output_tail(output: &mut Vec<u8>, chunk: &[u8]) {
+    if chunk.len() >= MAX_OUTPUT_TAIL_BYTES {
+        output.clear();
+        output.extend_from_slice(&chunk[chunk.len() - MAX_OUTPUT_TAIL_BYTES..]);
+        return;
+    }
+
+    let overflow = output
+        .len()
+        .saturating_add(chunk.len())
+        .saturating_sub(MAX_OUTPUT_TAIL_BYTES);
+    if overflow > 0 {
+        output.drain(..overflow);
+    }
+    output.extend_from_slice(chunk);
 }
 
 fn join_capture(capture: Option<JoinHandle<Vec<u8>>>) -> String {
@@ -516,11 +560,9 @@ fn spawn_elevated(command: &LaunchCommand) -> Result<LaunchedGame, Box<LaunchFai
     use std::os::windows::ffi::OsStrExt;
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::GetLastError;
-    use windows::Win32::UI::Shell::{
-        ShellExecuteExW, SHELLEXECUTEINFOW, SEE_MASK_NOCLOSEPROCESS,
-    };
-    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
     use windows::Win32::System::Threading::GetProcessId;
+    use windows::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
     let verb: Vec<u16> = std::ffi::OsStr::new("runas")
         .encode_wide()
@@ -604,10 +646,6 @@ pub fn reconcile_runtime_state(
             ProcessOrigin::External
         },
     }
-}
-
-pub fn should_restore_signature(timeout_elapsed: bool) -> bool {
-    timeout_elapsed
 }
 
 pub fn validate_launch_preconditions(
@@ -758,7 +796,10 @@ mod tests {
             true,
         );
 
-        assert_eq!(command.executable, PathBuf::from(r"C:\Games\Client-Win64-Shipping.exe"));
+        assert_eq!(
+            command.executable,
+            PathBuf::from(r"C:\Games\Client-Win64-Shipping.exe")
+        );
         assert_eq!(command.working_directory, PathBuf::from(r"C:\Games"));
         assert_eq!(command.arguments, vec!["-dx11"]);
     }
@@ -773,10 +814,7 @@ mod tests {
             classify_spawn_error(Some(1223)),
             SpawnFailureKind::ElevationCancelled
         );
-        assert_eq!(
-            classify_spawn_error(Some(2)),
-            SpawnFailureKind::SpawnFailed
-        );
+        assert_eq!(classify_spawn_error(Some(2)), SpawnFailureKind::SpawnFailed);
     }
 
     #[test]
@@ -786,11 +824,8 @@ mod tests {
             Path::new(r"C:\Games"),
             false,
         );
-        let evidence = LaunchEvidence::for_failure(
-            command,
-            SpawnFailureKind::ElevationRequired,
-            None,
-        );
+        let evidence =
+            LaunchEvidence::for_failure(command, SpawnFailureKind::ElevationRequired, None);
         let message = evidence.user_message();
 
         assert!(message.contains("elevation_required"));
@@ -808,5 +843,27 @@ mod tests {
 
         assert_eq!(tail.len(), 8 * 1024);
         assert!(tail.chars().all(|value| value == 'a'));
+    }
+
+    #[test]
+    fn captured_process_output_is_bounded_while_the_process_runs() {
+        let output = vec![b'a'; MAX_OUTPUT_TAIL_BYTES + 1024];
+        let captured = capture_stream(std::io::Cursor::new(output)).join().unwrap();
+
+        assert_eq!(captured.len(), MAX_OUTPUT_TAIL_BYTES);
+        assert!(captured.iter().all(|value| *value == b'a'));
+    }
+
+    #[test]
+    fn game_log_capture_reads_only_the_last_8_kib() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut content = vec![b'a'; 1024];
+        content.extend(std::iter::repeat_n(b'b', MAX_OUTPUT_TAIL_BYTES));
+        std::fs::write(directory.path().join("game.log"), content).unwrap();
+
+        let tail = collect_game_log_tail(directory.path());
+
+        assert!(tail.ends_with(&"b".repeat(MAX_OUTPUT_TAIL_BYTES)));
+        assert!(!tail.ends_with(&"a".repeat(1024)));
     }
 }

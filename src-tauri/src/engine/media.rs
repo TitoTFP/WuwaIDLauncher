@@ -1,9 +1,13 @@
+use crate::engine::downloader::{
+    download_file, read_response_body_limited, verify_sha256, DownloadProgress,
+};
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use serde::{Deserialize, Serialize};
-use crate::engine::downloader::{download_file, verify_sha256, DownloadProgress};
 
-pub const ASSETS_URL: &str = "https://raw.githubusercontent.com/TitoTFP/WuwaID/refs/heads/main/Web/assets.json";
+pub const ASSETS_URL: &str =
+    "https://raw.githubusercontent.com/TitoTFP/WuwaID/refs/heads/main/Web/assets.json";
+const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AssetEntry {
@@ -42,10 +46,17 @@ pub async fn fetch_manifest(client: &reqwest::Client, url: &str) -> Result<Asset
         return Err(format!("Server response error: {}", resp.status()));
     }
 
-    let text = resp
-        .text()
+    if resp
+        .content_length()
+        .is_some_and(|length| length > MAX_MANIFEST_BYTES)
+    {
+        return Err("Manifest assets terlalu besar.".to_string());
+    }
+    let body = read_response_body_limited(resp, MAX_MANIFEST_BYTES)
         .await
-        .map_err(|e| format!("Gagal membaca body manifest assets: {}", e))?;
+        .map_err(|error| format!("Gagal membaca body manifest assets: {error}"))?;
+    let text = String::from_utf8(body.to_vec())
+        .map_err(|e| format!("Body manifest assets bukan UTF-8 valid: {}", e))?;
 
     parse_manifest(&text)
 }
@@ -93,10 +104,7 @@ pub fn write_cached_manifest(cache_dir: &Path, manifest: &AssetManifest) -> Resu
         .map_err(|error| format!("Gagal mengaktifkan manifest media cache: {error}"))
 }
 
-pub fn validate_cached_media(
-    cache_dir: &Path,
-    manifest: &AssetManifest,
-) -> Result<bool, String> {
+pub fn validate_cached_media(cache_dir: &Path, manifest: &AssetManifest) -> Result<bool, String> {
     for name in ["bgm.mp3", "bg-video.mp4"] {
         let Some(asset) = manifest.assets.iter().find(|asset| asset.name == name) else {
             return Ok(false);
@@ -241,7 +249,10 @@ mod tests {
         }"#;
 
         let manifest = parse_manifest(json).unwrap();
-        assert_eq!(manifest.update_date.as_deref(), Some("2026-08-20T03:00:00Z"));
+        assert_eq!(
+            manifest.update_date.as_deref(),
+            Some("2026-08-20T03:00:00Z")
+        );
         assert_eq!(manifest.assets.len(), 2);
         assert_eq!(manifest.assets[0].name, "bgm.mp3");
         assert_eq!(manifest.assets[1].name, "bg-video.mp4");
@@ -286,8 +297,9 @@ mod tests {
                 AssetEntry {
                     name: "bg-video.mp4".to_string(),
                     url: "https://example.com/bg-video.mp4".to_string(),
-                    sha256: "2d01c99d9fc568ae0ae6046423b081d2ee5ea56b5cf47922913fe0c23bacd953".to_string(),
-                }
+                    sha256: "2d01c99d9fc568ae0ae6046423b081d2ee5ea56b5cf47922913fe0c23bacd953"
+                        .to_string(),
+                },
             ],
         };
 
@@ -303,17 +315,18 @@ mod tests {
 
         let manifest = AssetManifest {
             update_date: None,
-            assets: vec![
-                AssetEntry {
-                    name: "bgm.mp3".to_string(),
-                    url: "https://example.com/bgm.mp3".to_string(),
-                    sha256: "fca7653b0ffd03d38a70661f6373277927e4dd77466d4666b479972fb463a92d".to_string(),
-                }
-            ],
+            assets: vec![AssetEntry {
+                name: "bgm.mp3".to_string(),
+                url: "https://example.com/bgm.mp3".to_string(),
+                sha256: "fca7653b0ffd03d38a70661f6373277927e4dd77466d4666b479972fb463a92d"
+                    .to_string(),
+            }],
         };
 
         let res = sync_media(cache_dir, &manifest, |_, _| {}).await;
         assert!(res.is_err());
-        assert!(res.unwrap_err().contains("Manifest tidak memuat aset wajib bg-video.mp4"));
+        assert!(res
+            .unwrap_err()
+            .contains("Manifest tidak memuat aset wajib bg-video.mp4"));
     }
 }

@@ -2,13 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;
-use wuwaid_launcher_lib::engine::{
-    installer,
-    method::InstallMethod,
-    pak,
-    path,
-    signature,
-};
+use wuwaid_launcher_lib::engine::{installer, method::InstallMethod, pak, path, signature};
 
 fn release_like_pak(path: &Path) {
     let bytes = pak::pack(
@@ -71,17 +65,14 @@ fn preflight_normalizes_game_path_and_selects_method_target() {
         .to_string_lossy()
         .to_string();
 
-    let normalized = installer::validate_installation_preconditions(
-        &nested,
-        InstallMethod::Loader,
-    )
-    .unwrap();
+    let normalized =
+        installer::validate_installation_preconditions(&nested, InstallMethod::Loader).unwrap();
     assert_eq!(normalized, game);
 
     let invalid_dir = tempfile::tempdir().unwrap();
     let invalid = installer::validate_installation_preconditions(
         &invalid_dir.path().to_string_lossy(),
-        InstallMethod::SignatureBypass,
+        InstallMethod::ResourceMount,
     )
     .unwrap_err();
     assert!(invalid.contains("invalid_game_path"));
@@ -106,39 +97,19 @@ fn loader_transaction_requires_loader_and_leaves_no_partial_artifacts() {
     let pak_source = game.join("source.pak");
     release_like_pak(&pak_source);
 
-    let error = installer::install_patch_transaction(
-        &game,
-        InstallMethod::Loader,
-        &pak_source,
-        None,
-    )
-    .unwrap_err();
+    let error =
+        installer::install_patch_transaction(&game, InstallMethod::Loader, &pak_source, None)
+            .unwrap_err();
     assert!(error.contains("loader_source_missing"));
     assert!(!signature::get_loader_pak_path(&game).exists());
     assert!(!signature::get_loader_dll_path(&game).exists());
     assert!(!signature::get_loader_marker_path(&game).exists());
-    assert!(!game.join("Client").join("Binaries").join("Win64").join(".wuwaid-transaction").exists());
-}
-
-#[test]
-fn signature_bypass_migrates_legacy_pak_without_marker() {
-    let (_temp, game) = setup_game();
-    let source = game.join("new.pak");
-    let legacy = signature::get_signature_bypass_pak_path(&game);
-    release_like_pak(&source);
-    release_like_pak(&legacy);
-
-    installer::install_patch_transaction(
-        &game,
-        InstallMethod::SignatureBypass,
-        &source,
-        None,
-    )
-    .expect("canonical legacy target must be replaceable");
-
-    assert!(installer::validate_installed_signature_bypass(&game).unwrap());
-    assert!(!signature::get_signature_bypass_marker_path(&game).exists());
-    assert_eq!(fs::read(&legacy).unwrap(), fs::read(&source).unwrap());
+    assert!(!game
+        .join("Client")
+        .join("Binaries")
+        .join("Win64")
+        .join(".wuwaid-transaction")
+        .exists());
 }
 
 #[test]
@@ -146,7 +117,11 @@ fn transaction_switches_methods_and_replaces_canonical_targets() {
     let (_temp, game) = setup_game();
     let pak_source = game.join("source.pak");
     let loader_source = game.join("source.dll");
-    let unrelated = game.join("Client").join("Content").join("Paks").join("user-file.txt");
+    let unrelated = game
+        .join("Client")
+        .join("Content")
+        .join("Paks")
+        .join("user-file.txt");
     release_like_pak(&pak_source);
     fs::write(&loader_source, b"loader bytes").unwrap();
     fs::write(&unrelated, b"do not touch").unwrap();
@@ -160,14 +135,10 @@ fn transaction_switches_methods_and_replaces_canonical_targets() {
     .unwrap();
     assert!(installer::validate_installed_loader(&game).unwrap());
 
-    installer::install_patch_transaction(
-        &game,
-        InstallMethod::SignatureBypass,
-        &pak_source,
-        None,
-    )
-    .unwrap();
-    assert!(installer::validate_installed_signature_bypass(&game).unwrap());
+    installer::install_patch_transaction(&game, InstallMethod::ResourceMount, &pak_source, None)
+        .unwrap();
+    let resource_plan = installer::probe_resource_mount(&game).unwrap();
+    assert!(installer::validate_installed_resource_mount(&resource_plan).unwrap());
     assert!(!signature::get_loader_pak_path(&game).exists());
     assert!(!signature::get_loader_dll_path(&game).exists());
 
@@ -175,21 +146,22 @@ fn transaction_switches_methods_and_replaces_canonical_targets() {
     fs::create_dir_all(foreign.parent().unwrap()).unwrap();
     fs::write(&foreign, b"foreign loader").unwrap();
     let report = installer::cleanup_owned_artifacts(&game).unwrap();
-    assert!(report.preserved.is_empty(), "unexpected preserved paths: {report:?}");
+    assert!(
+        report.preserved.is_empty(),
+        "unexpected preserved paths: {report:?}"
+    );
     assert!(!foreign.exists());
     assert_eq!(fs::read(&unrelated).unwrap(), b"do not touch");
 
-    let bypass = signature::get_signature_bypass_pak_path(&game);
-    fs::write(&bypass, b"foreign pak").unwrap();
-    installer::install_patch_transaction(
-        &game,
-        InstallMethod::SignatureBypass,
-        &pak_source,
-        None,
-    )
-    .unwrap();
-    assert!(installer::validate_installed_signature_bypass(&game).unwrap());
-    assert_eq!(fs::read(&bypass).unwrap(), fs::read(&pak_source).unwrap());
+    let legacy = game
+        .join("Client")
+        .join("Content")
+        .join("Paks")
+        .join(path::PAK_FILE_NAME);
+    fs::write(&legacy, b"foreign pak").unwrap();
+    let report = installer::cleanup_owned_artifacts(&game).unwrap();
+    assert!(report.failures.is_empty());
+    assert!(!legacy.exists());
 }
 
 #[test]
@@ -215,8 +187,14 @@ fn cleanup_removes_resource_artifacts_across_all_versions() {
 
     let report = installer::cleanup_owned_artifacts(&game).unwrap();
 
-    assert!(report.failures.is_empty(), "unexpected failures: {report:?}");
-    assert!(report.preserved.is_empty(), "unexpected preserved paths: {report:?}");
+    assert!(
+        report.failures.is_empty(),
+        "unexpected failures: {report:?}"
+    );
+    assert!(
+        report.preserved.is_empty(),
+        "unexpected preserved paths: {report:?}"
+    );
     assert!(!old_pak.exists());
     assert!(!old_sig.exists());
     assert!(!old_marker.exists());
@@ -241,7 +219,7 @@ fn non_file_canonical_target_blocks_install_and_rolls_back() {
 
     let error = installer::install_patch_transaction(
         &game,
-        InstallMethod::SignatureBypass,
+        InstallMethod::ResourceMount,
         &pak_source,
         None,
     )
@@ -249,7 +227,6 @@ fn non_file_canonical_target_blocks_install_and_rolls_back() {
 
     assert!(error.contains("cleanup_partial_failure"));
     assert!(error.contains("preserved"));
-    assert!(!signature::get_signature_bypass_pak_path(&game).exists());
     assert!(loader_dll.is_dir());
 }
 
@@ -259,16 +236,14 @@ fn repeated_cleanup_is_idempotent_and_reports_owned_artifacts() {
     let pak_source = game.join("source.pak");
     release_like_pak(&pak_source);
 
-    installer::install_patch_transaction(
-        &game,
-        InstallMethod::SignatureBypass,
-        &pak_source,
-        None,
-    )
-    .unwrap();
+    installer::install_patch_transaction(&game, InstallMethod::ResourceMount, &pak_source, None)
+        .unwrap();
     let first = installer::cleanup_owned_artifacts(&game).unwrap();
     assert!(!first.removed.is_empty());
-    assert!(!signature::get_signature_bypass_pak_path(&game).exists());
+    assert!(!installer::probe_resource_mount(&game)
+        .unwrap()
+        .pak_path
+        .exists());
 
     let second = installer::cleanup_owned_artifacts(&game).unwrap();
     assert!(second.removed.is_empty());

@@ -1,7 +1,7 @@
 use crate::engine::{method::InstallMethod, pak, path, signature};
 use sha1::{Digest, Sha1};
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -68,14 +68,11 @@ pub fn validate_mount_file(mount_path: &Path) -> Result<bool, String> {
     if !mount_path.exists() {
         return Ok(false);
     }
-    let content = fs::read_to_string(mount_path)
-        .map_err(|e| format!("Gagal membaca mount file: {}", e))?;
+    let content =
+        fs::read_to_string(mount_path).map_err(|e| format!("Gagal membaca mount file: {}", e))?;
     let normalized = content.replace("\r\n", "\n");
     let lines: Vec<&str> = normalized.split('\n').collect();
-    if lines.len() != 4
-        || lines[0] != "::Mount::"
-        || lines[2] != "::Del::"
-        || !lines[3].is_empty()
+    if lines.len() != 4 || lines[0] != "::Mount::" || lines[2] != "::Del::" || !lines[3].is_empty()
     {
         return Ok(false);
     }
@@ -114,7 +111,6 @@ fn valid_sha1(value: &str) -> bool {
 /// launcher.  A non-empty file is not sufficient: the footer must contain the
 /// expected magic/version and its SHA-1 must cover the index bytes.
 pub fn validate_pak_file(pak_path: &Path) -> Result<bool, String> {
-    let bytes = fs::read(pak_path).map_err(|e| format!("Gagal membaca PAK: {}", e))?;
     const FOOTER_SIZE: usize = 16 + 1 + 4 + 4 + 8 + 8 + 20 + (32 * 5);
     const MAGIC_OFFSET: usize = 16 + 1;
     const VERSION_OFFSET: usize = MAGIC_OFFSET + 4;
@@ -122,23 +118,25 @@ pub fn validate_pak_file(pak_path: &Path) -> Result<bool, String> {
     const INDEX_SIZE_OFFSET: usize = INDEX_OFFSET_OFFSET + 8;
     const INDEX_HASH_OFFSET: usize = INDEX_SIZE_OFFSET + 8;
 
-    if bytes.len() < FOOTER_SIZE {
+    let mut file = fs::File::open(pak_path).map_err(|e| format!("Gagal membaca PAK: {}", e))?;
+    let file_len = file
+        .metadata()
+        .map_err(|e| format!("Gagal membaca metadata PAK: {}", e))?
+        .len();
+    if file_len < FOOTER_SIZE as u64 {
         return Ok(false);
     }
-    let footer = bytes.len() - FOOTER_SIZE;
+    let footer_offset = file_len - FOOTER_SIZE as u64;
+    file.seek(SeekFrom::Start(footer_offset))
+        .map_err(|e| format!("Gagal mencari footer PAK: {}", e))?;
+    let mut footer = [0u8; FOOTER_SIZE];
+    file.read_exact(&mut footer)
+        .map_err(|e| format!("Gagal membaca footer PAK: {}", e))?;
     let read_u32 = |offset: usize| -> u32 {
-        u32::from_le_bytes(
-            bytes[footer + offset..footer + offset + 4]
-                .try_into()
-                .unwrap(),
-        )
+        u32::from_le_bytes(footer[offset..offset + 4].try_into().unwrap())
     };
     let read_u64 = |offset: usize| -> u64 {
-        u64::from_le_bytes(
-            bytes[footer + offset..footer + offset + 8]
-                .try_into()
-                .unwrap(),
-        )
+        u64::from_le_bytes(footer[offset..offset + 8].try_into().unwrap())
     };
 
     if read_u32(MAGIC_OFFSET) != pak::PAK_MAGIC || read_u32(VERSION_OFFSET) != pak::WUWA_PAK_VERSION
@@ -146,27 +144,30 @@ pub fn validate_pak_file(pak_path: &Path) -> Result<bool, String> {
         return Ok(false);
     }
 
-    let index_offset = read_u64(INDEX_OFFSET_OFFSET) as usize;
-    let index_size = read_u64(INDEX_SIZE_OFFSET) as usize;
-    if index_offset > footer || index_size > footer.saturating_sub(index_offset) {
+    let index_offset = read_u64(INDEX_OFFSET_OFFSET);
+    let index_size = read_u64(INDEX_SIZE_OFFSET);
+    if index_offset > footer_offset || index_size > footer_offset - index_offset {
         return Ok(false);
     }
 
-    let expected_end = footer + INDEX_HASH_OFFSET + 20;
-    if expected_end > bytes.len() {
-        return Ok(false);
-    }
-    let expected = &bytes[footer + INDEX_HASH_OFFSET..expected_end];
+    let expected = &footer[INDEX_HASH_OFFSET..INDEX_HASH_OFFSET + 20];
     let mut hasher = Sha1::new();
-    hasher.update(&bytes[index_offset..index_offset + index_size]);
+    file.seek(SeekFrom::Start(index_offset))
+        .map_err(|e| format!("Gagal mencari index PAK: {}", e))?;
+    let mut remaining = index_size;
+    let mut buffer = [0u8; 64 * 1024];
+    while remaining > 0 {
+        let count = remaining.min(buffer.len() as u64) as usize;
+        file.read_exact(&mut buffer[..count])
+            .map_err(|e| format!("Gagal membaca index PAK: {}", e))?;
+        hasher.update(&buffer[..count]);
+        remaining -= count as u64;
+    }
     Ok(hasher.finalize().as_slice() == expected)
 }
 
 pub fn validate_installed_resource_mount(plan: &ResourceMountPlan) -> Result<bool, String> {
-    if !plan.pak_path.exists()
-        || !plan.sig_path.exists()
-        || !plan.mount_path.exists()
-    {
+    if !plan.pak_path.exists() || !plan.sig_path.exists() || !plan.mount_path.exists() {
         return Ok(false);
     }
     if !validate_pak_file(&plan.pak_path)? {
@@ -184,8 +185,7 @@ pub fn validate_installed_resource_mount(plan: &ResourceMountPlan) -> Result<boo
         return Ok(false);
     }
     let expected_mount = mount_content(
-        &compute_sha1(&plan.pak_path)
-            .map_err(|e| format!("Gagal menghitung SHA-1 PAK: {}", e))?,
+        &compute_sha1(&plan.pak_path).map_err(|e| format!("Gagal menghitung SHA-1 PAK: {}", e))?,
         &compute_sha1(&plan.sig_path)
             .map_err(|e| format!("Gagal menghitung SHA-1 signature: {}", e))?,
     );
@@ -216,14 +216,6 @@ pub fn loader_marker_path(game_path: &Path) -> PathBuf {
     signature::get_loader_marker_path(game_path)
 }
 
-pub fn signature_bypass_pak_path(game_path: &Path) -> PathBuf {
-    signature::get_signature_bypass_pak_path(game_path)
-}
-
-pub fn signature_bypass_marker_path(game_path: &Path) -> PathBuf {
-    signature::get_signature_bypass_marker_path(game_path)
-}
-
 pub fn validate_installed_loader(game_path: &Path) -> Result<bool, String> {
     let pak_path = loader_pak_path(game_path);
     let dll_path = loader_dll_path(game_path);
@@ -242,9 +234,12 @@ pub fn validate_installed_loader(game_path: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
-pub fn validate_installed_signature_bypass(game_path: &Path) -> Result<bool, String> {
-    let pak_path = signature_bypass_pak_path(game_path);
-    Ok(pak_path.is_file() && validate_pak_file(&pak_path)?)
+fn legacy_method_pak_path(game_path: &Path) -> PathBuf {
+    path::get_pak_dir(game_path).join(path::PAK_FILE_NAME)
+}
+
+fn legacy_method_marker_path(game_path: &Path) -> PathBuf {
+    path::get_pak_dir(game_path).join(".wuwaid-managed-signature-bypass")
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, PartialEq, Eq)]
@@ -277,7 +272,11 @@ fn check_directory_writable(path: &Path) -> Result<(), String> {
         .duration_since(UNIX_EPOCH)
         .map(|value| value.as_nanos())
         .unwrap_or_default();
-    let probe = directory.join(format!(".wuwaid-write-probe-{}-{}", std::process::id(), stamp));
+    let probe = directory.join(format!(
+        ".wuwaid-write-probe-{}-{}",
+        std::process::id(),
+        stamp
+    ));
     fs::write(&probe, b"probe")
         .map_err(|error| format!("needs_admin: target tidak dapat ditulis: {error}"))?;
     fs::remove_file(&probe)
@@ -340,8 +339,8 @@ fn validate_canonical_paths(game_path: &Path) -> Result<(), String> {
     let mut paths = vec![
         signature::get_sig_path(game_path),
         signature::get_sig_backup_path(game_path),
-        signature::get_signature_bypass_pak_path(game_path),
-        signature::get_signature_bypass_marker_path(game_path),
+        legacy_method_pak_path(game_path),
+        legacy_method_marker_path(game_path),
         signature::get_loader_pak_path(game_path),
         signature::get_loader_dll_path(game_path),
         signature::get_loader_marker_path(game_path),
@@ -364,7 +363,6 @@ fn method_target_directory(game_path: &Path, method: InstallMethod) -> Result<Pa
     match method {
         InstallMethod::ResourceMount => Ok(probe_resource_mount(game_path)?.mount_dir),
         InstallMethod::Loader => Ok(signature::get_loader_folder(game_path)),
-        InstallMethod::SignatureBypass => Ok(path::get_pak_dir(game_path)),
     }
 }
 
@@ -385,12 +383,22 @@ pub fn validate_installation_preconditions(
     Ok(normalized)
 }
 
+/// Validate the configured game path before restoring a legacy signature.
+/// Restoration does not require a writable target, but it must use the same
+/// normalized game root and reparse-point protections as installer cleanup.
+pub fn validate_signature_restore_path(game_path: &str) -> Result<PathBuf, String> {
+    let normalized = path::normalize_game_path(game_path)
+        .ok_or_else(|| "invalid_game_path: executable game tidak ditemukan".to_string())?;
+    validate_canonical_paths(&normalized)?;
+    Ok(normalized)
+}
+
 fn known_artifact_paths(game_path: &Path) -> Vec<PathBuf> {
     let mut paths = vec![
         signature::get_sig_path(game_path),
         signature::get_sig_backup_path(game_path),
-        signature::get_signature_bypass_pak_path(game_path),
-        signature::get_signature_bypass_marker_path(game_path),
+        legacy_method_pak_path(game_path),
+        legacy_method_marker_path(game_path),
         signature::get_loader_pak_path(game_path),
         signature::get_loader_dll_path(game_path),
         signature::get_loader_marker_path(game_path),
@@ -427,9 +435,8 @@ fn restore_files(snapshot: &[FileSnapshot]) -> Result<(), String> {
         match &item.contents {
             Some(contents) => {
                 if let Some(parent) = item.path.parent() {
-                    fs::create_dir_all(parent).map_err(|error| {
-                        format!("rollback_parent_failed {:?}: {error}", parent)
-                    })?;
+                    fs::create_dir_all(parent)
+                        .map_err(|error| format!("rollback_parent_failed {:?}: {error}", parent))?;
                 }
                 if item.path.exists() && !item.path.is_file() {
                     return Err(format!("rollback_target_not_file: {:?}", item.path));
@@ -490,21 +497,6 @@ fn write_transaction_files(files: &[(PathBuf, Vec<u8>)]) -> Result<(), String> {
     result
 }
 
-fn deploy_signature_bypass_transaction(game_path: &Path, pak_source: &Path) -> Result<(), String> {
-    if !pak_source.is_file() || !validate_pak_file(pak_source)? {
-        return Err("invalid_patch_pak: source PAK tidak valid".to_string());
-    }
-    let pak_contents = fs::read(pak_source)
-        .map_err(|error| format!("transaction_source_failed: {error}"))?;
-    let target = signature::get_signature_bypass_pak_path(game_path);
-    write_transaction_files(&[(target, pak_contents)])?;
-    if !validate_installed_signature_bypass(game_path)? {
-        return Err("transaction_validation_failed: signature bypass tidak valid".to_string());
-    }
-    remove_legacy_marker(&signature::get_signature_bypass_marker_path(game_path))?;
-    Ok(())
-}
-
 fn deploy_loader_transaction(
     game_path: &Path,
     pak_source: &Path,
@@ -516,19 +508,16 @@ fn deploy_loader_transaction(
     if !loader_source.is_file() {
         return Err("loader_source_missing: source loader tidak ditemukan".to_string());
     }
-    let loader_contents = fs::read(loader_source)
-        .map_err(|error| format!("loader_source_read_failed: {error}"))?;
+    let loader_contents =
+        fs::read(loader_source).map_err(|error| format!("loader_source_read_failed: {error}"))?;
     if loader_contents.is_empty() {
         return Err("loader_source_empty: source loader kosong".to_string());
     }
-    let pak_contents = fs::read(pak_source)
-        .map_err(|error| format!("transaction_source_failed: {error}"))?;
+    let pak_contents =
+        fs::read(pak_source).map_err(|error| format!("transaction_source_failed: {error}"))?;
     let pak_target = signature::get_loader_pak_path(game_path);
     let loader_target = signature::get_loader_dll_path(game_path);
-    write_transaction_files(&[
-        (pak_target, pak_contents),
-        (loader_target, loader_contents),
-    ])?;
+    write_transaction_files(&[(pak_target, pak_contents), (loader_target, loader_contents)])?;
     if !validate_installed_loader(game_path)? {
         return Err("transaction_validation_failed: loader tidak valid".to_string());
     }
@@ -543,7 +532,8 @@ fn remove_legacy_marker(path: &Path) -> Result<(), String> {
     if !path.is_file() {
         return Err(format!("legacy_marker_not_file: {:?}", path));
     }
-    fs::remove_file(path).map_err(|error| format!("legacy_marker_remove_failed {:?}: {error}", path))
+    fs::remove_file(path)
+        .map_err(|error| format!("legacy_marker_remove_failed {:?}: {error}", path))
 }
 
 fn remove_if_file(path: &Path, report: &mut CleanupReport) {
@@ -588,13 +578,8 @@ fn cleanup_owned_artifacts_except(
         remove_if_file(&artifacts.owner_marker_path, &mut report);
     }
 
-    if keep != Some(InstallMethod::SignatureBypass) {
-        remove_if_file(&signature::get_signature_bypass_pak_path(game_path), &mut report);
-    }
-    remove_if_file(
-        &signature::get_signature_bypass_marker_path(game_path),
-        &mut report,
-    );
+    remove_if_file(&legacy_method_pak_path(game_path), &mut report);
+    remove_if_file(&legacy_method_marker_path(game_path), &mut report);
 
     if keep != Some(InstallMethod::Loader) {
         remove_if_file(&signature::get_loader_pak_path(game_path), &mut report);
@@ -602,9 +587,7 @@ fn cleanup_owned_artifacts_except(
     }
     remove_if_file(&signature::get_loader_marker_path(game_path), &mut report);
 
-    if keep != Some(InstallMethod::SignatureBypass)
-        && signature::get_sig_backup_path(game_path).is_file()
-    {
+    if signature::get_sig_backup_path(game_path).is_file() {
         match signature::restore_sig(game_path) {
             Ok(true) => report
                 .removed
@@ -647,9 +630,9 @@ where
     if let Err(error) = commit() {
         return Err(match restore_files(&snapshot) {
             Ok(()) => format!("metadata_commit_failed: {error}"),
-            Err(rollback_error) => format!(
-                "metadata_commit_failed: {error}; rollback_failed: {rollback_error}"
-            ),
+            Err(rollback_error) => {
+                format!("metadata_commit_failed: {error}; rollback_failed: {rollback_error}")
+            }
         });
     }
 
@@ -679,7 +662,6 @@ pub fn install_patch_transaction(
         InstallMethod::Loader => loader_source
             .ok_or_else(|| "loader_source_missing: source loader tidak ditemukan".to_string())
             .and_then(|source| deploy_loader_transaction(game_path, pak_source, source)),
-        InstallMethod::SignatureBypass => deploy_signature_bypass_transaction(game_path, pak_source),
     };
     if let Err(error) = deploy_result {
         let rollback = restore_files(&snapshot);
@@ -699,9 +681,7 @@ pub fn install_patch_transaction(
         let rollback = restore_files(&snapshot);
         return Err(match rollback {
             Ok(()) => cleanup_error,
-            Err(rollback_error) => format!(
-                "{cleanup_error}; rollback_failed: {rollback_error}",
-            ),
+            Err(rollback_error) => format!("{cleanup_error}; rollback_failed: {rollback_error}",),
         });
     }
 
@@ -1110,8 +1090,14 @@ mod tests {
 
         let report = cleanup_owned_artifacts(&game_dir).unwrap();
 
-        assert!(report.failures.is_empty(), "unexpected failures: {report:?}");
-        assert!(report.preserved.is_empty(), "unexpected preserved paths: {report:?}");
+        assert!(
+            report.failures.is_empty(),
+            "unexpected failures: {report:?}"
+        );
+        assert!(
+            report.preserved.is_empty(),
+            "unexpected preserved paths: {report:?}"
+        );
         assert!(!plan.pak_path.exists());
         assert!(!plan.sig_path.exists());
         assert!(!plan.owner_marker_path.exists());
@@ -1168,36 +1154,6 @@ mod tests {
     }
 
     #[test]
-    fn test_e2e_signature_bypass() {
-        let (_tmp, game_dir) = setup_mock_game_dir();
-
-        // 1. Deploy Method 3 (Sig Bypass)
-        let bypass_pak = signature::get_signature_bypass_pak_path(&game_dir);
-        release_like_pak(&bypass_pak);
-        assert!(bypass_pak.exists());
-
-        // 2. Signature Bypass & Launch Simulation
-        assert!(signature::bypass_sig(&game_dir).unwrap());
-        let backup_path = signature::get_sig_backup_path(&game_dir);
-        let sig_path = signature::get_sig_path(&game_dir);
-        assert!(backup_path.exists());
-        assert!(!sig_path.exists());
-        assert_eq!(
-            fs::read_to_string(&backup_path).unwrap(),
-            "ORIGINAL_GAME_SIG"
-        );
-
-        // 3. Signature Restoration Simulation (e.g. after 150s timer or on exit)
-        assert!(signature::restore_sig(&game_dir).unwrap());
-        assert!(sig_path.exists());
-        assert_eq!(fs::read_to_string(&sig_path).unwrap(), "ORIGINAL_GAME_SIG");
-
-        // 4. Cleanup
-        remove_all_owned_artifacts(&game_dir);
-        assert!(!bypass_pak.exists());
-    }
-
-    #[test]
     fn test_e2e_method_switching_and_cleanup() {
         let (_tmp, game_dir) = setup_mock_game_dir();
 
@@ -1222,15 +1178,8 @@ mod tests {
         assert!(deploy_resource_mount(&plan, &pak_payload, &game_dir).is_ok());
         assert!(plan.pak_path.exists());
 
-        // Step 3: Switch to Method 3 (Sig Bypass) -> Clean previous method artifacts
+        // Step 3: Re-run cleanup after switching back to Resource Mount.
         remove_all_owned_artifacts(&game_dir);
         assert!(!plan.pak_path.exists());
-
-        let bypass_pak = signature::get_signature_bypass_pak_path(&game_dir);
-        release_like_pak(&bypass_pak);
-        assert!(bypass_pak.exists());
-
-        remove_all_owned_artifacts(&game_dir);
-        assert!(!bypass_pak.exists());
     }
 }

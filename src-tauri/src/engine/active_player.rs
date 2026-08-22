@@ -4,11 +4,10 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const ACTIVE_HEARTBEAT_ENDPOINT: &str =
-    "https://logs.titotfp.my.id/api/active/heartbeat";
+pub const ACTIVE_HEARTBEAT_ENDPOINT: &str = "https://logs.titotfp.my.id/api/active/heartbeat";
 
 static CLIENT_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -29,7 +28,6 @@ fn active_player_method(install_method: InstallMethod) -> &'static str {
     match install_method {
         InstallMethod::ResourceMount => "method3",
         InstallMethod::Loader => "method2",
-        InstallMethod::SignatureBypass => "method1",
     }
 }
 
@@ -43,8 +41,8 @@ fn load_or_create_client_id(appdata_dir: &Path) -> String {
     }
 
     let id = generate_client_id();
-    if let Err(error) = std::fs::create_dir_all(appdata_dir)
-        .and_then(|_| std::fs::write(&path, &id))
+    if let Err(error) =
+        std::fs::create_dir_all(appdata_dir).and_then(|_| std::fs::write(&path, &id))
     {
         log::warn!("Active player client ID tidak dapat disimpan: {error}");
     }
@@ -229,10 +227,6 @@ mod tests {
             build_heartbeat_payload("id", InstallMethod::Loader, "open")["install_method"],
             "method2"
         );
-        assert_eq!(
-            build_heartbeat_payload("id", InstallMethod::SignatureBypass, "open")["install_method"],
-            "method1"
-        );
     }
 
     #[test]
@@ -260,9 +254,9 @@ mod tests {
         );
 
         assert!(service.start(InstallMethod::Loader));
-        assert!(!service.start(InstallMethod::SignatureBypass));
+        assert!(!service.start(InstallMethod::ResourceMount));
         assert!(service.is_running_for_test());
-        assert_eq!(service.method_for_test(), InstallMethod::SignatureBypass);
+        assert_eq!(service.method_for_test(), InstallMethod::ResourceMount);
 
         service.stop();
         assert!(!service.is_running_for_test());
