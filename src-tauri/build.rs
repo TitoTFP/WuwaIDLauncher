@@ -1,4 +1,3 @@
-#[cfg(windows)]
 use std::{env, fs, path::PathBuf};
 
 fn main() {
@@ -6,8 +5,7 @@ fn main() {
         .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest());
     tauri_build::try_build(attributes).expect("failed to run tauri build script");
 
-    #[cfg(windows)]
-    {
+    if env::var_os("CARGO_CFG_WINDOWS").is_some() {
         let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is set by Cargo"));
         let manifest_path = out_dir.join("wuwaid-app.manifest");
         fs::write(
