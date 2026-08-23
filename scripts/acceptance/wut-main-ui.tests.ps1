@@ -3,12 +3,24 @@ $ErrorActionPreference = "Stop"
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $topBar = Get-Content -Raw -LiteralPath (Join-Path $root "src\components\TopBar.svelte")
 $app = Get-Content -Raw -LiteralPath (Join-Path $root "src\App.svelte")
+$state = Get-Content -Raw -LiteralPath (Join-Path $root "src\lib\launcherState.svelte.ts")
+$types = Get-Content -Raw -LiteralPath (Join-Path $root "src\lib\types.ts")
 $modal = Get-Content -Raw -LiteralPath (Join-Path $root "src\components\UpdateModal.svelte")
 $rightPanel = Get-Content -Raw -LiteralPath (Join-Path $root "src\components\RightPanel.svelte")
 $bridge = Get-Content -Raw -LiteralPath (Join-Path $root "src\lib\bridge.ts")
 
-if ($topBar -match '>\s*PERFORMA\s*<' -or $topBar -match 'SETTINGS|LOGS|ABOUT') {
-    throw "Top navigation still exposes a removed performance or legacy page"
+if ($topBar -match '>\s*PERFORMA\s*<' -or $topBar -match 'HOME|PENGATURAN|TENTANG|SETTINGS|LOGS|ABOUT') {
+    throw "Top navigation still exposes a removed page"
+}
+foreach ($removedPath in @('src\components\SettingsPanel.svelte', 'src\components\AboutPanel.svelte')) {
+    if (Test-Path (Join-Path $root $removedPath)) {
+        throw "Removed page component still exists: $removedPath"
+    }
+}
+foreach ($removed in @('LauncherPage', 'appState.page', 'config.autoCheckUpdate', 'this.config.autoCheckUpdate')) {
+    if (($app + $topBar + $state + $types) -match [regex]::Escape($removed)) {
+        throw "Removed launcher surface is still referenced: $removed"
+    }
 }
 foreach ($required in @('ToastHost', 'adminModal')) {
     if ($app -notmatch [regex]::Escape($required)) {

@@ -39,3 +39,19 @@ _Avoid_: cleanup permission, file trust
 **Release Asset Provenance**:
 The evidence that an update asset belongs to the expected official release, including its repository, tag, asset name, redirect destination, size, and checksum; a future phase may add a release signature.
 _Avoid_: download URL, checksum alone
+
+**Launcher Workspace**:
+The primary operational surface where a user observes a Game Installation and starts launcher-managed Mutations such as install, update, launch, or uninstall.
+_Avoid_: Home page, landing page
+
+**Launcher Configuration**:
+The persisted user choices required to manage a Game Installation and launcher behavior, including its path, Patch Method, graphics option, and audio preference.
+_Avoid_: settings page, preferences screen
+
+**Launcher Metadata**:
+Version and Patch ID identity used by launcher operations, release information, diagnostics, or active-player reporting; it is not an About view.
+_Avoid_: About data, About page
+
+**Automatic Update Check**:
+The launcher’s operational check for a newer official release; it is always enabled and is not a user-configurable preference.
+_Avoid_: auto-check setting, optional update check

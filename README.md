@@ -37,7 +37,7 @@ Kontrak utama launcher sudah diimplementasikan dan diverifikasi melalui test sui
 | :--- | :--- | :--- |
 | Path game, dua metode, artefak kanonis, transaksi, rollback, switch, uninstall | **Implemented** | src-tauri/tests/milestone1_contract_tests.rs, milestone2_contract_tests.rs, installer safety |
 | Launch, external process, force quit, error event | **Implemented + manual game smoke** | Contract tests lulus; perlu executable game nyata untuk taskkill dan lifecycle Windows |
-| Home, Settings, About, navigation lock, progress/error/reset state | **Implemented** | Svelte check 0 error/0 warning |
+| Launcher Workspace, konfigurasi, navigation lock, progress/error/reset state | **Implemented** | Svelte check 0 error/0 warning |
 | Media cache hash, offline fallback, staged replacement, release-note sanitization | **Implemented** | milestone5_contract_tests.rs, media event tests |
 | Self-update checksum, ZIP validation, staging, rollback handoff, cleanup | **Implemented + manual restart smoke** | Checksum/ZIP/handoff tests; valid release asset diperlukan untuk restart end-to-end |
 | Local runtime diagnostics tanpa upload log | **Implemented** | Isi diagnostics tetap lokal; heartbeat active-player hanya mengirim payload minimal |
@@ -54,7 +54,7 @@ Acceptance manual Windows tetap diperlukan untuk memvalidasi game nyata, mode ad
 ### 🛠️ Manajemen Patch & Engine Mod Terpadu
 
 - **Instalasi & Perbaruan Sekali Klik:** Mengunduh, memverifikasi integritas hash SHA-256, dan menerapkan patch Bahasa Indonesia secara otomatis.
-- **Dua Metode Instalasi:** mapping internal memakai identifier semantik berikut; `method2/3` hanya alias legacy yang dimigrasikan saat membaca settings lama.
+- **Dua Metode Instalasi:** mapping internal memakai identifier semantik berikut; `method2/3` hanya alias legacy yang dimigrasikan saat membaca konfigurasi lama.
   - **Metode 1 — `resource_mount` (Resource Mount):** Deploy file PAK + signature + berkas mount ke folder resource game aktif (`Client/Saved/Resources/<ver>/Mount/`) tanpa menyentuh signature utama game. Dilengkapi proteksi rollback transaksional dan verifikasi integritas struktur Unreal PAK.
   - **Metode 2 — `loader` (Loader):** Menempatkan loader `winhttp.dll` dan folder `wuwaIndonesia/` pada direktori binaries game (`Client/Binaries/Win64/`).
 - **Dynamic Method Switcher:** Berpindah metode instalasi secara instan dengan pembersihan artefak pada path kanonis metode sebelumnya. Path kanonis diperlakukan sebagai target launcher, termasuk saat artefak berasal dari launcher lama.
@@ -98,22 +98,22 @@ Acceptance manual Windows tetap diperlukan untuk memvalidasi game nyata, mode ad
 
 ### 3️⃣ Pilih Metode & Instal Patch
 
-1. Pilih metode instalasi yang diinginkan di pengaturan / launcher.
+1. Pilih metode instalasi yang diinginkan dari menu **METODE** di launcher.
 2. Klik tombol **Instal Patch ID** (atau **Perbarui Patch**).
 3. Setelah selesai, klik **Mainkan** untuk langsung masuk ke Sol3 dalam Bahasa Indonesia!
 
 ### Mapping Metode dan Recovery
 
-Gunakan identifier canonical berikut pada settings atau command bridge:
+Gunakan identifier canonical berikut pada konfigurasi atau command bridge:
 
 - resource_mount — resource mount terisolasi.
 - loader — winhttp.dll loader.
 
-method2 dan method3 hanya alias legacy saat migrasi settings lama. Nilai metode yang sudah dihapus dari versi lama dipulihkan ke `resource_mount`. Launcher menolak path yang tidak mengandung executable game, mengelola artefak pada path kanonis metode yang dipilih, dan menulis metadata hanya setelah cleanup berhasil. File pada path kanonis dianggap milik workflow launcher meskipun dibuat oleh versi launcher lama; file di luar path kanonis tidak disentuh. Jika instalasi atau update gagal, jangan hapus file game manual: simpan diagnostics lokal, jalankan pemeriksaan status, dan ulangi setelah penyebab permission/network diperbaiki.
+method2 dan method3 hanya alias legacy saat migrasi konfigurasi lama. Pemeriksaan update launcher otomatis selalu aktif. Nilai metode yang sudah dihapus dari versi lama dipulihkan ke `resource_mount`. Launcher menolak path yang tidak mengandung executable game, mengelola artefak pada path kanonis metode yang dipilih, dan menulis metadata hanya setelah cleanup berhasil. File pada path kanonis dianggap milik workflow launcher meskipun dibuat oleh versi launcher lama; file di luar path kanonis tidak disentuh. Jika instalasi atau update gagal, jangan hapus file game manual: simpan diagnostics lokal, jalankan pemeriksaan status, dan ulangi setelah penyebab permission/network diperbaiki.
 
 Lokasi artefak runtime:
 
-- Settings dan versions: %LOCALAPPDATA%/WuwaIDLauncher/.
+- Konfigurasi dan versi: %LOCALAPPDATA%/WuwaIDLauncher/.
 - Media cache: %LOCALAPPDATA%/WuwaIDLauncher/Cache/.
 - Diagnostics lokal dan log runtime: %LOCALAPPDATA%/WuwaIDLauncher/.
 - Update staging/handoff sementara: .staging/, update.zip, dan update-handoff.cmd di appdata; artifact gagal dibersihkan otomatis.
@@ -194,6 +194,13 @@ Cross-build dari Linux menggunakan `cargo-xwin`:
 
 ```bash
 npm run build
+
+# Rebuild binary MSVC langsung tanpa membuat bundle installer
+cargo xwin build --locked --release \
+  --manifest-path src-tauri/Cargo.toml \
+  --target x86_64-pc-windows-msvc
+
+# Build Tauri release tanpa bundle installer
 CARGOFLAGS=--locked npm run tauri -- build \
   --runner cargo-xwin \
   --target x86_64-pc-windows-msvc \
@@ -234,7 +241,7 @@ Optimasi resource yang diterapkan mencakup target memori rendah WebView2, suspen
 ```text
 WuwaIDLauncher/
 ├── 📁 src/                       # Frontend Svelte 5 + TypeScript
-│   ├── 📁 components/            # Komponen UI (TopBar, HomeHero, SidePanel, RightPanel, AudioPlayer, dll.)
+│   ├── 📁 components/            # Komponen UI (TopBar, SidePanel, RightPanel, AudioPlayer, dll.)
 │   ├── 📁 lib/                   # Bridge RPC Tauri, State Management (Svelte 5 runes), Types
 │   ├── 📁 styles/                # CSS Modular (base, panel, effects)
 │   ├── 📄 App.svelte             # Root UI Layout

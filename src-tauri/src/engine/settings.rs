@@ -9,7 +9,6 @@ pub struct LauncherSettings {
     pub game_path: String,
     pub install_method: InstallMethod,
     pub dx11: bool,
-    pub auto_check_update: bool,
     pub bgm_volume: f64,
     pub bgm_enabled: bool,
 }
@@ -20,7 +19,6 @@ impl Default for LauncherSettings {
             game_path: String::new(),
             install_method: InstallMethod::ResourceMount,
             dx11: false,
-            auto_check_update: true,
             bgm_volume: 0.35,
             bgm_enabled: true,
         }
@@ -143,6 +141,14 @@ pub fn normalize_settings_json(raw: &str) -> SettingsLoadResult {
         );
     }
 
+    if object.contains_key("autoCheckUpdate") {
+        repaired = true;
+        diagnostic(
+            &mut diagnostics,
+            "Pemeriksaan update otomatis selalu aktif; pengaturan lama dihapus.",
+        );
+    }
+
     if object.contains_key("diagnosticsUploadEnabled") || object.contains_key("telemetryEnabled") {
         repaired = true;
         diagnostic(
@@ -155,13 +161,6 @@ pub fn normalize_settings_json(raw: &str) -> SettingsLoadResult {
         object,
         "dx11",
         &mut settings.dx11,
-        &mut diagnostics,
-        &mut repaired,
-    );
-    read_bool(
-        object,
-        "autoCheckUpdate",
-        &mut settings.auto_check_update,
         &mut diagnostics,
         &mut repaired,
     );

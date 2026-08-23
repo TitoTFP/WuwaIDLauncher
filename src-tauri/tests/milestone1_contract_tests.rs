@@ -115,7 +115,10 @@ fn settings_recover_invalid_json_and_normalize_partial_legacy_values() {
         .iter()
         .any(|message| message.contains("mode Penuh")));
     assert!(!partial.settings.dx11);
-    assert!(!partial.settings.auto_check_update);
+    assert!(partial
+        .diagnostics
+        .iter()
+        .any(|message| message.contains("selalu aktif")));
     assert_eq!(partial.settings.bgm_volume, 1.0);
     assert!(partial.settings.bgm_enabled);
 }
@@ -134,7 +137,7 @@ fn settings_persistence_keeps_valid_game_path_and_canonical_schema() {
     .to_string();
 
     let normalized = normalize_settings_json(&raw);
-    assert!(!normalized.repaired);
+    assert!(normalized.repaired);
     assert_eq!(
         normalized.settings.install_method,
         InstallMethod::ResourceMount
@@ -144,6 +147,7 @@ fn settings_persistence_keeps_valid_game_path_and_canonical_schema() {
     assert!(encoded.contains("resource_mount"));
     assert!(!encoded.contains("method3"));
     assert!(!encoded.contains("launcherVisualMode"));
+    assert!(!encoded.contains("autoCheckUpdate"));
     assert!(!encoded.contains("perf"));
     let round_trip = normalize_settings_json(&encoded);
     assert_eq!(round_trip.settings, normalized.settings);

@@ -83,7 +83,6 @@ function errorMessage(error: unknown): string {
 }
 
 export class LauncherState implements ILauncherState {
-  page: "home" | "settings" | "about" = $state("home");
   installing: boolean = $state<boolean>(false);
   installed: boolean = $state<boolean>(false);
   launching: boolean = $state<boolean>(false);
@@ -783,7 +782,7 @@ export class LauncherState implements ILauncherState {
     try {
       await bridge.getVhReleaseNotes();
       await bridge.getLauncherReleaseNotes();
-      if (this.config.autoCheckUpdate) await bridge.checkLauncherUpdate();
+      await bridge.checkLauncherUpdate();
       if (this.gamePath) {
         await this.requestPatchStatus(this.gamePath, this.config.installMethod);
       }

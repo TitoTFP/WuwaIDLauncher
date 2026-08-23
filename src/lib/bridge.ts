@@ -19,7 +19,7 @@ export const bridge = {
   minimizeWindow: (): Promise<void> => invoke("minimize_window"),
   closeWindow: (): Promise<void> => invoke("close_window"),
 
-  // Game & Settings
+  // Game & Configuration
   isGameRunning: (): Promise<boolean> => invoke("is_game_running"),
   browseGameFolder: (): Promise<string> => invoke("browse_game_folder"),
   saveSettings: (settingsJson: string): Promise<void> =>

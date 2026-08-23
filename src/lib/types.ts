@@ -1,7 +1,5 @@
 export type InstallMethod = "resource_mount" | "loader";
 
-export type LauncherPage = "home" | "settings" | "about";
-
 export type LauncherOperation =
   | "install"
   | "launch"
@@ -65,7 +63,6 @@ export interface LauncherConfig {
   gamePath: string;
   installMethod: InstallMethod;
   dx11: boolean;
-  autoCheckUpdate: boolean;
   bgmVolume: number;
   bgmEnabled: boolean;
 }
@@ -74,7 +71,6 @@ export const DEFAULT_LAUNCHER_CONFIG: LauncherConfig = {
   gamePath: "",
   installMethod: "resource_mount",
   dx11: false,
-  autoCheckUpdate: true,
   bgmVolume: 0.35,
   bgmEnabled: true,
 };
@@ -128,7 +124,12 @@ export function normalizeLauncherConfig(raw: unknown): NormalizedConfigResult {
     diagnostics.push("Pengaturan performa lama dihapus; launcher memakai mode Penuh.");
   }
 
-  for (const [key, fallback] of [["dx11", config.dx11], ["autoCheckUpdate", config.autoCheckUpdate], ["bgmEnabled", config.bgmEnabled]] as const) {
+  if ("autoCheckUpdate" in value) {
+    repaired = true;
+    diagnostics.push("Pemeriksaan update otomatis selalu aktif; pengaturan lama dihapus.");
+  }
+
+  for (const [key, fallback] of [["dx11", config.dx11], ["bgmEnabled", config.bgmEnabled]] as const) {
     if (typeof value[key] === "boolean") config[key] = value[key] as boolean;
     else if (key in value) {
       config[key] = fallback;
@@ -213,7 +214,6 @@ export interface LauncherUpdatePayload {
 }
 
 export interface ILauncherState {
-  page: LauncherPage;
   installing: boolean;
   installed: boolean;
   launching: boolean;

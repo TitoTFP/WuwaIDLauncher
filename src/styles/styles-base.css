@@ -109,10 +109,7 @@ input {
 
 body.game-runtime-readonly input,
 body.game-runtime-readonly select,
-body.game-runtime-readonly
-    button:not(.top-nav__item[data-page]):not(#btnMinimize):not(#btnClose):not(
-        #rnToggle
-    ),
+body.game-runtime-readonly button:not(#btnMinimize):not(#btnClose):not(#rnToggle),
 body.game-runtime-readonly a {
     pointer-events: none !important;
     opacity: 0.55;
@@ -474,26 +471,6 @@ body.sidebar-open .bg-vignette {
 
 .method-menu__item.active .method-menu__desc {
     color: rgba(0, 0, 0, 0.82);
-}
-
-.top-nav__indicator {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    z-index: 1;
-    pointer-events: none;
-    overflow: visible;
-}
-#navWaveCanvas {
-    display: block;
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: transparent;
 }
 
 @keyframes fadeUp {

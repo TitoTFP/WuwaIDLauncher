@@ -70,17 +70,6 @@
   <div class="top-bar__right">
     <nav class="top-nav" id="topNav">
       <button
-        class="top-nav__item"
-        class:active={appState.page === 'home'}
-        data-page="home"
-        type="button"
-        aria-current={appState.page === 'home' ? 'page' : undefined}
-        onclick={() => (appState.page = 'home')}
-      >
-        HOME
-      </button>
-
-      <button
         class="top-nav__item top-nav__item--menu"
         class:open={methodMenuOpen}
         id="methodNavBtn"
@@ -92,29 +81,6 @@
         METODE
       </button>
 
-      <button
-        class="top-nav__item"
-        class:active={appState.page === 'settings'}
-        data-page="settings"
-        type="button"
-        aria-current={appState.page === 'settings' ? 'page' : undefined}
-        onclick={() => { methodMenuOpen = false; appState.page = 'settings'; }}
-      >
-        PENGATURAN
-      </button>
-
-      <button
-        class="top-nav__item"
-        class:active={appState.page === 'about'}
-        data-page="about"
-        type="button"
-        aria-current={appState.page === 'about' ? 'page' : undefined}
-        onclick={() => { methodMenuOpen = false; appState.page = 'about'; }}
-      >
-        TENTANG
-      </button>
-
-      <div class="top-nav__indicator" id="topNavIndicator"></div>
     </nav>
 
     {#if methodMenuOpen}

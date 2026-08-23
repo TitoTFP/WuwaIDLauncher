@@ -6,8 +6,6 @@
   import SidePanel from './components/SidePanel.svelte';
   import AudioPlayer from './components/AudioPlayer.svelte';
   import RightPanel from './components/RightPanel.svelte';
-  import SettingsPanel from './components/SettingsPanel.svelte';
-  import AboutPanel from './components/AboutPanel.svelte';
   import UpdateModal from './components/UpdateModal.svelte';
   import PatchNotesModal from './components/PatchNotesModal.svelte';
   import ToastHost from './components/ToastHost.svelte';
@@ -46,15 +44,9 @@
 >
   <BackgroundFx />
   <TopBar />
-  {#if appState.page === 'home'}
-    <SidePanel />
-    <AudioPlayer />
-    <RightPanel />
-  {:else if appState.page === 'settings'}
-    <SettingsPanel />
-  {:else if appState.page === 'about'}
-    <AboutPanel />
-  {/if}
+  <SidePanel />
+  <AudioPlayer />
+  <RightPanel />
   <UpdateModal
     open={appState.launcherUpdateAvailable}
     version={appState.launcherUpdatePayload?.version ?? ''}

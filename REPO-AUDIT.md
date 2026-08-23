@@ -320,6 +320,7 @@ The findings above preserve the baseline evidence. The current worktree now cont
 
 - **Completed High code paths:** `SEC-001`, `UPD-001`, `RES-001`, `OPS-001`, `UI-001`, `UI-002`, `REL-001`, `REL-002`, `REL-003`, and `SEC-006`. Windows handoff execution remains a Windows-only acceptance gap.
 - **Completed Medium code paths:** `UI-003` through `UI-007`, `SEC-003` through `SEC-005`, `DATA-001` through `DATA-003`, `PATH-001`, `CFG-001`, and `REL-004` through `REL-007`.
+- **Intentional UI surface:** `UI-007` is resolved by retaining only the Launcher Workspace; the Settings/About page components and page state are removed while shared backend configuration and metadata commands remain.
 - **Completed Low/documentation:** `UI-008` through `UI-010`, `DATA-004`, `SEC-008`, `DOC-001`, and `DOC-002`.
 - **Implemented with a remaining browser-test gap:** `SEC-002` now has a restrictive CSP and DOM-based release-note allowlist sanitizer; browser XSS/CSP regression tests are still absent.
 - **Intentional policy:** `SAFE-001` retains canonical-path ownership as the documented legacy cleanup policy. Files outside canonical launcher paths remain untouched.
