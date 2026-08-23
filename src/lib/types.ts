@@ -200,6 +200,7 @@ export interface ILauncherState {
   installed: boolean;
   launching: boolean;
   gameRunning: boolean;
+  launcherInTray: boolean;
   gameOrigin: "launcher" | "external";
   gamePath: string;
   patchState: PatchState;

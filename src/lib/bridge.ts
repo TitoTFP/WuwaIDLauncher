@@ -86,6 +86,7 @@ export interface EventBridgeCallbacks {
     active: boolean,
     origin: "launcher" | "external",
   ) => void;
+  onLauncherTrayState?: (inTray: boolean) => void;
   onPatchStatus?: (payload: PatchStatusPayload) => void;
   onProgressUpdate?: (payload: ProgressPayload) => void;
   onInstallComplete?: () => void;
@@ -125,6 +126,9 @@ export async function setupEventBridge(
     addListener<{ active: boolean; origin: "launcher" | "external" }>(
       "onGameRuntimeState",
       (p) => callbacks.onGameRuntimeState?.(p.active, p.origin),
+    ),
+    addListener<{ inTray: boolean }>("onLauncherTrayState", (p) =>
+      callbacks.onLauncherTrayState?.(p.inTray),
     ),
     addListener<PatchStatusPayload>("onPatchStatus", (p) =>
       callbacks.onPatchStatus?.(p),

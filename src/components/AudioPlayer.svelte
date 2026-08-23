@@ -6,7 +6,7 @@
   let isMuted = $state(false);
   let isPlaying = $state(false);
   let userWantsPlayback = $state(true);
-  let wasPlayingBeforeGame = $state(false);
+  let wasPlayingBeforeTray = $state(false);
   let audioElement: HTMLAudioElement | null = $state(null);
 
   function errorMessage(error: unknown): string {
@@ -37,11 +37,11 @@
   $effect(() => {
     if (!audioElement) return;
 
-    const runtimeBlocked = appState.gameRunning || appState.launching;
+    const runtimeBlocked = appState.launcherInTray;
     const playbackAllowed = userWantsPlayback && appState.config.bgmEnabled !== false;
 
     if (!appState.bgmUrl || runtimeBlocked) {
-      if (runtimeBlocked && isPlaying) wasPlayingBeforeGame = true;
+      if (runtimeBlocked && isPlaying) wasPlayingBeforeTray = true;
       audioElement.pause();
       audioElement.removeAttribute('src');
       audioElement.load();
@@ -50,7 +50,7 @@
       return;
     }
 
-    if (!playbackAllowed) wasPlayingBeforeGame = false;
+    if (!playbackAllowed) wasPlayingBeforeTray = false;
 
     const sourceChanged = audioElement.src !== appState.bgmUrl;
     if (sourceChanged) {
@@ -60,8 +60,8 @@
       audioElement.load();
     }
 
-    if ((sourceChanged || wasPlayingBeforeGame) && playbackAllowed) {
-      wasPlayingBeforeGame = false;
+    if ((sourceChanged || wasPlayingBeforeTray) && playbackAllowed) {
+      wasPlayingBeforeTray = false;
       void audioElement.play().then(() => {
         isPlaying = true;
         appState.bgmPlaying = true;
@@ -75,7 +75,7 @@
   // Browser Autoplay Policy: attempt play on user's first document interaction
   onMount(() => {
     const handleFirstInteraction = () => {
-      if (audioElement && userWantsPlayback && !isPlaying && !appState.gameRunning && !appState.launching && appState.bgmUrl) {
+      if (audioElement && userWantsPlayback && !isPlaying && !appState.launcherInTray && appState.bgmUrl) {
         void audioElement.play().then(() => {
           isPlaying = true;
           appState.bgmPlaying = true;
@@ -108,7 +108,7 @@
       });
     } else {
       userWantsPlayback = true;
-      wasPlayingBeforeGame = false;
+      wasPlayingBeforeTray = false;
       appState.config.bgmEnabled = true;
       void persistAudioConfig().then((saved) => {
         if (!saved) {

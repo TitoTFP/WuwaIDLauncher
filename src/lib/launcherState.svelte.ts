@@ -22,6 +22,7 @@ export class LauncherState implements ILauncherState {
   installed: boolean = $state<boolean>(false);
   launching: boolean = $state<boolean>(false);
   gameRunning: boolean = $state<boolean>(false);
+  launcherInTray: boolean = $state<boolean>(false);
   gameOrigin: "launcher" | "external" = $state<"launcher" | "external">(
     "external",
   );
@@ -159,6 +160,9 @@ export class LauncherState implements ILauncherState {
       onGameRuntimeState: (active, origin) => {
         this.gameRunning = active;
         this.gameOrigin = origin;
+      },
+      onLauncherTrayState: (inTray) => {
+        this.launcherInTray = inTray;
       },
       onPatchStatus: (payload) => {
         const manualCheck = this.patchStatusCheckPending;

@@ -10,7 +10,7 @@
     stop: () => void;
   } | null = null;
 
-  let isVideoAllowed = $derived(!appState.gameRunning && !appState.launching);
+  let isVideoAllowed = $derived(!appState.launcherInTray);
 
   $effect(() => {
     if (!videoElement) return;
@@ -33,7 +33,7 @@
   });
 
   $effect(() => {
-    const runtimeBlocked = appState.gameRunning || appState.launching;
+    const runtimeBlocked = appState.launcherInTray;
     if (!particleAnimationControl) return;
     if (runtimeBlocked) particleAnimationControl.stop();
     else particleAnimationControl.schedule();
@@ -114,8 +114,7 @@
     function scheduleRender() {
       if (
         animFrameId === null &&
-        !appState.gameRunning &&
-        !appState.launching
+        !appState.launcherInTray
       ) {
         animFrameId = requestAnimationFrame(render);
       }
@@ -123,7 +122,7 @@
 
     function render() {
       animFrameId = null;
-      if (appState.gameRunning || appState.launching) {
+      if (appState.launcherInTray) {
         context.clearRect(0, 0, width, height);
         return;
       }

@@ -380,11 +380,7 @@ fn finish_launch_lifecycle<R: Runtime>(app: &AppHandle<R>) {
             origin: engine::runtime::ProcessOrigin::Launcher,
         },
     );
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.set_focus();
-        resume_webview(app);
-    }
+    restore_launcher_from_tray(app);
     let _ = app.emit("onGameLaunchFinished", ());
 }
 
@@ -397,6 +393,22 @@ fn emit_runtime_state<R: Runtime>(app: &AppHandle<R>, state: engine::runtime::Ru
         "onGameRuntimeState",
         serde_json::json!({"active": state.active, "origin": origin}),
     );
+}
+
+fn emit_tray_state<R: Runtime>(app: &AppHandle<R>, in_tray: bool) {
+    let _ = app.emit(
+        "onLauncherTrayState",
+        serde_json::json!({"inTray": in_tray}),
+    );
+}
+
+fn restore_launcher_from_tray<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        resume_webview(app);
+    }
+    emit_tray_state(app, false);
 }
 
 fn spawn_runtime_monitor<R: Runtime>(app: AppHandle<R>) {
@@ -468,6 +480,7 @@ fn minimize_window<R: Runtime>(window: WebviewWindow<R>) {
         WindowMinimizeAction::Hide => {
             set_tray_mode(app, true);
             let _ = window.hide();
+            emit_tray_state(app, true);
             suspend_webview(app);
             notify_tray_minimized(app);
         }
@@ -1694,6 +1707,7 @@ fn launch_game<R: Runtime>(
                 if let Some(window) = app_handle.get_webview_window("main") {
                     set_tray_mode(&app_handle, true);
                     let _ = window.hide();
+                    emit_tray_state(&app_handle, true);
                     suspend_webview(&app_handle);
                     notify_tray_minimized(&app_handle);
                 }
@@ -1807,11 +1821,7 @@ fn force_quit_game<R: Runtime>(app: AppHandle<R>) -> Result<bool, String> {
             origin: engine::runtime::ProcessOrigin::External,
         },
     );
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.set_focus();
-        resume_webview(&app);
-    }
+    restore_launcher_from_tray(&app);
     let _ = app.emit("onGameLaunchFinished", ());
     log::info!("Force quit game requested");
     Ok(terminated)
@@ -1921,11 +1931,7 @@ pub fn run() {
                     "quit" => request_close(app),
                     "show" => {
                         set_tray_mode(app, true);
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                            resume_webview(app);
-                        }
+                        restore_launcher_from_tray(app);
                     }
                     _ => {}
                 })
@@ -1938,11 +1944,7 @@ pub fn run() {
                     {
                         let app = tray.app_handle();
                         set_tray_mode(app, true);
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                            resume_webview(app);
-                        }
+                        restore_launcher_from_tray(app);
                     }
                 })
                 .build(app)?;

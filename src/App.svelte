@@ -19,7 +19,9 @@
     if (typeof document === 'undefined') return;
     document.body.classList.toggle(
       'game-runtime-readonly',
-      appState.gameRunning || appState.installing || appState.launching,
+      appState.launcherInTray ||
+        appState.installing ||
+        (appState.launching && !appState.gameRunning),
     );
   });
 
@@ -27,8 +29,8 @@
 
 <div
   class="app-root"
-  class:game-running={appState.gameRunning}
-  class:runtime-paused={appState.gameRunning || appState.launching}
+  class:game-running={appState.gameRunning && appState.launcherInTray}
+  class:runtime-paused={appState.launcherInTray}
 >
   <BackgroundFx />
   <TopBar />

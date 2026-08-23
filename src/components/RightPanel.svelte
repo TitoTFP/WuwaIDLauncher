@@ -12,7 +12,7 @@
   });
 
   $effect(() => {
-    if (!targetDateMs || appState.gameRunning || appState.launching) return;
+    if (!targetDateMs || appState.launcherInTray) return;
     now = Date.now();
     const iv = setInterval(() => {
       now = Date.now();
