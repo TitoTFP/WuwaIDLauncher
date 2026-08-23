@@ -1,11 +1,10 @@
 <script lang="ts">
-  import { bridge } from '../lib/bridge';
   import { appState } from '../lib/launcherState.svelte';
 
   async function restartAsAdmin() {
     appState.closeAdminPrompt();
     try {
-      await bridge.restartAsAdmin();
+      await appState.restartAsAdmin();
     } catch (error) {
       appState.showToast(`Gagal menjalankan launcher sebagai admin: ${error instanceof Error ? error.message : String(error)}`, 'err');
     }
@@ -35,7 +34,7 @@
       <div class="admin-modal__sep"></div>
       <div class="admin-modal__actions">
         <button class="modal-btn modal-btn--cancel" id="adminModalCancel" onclick={() => appState.closeAdminPrompt()} type="button">Tidak perlu</button>
-        <button class="modal-btn modal-btn--ok admin-modal__ok" id="adminModalOk" onclick={restartAsAdmin} type="button">
+        <button class="modal-btn modal-btn--ok admin-modal__ok" id="adminModalOk" onclick={restartAsAdmin} disabled={appState.isOperationBlocked('restart-as-admin')} type="button">
           <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z" /></svg>
           Mulai ulang sebagai Admin
         </button>

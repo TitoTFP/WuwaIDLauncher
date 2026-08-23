@@ -118,7 +118,7 @@ fn update_archive_rejects_legacy_packaged_executable_name() {
 }
 
 #[test]
-fn update_handoff_script_overwrites_without_rollback_steps() {
+fn update_handoff_script_contains_verified_rollback_steps() {
     let temp = tempfile::tempdir().unwrap();
     let staging = temp.path().join("staging");
     let current = temp.path().join("WuwaIDLauncher.exe");
@@ -129,7 +129,7 @@ fn update_handoff_script_overwrites_without_rollback_steps() {
     let script = std::fs::read_to_string(handoff).unwrap();
     assert!(script.contains("copy /Y"));
     assert!(!script.contains(".old"));
-    assert!(!script.contains("rollback"));
-    assert!(!script.contains("move /Y"));
+    assert!(script.contains("rollback"));
+    assert!(script.contains("move /Y"));
     assert!(script.contains("WuwaIDLauncher.exe"));
 }

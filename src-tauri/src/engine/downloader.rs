@@ -3,8 +3,16 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
+
+pub const MAX_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
+
+#[derive(Debug, Clone)]
+pub enum DownloadRedirectPolicy {
+    AnyHttps,
+    OfficialGithubAsset { expected_url: String },
+}
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DownloadProgress {
@@ -60,7 +68,7 @@ pub fn verify_sha256(file_path: &Path, expected_hash: &str) -> Result<bool, std:
 }
 
 pub fn compute_sha256(file_path: &Path) -> Result<String, std::io::Error> {
-    if !file_path.exists() {
+    if !file_path.is_file() {
         return Ok(String::new());
     }
     let mut file = File::open(file_path)?;
@@ -106,6 +114,12 @@ pub async fn get_asset_content_length(url: &str) -> Result<u64, String> {
     if len == 0 {
         return Err("Content-Length bernilai 0 (kosong).".to_string());
     }
+    if len > MAX_DOWNLOAD_BYTES {
+        return Err(format!(
+            "Content-Length melebihi batas download {} bytes.",
+            MAX_DOWNLOAD_BYTES
+        ));
+    }
 
     Ok(len)
 }
@@ -119,10 +133,88 @@ pub async fn download_file_with_expected_size<F>(
 where
     F: Fn(DownloadProgress) + Send + 'static,
 {
+    download_file_with_expected_size_limited_policy(
+        url,
+        dest_path,
+        expected_size,
+        MAX_DOWNLOAD_BYTES,
+        DownloadRedirectPolicy::AnyHttps,
+        on_progress,
+    )
+    .await
+}
+
+pub async fn download_file_with_expected_size_limited<F>(
+    url: &str,
+    dest_path: &Path,
+    expected_size: Option<u64>,
+    max_bytes: u64,
+    on_progress: F,
+) -> Result<u64, String>
+where
+    F: Fn(DownloadProgress) + Send + 'static,
+{
+    download_file_with_expected_size_limited_policy(
+        url,
+        dest_path,
+        expected_size,
+        max_bytes,
+        DownloadRedirectPolicy::AnyHttps,
+        on_progress,
+    )
+    .await
+}
+
+pub async fn download_file_with_expected_size_limited_policy<F>(
+    url: &str,
+    dest_path: &Path,
+    expected_size: Option<u64>,
+    max_bytes: u64,
+    redirect_policy: DownloadRedirectPolicy,
+    on_progress: F,
+) -> Result<u64, String>
+where
+    F: Fn(DownloadProgress) + Send + 'static,
+{
+    if max_bytes == 0 {
+        return Err("Batas download tidak boleh nol.".to_string());
+    }
+    if expected_size.is_some_and(|size| size == 0 || size > max_bytes) {
+        return Err(format!(
+            "Ukuran download melebihi batas {} bytes.",
+            max_bytes
+        ));
+    }
+
+    let mut client_builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(60));
+    if let DownloadRedirectPolicy::OfficialGithubAsset { expected_url } = &redirect_policy {
+        if url != expected_url {
+            return Err("URL asset GitHub tidak sesuai URL resmi yang diharapkan.".to_string());
+        }
+        client_builder =
+            client_builder.redirect(reqwest::redirect::Policy::custom(move |attempt| {
+                if is_allowed_github_redirect(attempt.url()) {
+                    attempt.follow()
+                } else {
+                    attempt.error("redirect asset GitHub menuju host yang tidak diizinkan")
+                }
+            }));
+    }
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let client = if matches!(
+        &redirect_policy,
+        DownloadRedirectPolicy::OfficialGithubAsset { .. }
+    ) {
+        client_builder
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?
+    } else {
+        client
+    };
 
     let mut response = client
         .get(url)
@@ -138,12 +230,23 @@ where
         ));
     }
 
+    if matches!(
+        &redirect_policy,
+        DownloadRedirectPolicy::OfficialGithubAsset { .. }
+    ) && !is_allowed_github_redirect(response.url())
+    {
+        return Err("Redirect asset GitHub menuju URL yang tidak diizinkan.".to_string());
+    }
+
     let get_content_len = response
         .content_length()
         .ok_or_else(|| "Header Content-Length tidak ditemukan pada GET response.".to_string())?;
 
     if get_content_len == 0 {
         return Err("Content-Length bernilai 0 pada server.".to_string());
+    }
+    if get_content_len > max_bytes {
+        return Err(format!("Download melebihi batas {} bytes.", max_bytes));
     }
 
     if let Some(exp) = expected_size {
@@ -163,7 +266,7 @@ where
             .map_err(|e| format!("Failed to create target directory: {}", e))?;
     }
 
-    let temp_dest = dest_path.with_extension("tmp_download");
+    let temp_dest = unique_temp_path(dest_path, "download");
     let mut file = tokio::fs::File::create(&temp_dest)
         .await
         .map_err(|e| format!("Failed to create temporary file: {}", e))?;
@@ -173,7 +276,25 @@ where
     let mut last_emit = Instant::now();
 
     let mut stream_err = None;
-    while let Ok(Some(chunk)) = response.chunk().await {
+    loop {
+        let chunk = match response.chunk().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(error) => {
+                stream_err = Some(format!("Read download stream error: {error}"));
+                break;
+            }
+        };
+        if downloaded > max_bytes
+            || chunk.len() as u64 > max_bytes.saturating_sub(downloaded)
+            || chunk.len() as u64 > total_size.saturating_sub(downloaded)
+        {
+            stream_err = Some(format!(
+                "Download melebihi ukuran yang diharapkan atau batas {} bytes.",
+                max_bytes
+            ));
+            break;
+        }
         if let Err(e) = file.write_all(&chunk).await {
             stream_err = Some(format!("Write file error: {}", e));
             break;
@@ -225,15 +346,70 @@ where
         ));
     }
 
-    if dest_path.exists() {
-        let _ = tokio::fs::remove_file(dest_path).await;
-    }
-
-    tokio::fs::rename(&temp_dest, dest_path)
-        .await
-        .map_err(|e| format!("Failed to move temp download to target: {}", e))?;
+    promote_download(&temp_dest, dest_path).await?;
 
     Ok(downloaded)
+}
+
+fn unique_temp_path(path: &Path, suffix: &str) -> std::path::PathBuf {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("download");
+    path.with_file_name(format!(".{name}.{suffix}-{}-{stamp}", std::process::id()))
+}
+
+async fn promote_download(temp: &Path, destination: &Path) -> Result<(), String> {
+    if destination.exists() && !destination.is_file() {
+        let _ = tokio::fs::remove_file(temp).await;
+        return Err(format!("Target download bukan file: {destination:?}"));
+    }
+    let backup = unique_temp_path(destination, "previous");
+    let had_destination = destination.is_file();
+    if had_destination {
+        tokio::fs::rename(destination, &backup)
+            .await
+            .map_err(|error| format!("Gagal mencadangkan download lama: {error}"))?;
+    }
+    if let Err(error) = tokio::fs::rename(temp, destination).await {
+        if had_destination {
+            let _ = tokio::fs::rename(&backup, destination).await;
+        }
+        let _ = tokio::fs::remove_file(temp).await;
+        return Err(format!("Failed to move temp download to target: {error}"));
+    }
+    let _ = tokio::fs::remove_file(&backup).await;
+    Ok(())
+}
+
+fn is_allowed_github_redirect(url: &reqwest::Url) -> bool {
+    url.scheme() == "https"
+        && matches!(
+            url.host_str(),
+            Some(
+                "github.com"
+                    | "release-assets.githubusercontent.com"
+                    | "objects.githubusercontent.com"
+            )
+        )
+}
+
+pub fn official_github_client(timeout: std::time::Duration) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if is_allowed_github_redirect(attempt.url()) {
+                attempt.follow()
+            } else {
+                attempt.error("redirect asset GitHub menuju host yang tidak diizinkan")
+            }
+        }))
+        .build()
+        .map_err(|error| format!("Gagal membuat client GitHub resmi: {error}"))
 }
 
 pub async fn download_file<F>(url: &str, dest_path: &Path, on_progress: F) -> Result<(), String>

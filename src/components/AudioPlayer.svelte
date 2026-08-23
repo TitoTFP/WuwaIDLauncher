@@ -92,30 +92,18 @@
   function togglePlay() {
     if (!audioElement) return;
 
-    const previousEnabled = appState.config.bgmEnabled;
-
     if (isPlaying) {
       audioElement.pause();
       isPlaying = false;
       appState.bgmPlaying = false;
       userWantsPlayback = false;
       appState.config.bgmEnabled = false;
-      void persistAudioConfig().then((saved) => {
-        if (!saved) {
-          appState.config.bgmEnabled = previousEnabled;
-          userWantsPlayback = previousEnabled;
-        }
-      });
+      void persistAudioConfig();
     } else {
       userWantsPlayback = true;
       wasPlayingBeforeTray = false;
       appState.config.bgmEnabled = true;
-      void persistAudioConfig().then((saved) => {
-        if (!saved) {
-          appState.config.bgmEnabled = previousEnabled;
-          userWantsPlayback = previousEnabled;
-        }
-      });
+      void persistAudioConfig();
 
       if (audioElement.src) {
         void audioElement.play().then(() => {
@@ -131,25 +119,17 @@
 
   function toggleMute() {
     if (!audioElement) return;
-    const previousVolume = appState.config.bgmVolume;
     isMuted = !isMuted;
     audioElement.muted = isMuted;
     if (!isMuted && volumePercent === 0) {
       volumePercent = 35;
       audioElement.volume = 0.35;
       appState.config.bgmVolume = 0.35;
-      void persistAudioConfig().then((saved) => {
-        if (!saved) {
-          appState.config.bgmVolume = previousVolume;
-          volumePercent = Math.round(previousVolume * 100);
-          if (audioElement) audioElement.volume = previousVolume;
-        }
-      });
+      void persistAudioConfig();
     }
   }
 
   async function handleVolumeChange(e: Event) {
-    const previousVolume = appState.config.bgmVolume;
     const val = parseInt((e.target as HTMLInputElement).value, 10);
     volumePercent = val;
     if (audioElement) {
@@ -160,11 +140,7 @@
       audioElement.volume = isMuted ? 0 : val / 100;
     }
     appState.config.bgmVolume = val / 100;
-    if (!(await persistAudioConfig())) {
-      appState.config.bgmVolume = previousVolume;
-      volumePercent = Math.round(previousVolume * 100);
-      if (audioElement) audioElement.volume = previousVolume;
-    }
+    await persistAudioConfig();
   }
 </script>
 

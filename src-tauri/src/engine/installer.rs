@@ -10,6 +10,7 @@ pub const PATCH_PAK_FILE_NAME: &str = "WuWaID_99_P.pak";
 pub const PATCH_SIG_FILE_NAME: &str = "WuWaID_99_P.sig";
 pub const MOUNT_FILE_NAME: &str = "wuwaindonesia.txt";
 pub const OWNER_MARKER_FILE_NAME: &str = ".wuwaid-resource-mount";
+pub const MAX_ROLLBACK_SNAPSHOT_BYTES: u64 = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct ResourceMountPlan {
@@ -234,6 +235,18 @@ pub fn validate_installed_loader(game_path: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
+pub fn validate_installed_loader_hash(
+    game_path: &Path,
+    expected_hash: &str,
+) -> Result<bool, String> {
+    if !validate_installed_loader(game_path)? {
+        return Ok(false);
+    }
+    let actual = crate::engine::downloader::compute_sha256(&loader_dll_path(game_path))
+        .map_err(|error| format!("Gagal menghitung hash loader: {error}"))?;
+    Ok(actual.eq_ignore_ascii_case(expected_hash.trim()))
+}
+
 fn legacy_method_pak_path(game_path: &Path) -> PathBuf {
     path::get_pak_dir(game_path).join(path::PAK_FILE_NAME)
 }
@@ -372,8 +385,7 @@ pub fn validate_installation_preconditions(
     game_path: &str,
     method: InstallMethod,
 ) -> Result<PathBuf, String> {
-    let normalized = path::normalize_game_path(game_path)
-        .ok_or_else(|| "invalid_game_path: executable game tidak ditemukan".to_string())?;
+    let normalized = normalize_game_root(game_path)?;
     let target = method_target_directory(&normalized, method).map_err(|error| match method {
         InstallMethod::ResourceMount => format!("resource_not_ready: {error}"),
         _ => error,
@@ -387,10 +399,45 @@ pub fn validate_installation_preconditions(
 /// Restoration does not require a writable target, but it must use the same
 /// normalized game root and reparse-point protections as installer cleanup.
 pub fn validate_signature_restore_path(game_path: &str) -> Result<PathBuf, String> {
-    let normalized = path::normalize_game_path(game_path)
-        .ok_or_else(|| "invalid_game_path: executable game tidak ditemukan".to_string())?;
+    let normalized = normalize_game_root(game_path)?;
     validate_canonical_paths(&normalized)?;
     Ok(normalized)
+}
+
+fn normalize_game_root(game_path: &str) -> Result<PathBuf, String> {
+    let requested = Path::new(game_path);
+    for candidate in [
+        requested.to_path_buf(),
+        requested.join("Wuthering Waves Game"),
+    ] {
+        let executable = candidate.join(path::GAME_EXE_RELATIVE);
+        if executable.is_dir() {
+            return Err(format!(
+                "invalid_game_path: executable game bukan file biasa: {:?}",
+                executable
+            ));
+        }
+    }
+
+    let normalized = path::normalize_game_path(game_path)
+        .ok_or_else(|| "invalid_game_path: executable game tidak ditemukan".to_string())?;
+    validate_regular_game_executable(&normalized)?;
+    validate_canonical_paths(&normalized)?;
+    let canonical = fs::canonicalize(&normalized)
+        .map_err(|error| format!("invalid_game_path: canonicalize gagal: {error}"))?;
+    validate_regular_game_executable(&canonical)?;
+    Ok(canonical)
+}
+
+fn validate_regular_game_executable(game_path: &Path) -> Result<(), String> {
+    let executable = game_path.join(path::GAME_EXE_RELATIVE);
+    if !executable.is_file() {
+        return Err(format!(
+            "invalid_game_path: executable game bukan file biasa: {:?}",
+            executable
+        ));
+    }
+    Ok(())
 }
 
 fn known_artifact_paths(game_path: &Path) -> Vec<PathBuf> {
@@ -417,23 +464,51 @@ fn known_artifact_paths(game_path: &Path) -> Vec<PathBuf> {
 #[derive(Debug, Clone)]
 struct FileSnapshot {
     path: PathBuf,
-    contents: Option<Vec<u8>>,
+    state: FileSnapshotState,
 }
 
-fn snapshot_files(game_path: &Path) -> Vec<FileSnapshot> {
-    known_artifact_paths(game_path)
-        .into_iter()
-        .map(|path| FileSnapshot {
-            contents: path.is_file().then(|| fs::read(&path).ok()).flatten(),
-            path,
-        })
-        .collect()
+#[derive(Debug, Clone)]
+enum FileSnapshotState {
+    Absent,
+    Readable(Vec<u8>),
+    NonFile,
+}
+
+fn snapshot_files(game_path: &Path) -> Result<Vec<FileSnapshot>, String> {
+    let mut snapshots = Vec::new();
+    for path in known_artifact_paths(game_path) {
+        let state = match fs::symlink_metadata(&path) {
+            Ok(metadata) if !metadata.file_type().is_file() => FileSnapshotState::NonFile,
+            Ok(metadata) => {
+                if metadata.len() > MAX_ROLLBACK_SNAPSHOT_BYTES {
+                    return Err(format!(
+                        "rollback_snapshot_too_large {:?}: {} bytes exceeds {}",
+                        path,
+                        metadata.len(),
+                        MAX_ROLLBACK_SNAPSHOT_BYTES
+                    ));
+                }
+                FileSnapshotState::Readable(
+                    fs::read(&path).map_err(|error| {
+                        format!("rollback_snapshot_unreadable {:?}: {error}", path)
+                    })?,
+                )
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => FileSnapshotState::Absent,
+            Err(error) => {
+                return Err(format!("rollback_snapshot_unreadable {:?}: {error}", path));
+            }
+        };
+        snapshots.push(FileSnapshot { path, state });
+    }
+    Ok(snapshots)
 }
 
 fn restore_files(snapshot: &[FileSnapshot]) -> Result<(), String> {
     for item in snapshot {
-        match &item.contents {
-            Some(contents) => {
+        reject_reparse_ancestors(&item.path)?;
+        match &item.state {
+            FileSnapshotState::Readable(contents) => {
                 if let Some(parent) = item.path.parent() {
                     fs::create_dir_all(parent)
                         .map_err(|error| format!("rollback_parent_failed {:?}: {error}", parent))?;
@@ -444,13 +519,17 @@ fn restore_files(snapshot: &[FileSnapshot]) -> Result<(), String> {
                 fs::write(&item.path, contents)
                     .map_err(|error| format!("rollback_write_failed {:?}: {error}", item.path))?;
             }
-            None => {
-                if item.path.is_file() {
+            FileSnapshotState::Absent => {
+                if item.path.exists() {
+                    if !item.path.is_file() {
+                        return Err(format!("rollback_target_not_file: {:?}", item.path));
+                    }
                     fs::remove_file(&item.path).map_err(|error| {
                         format!("rollback_remove_failed {:?}: {error}", item.path)
                     })?;
                 }
             }
+            FileSnapshotState::NonFile => {}
         }
     }
     Ok(())
@@ -617,7 +696,7 @@ where
     F: FnOnce() -> Result<(), String>,
 {
     validate_canonical_paths(game_path)?;
-    let snapshot = snapshot_files(game_path);
+    let snapshot = snapshot_files(game_path)?;
     let report = cleanup_owned_artifacts_except(game_path, keep)?;
     if !report.failures.is_empty() || !report.preserved.is_empty() {
         let error = cleanup_report_error(&report);
@@ -640,6 +719,8 @@ where
 }
 
 pub fn cleanup_owned_artifacts(game_path: &Path) -> Result<CleanupReport, String> {
+    validate_canonical_paths(game_path)?;
+    let _snapshot = snapshot_files(game_path)?;
     cleanup_owned_artifacts_except(game_path, None)
 }
 
@@ -651,8 +732,23 @@ pub fn install_patch_transaction(
     pak_source: &Path,
     loader_source: Option<&Path>,
 ) -> Result<(), String> {
-    validate_installation_preconditions(&path_string(game_path), method)?;
-    let snapshot = snapshot_files(game_path);
+    install_patch_transaction_with_commit(game_path, method, pak_source, loader_source, || Ok(()))
+}
+
+pub fn install_patch_transaction_with_commit<F>(
+    game_path: &Path,
+    method: InstallMethod,
+    pak_source: &Path,
+    loader_source: Option<&Path>,
+    commit: F,
+) -> Result<(), String>
+where
+    F: FnOnce() -> Result<(), String>,
+{
+    let normalized_game_path =
+        validate_installation_preconditions(&path_string(game_path), method)?;
+    let game_path = normalized_game_path.as_path();
+    let snapshot = snapshot_files(game_path)?;
 
     let deploy_result = match method {
         InstallMethod::ResourceMount => {
@@ -671,7 +767,16 @@ pub fn install_patch_transaction(
         });
     }
 
-    let cleanup = cleanup_owned_artifacts_except(game_path, Some(method))?;
+    let cleanup = match cleanup_owned_artifacts_except(game_path, Some(method)) {
+        Ok(report) => report,
+        Err(error) => {
+            let rollback = restore_files(&snapshot);
+            return Err(match rollback {
+                Ok(()) => error,
+                Err(rollback_error) => format!("{error}; rollback_failed: {rollback_error}"),
+            });
+        }
+    };
     if !cleanup.failures.is_empty() || !cleanup.preserved.is_empty() {
         let cleanup_error = format!(
             "cleanup_partial_failure: failures=[{}]; preserved=[{}]",
@@ -682,6 +787,15 @@ pub fn install_patch_transaction(
         return Err(match rollback {
             Ok(()) => cleanup_error,
             Err(rollback_error) => format!("{cleanup_error}; rollback_failed: {rollback_error}",),
+        });
+    }
+
+    if let Err(error) = commit() {
+        return Err(match restore_files(&snapshot) {
+            Ok(()) => format!("metadata_commit_failed: {error}"),
+            Err(rollback_error) => {
+                format!("metadata_commit_failed: {error}; rollback_failed: {rollback_error}")
+            }
         });
     }
 
@@ -849,6 +963,7 @@ pub fn deploy_resource_mount(
     if !validate_pak_file(pak_source)? {
         return Err("File PAK rilis tidak memiliki footer/index Unreal yang valid.".to_string());
     }
+    validate_regular_game_executable(game_path)?;
     validate_canonical_paths(game_path)?;
 
     let targets = [

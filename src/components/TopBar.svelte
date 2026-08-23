@@ -7,28 +7,20 @@
   let methodMenuOpen = $state(false);
 
   async function selectMethod(method: InstallMethod) {
+    if (appState.isOperationBlocked('method-switch')) {
+      appState.showToast(appState.getOperationBusyMessage('method-switch'), 'info');
+      return;
+    }
     if (appState.gameRunning || appState.installing || appState.launching) return;
     if (appState.config.installMethod === method) {
       methodMenuOpen = false;
       return;
     }
     methodMenuOpen = false;
-    const previous = appState.config.installMethod;
     try {
-      if (appState.gamePath) {
-        const report = await bridge.switchMethod(appState.gamePath, method);
-        if (report.failures.length || report.preserved.length) {
-          throw new Error([...report.failures, ...report.preserved].join('; '));
-        }
-      }
-      appState.config.installMethod = method;
-      await appState.saveConfig();
-      if (appState.gamePath) {
-        await bridge.checkPatchStatus(appState.gamePath, method);
-      }
+      await appState.switchInstallMethod(method);
       appState.clearStatus();
     } catch (error) {
-      appState.config.installMethod = previous;
       const detail = error instanceof Error ? error.message : String(error);
       appState.showToast(`Gagal mengganti metode instalasi.\n${detail}`, 'err');
     }
@@ -45,9 +37,27 @@
   }
 
   async function handleClose() {
-    try { await bridge.closeWindow(); }
-    catch (error) { appState.showToast(`Gagal menutup launcher: ${error instanceof Error ? error.message : String(error)}`, 'err'); }
+    const token = appState.beginOperation('close');
+    if (!token) {
+      appState.showToast(appState.getOperationBusyMessage('close'), 'info');
+      return;
+    }
+    try {
+      await bridge.closeWindow();
+    } catch (error) {
+      appState.showToast(`Gagal menutup launcher: ${error instanceof Error ? error.message : String(error)}`, 'err');
+    } finally {
+      appState.endOperation(token);
+    }
   }
+
+  let closeDisabled = $derived(appState.isOperationBlocked('close'));
+  let methodDisabled = $derived(
+    appState.gameRunning ||
+      appState.installing ||
+      appState.launching ||
+      appState.isOperationBlocked('method-switch'),
+  );
 </script>
 
 <svelte:window onclick={() => (methodMenuOpen = false)} />
@@ -60,22 +70,48 @@
   <div class="top-bar__right">
     <nav class="top-nav" id="topNav">
       <button
-        class="top-nav__item active"
+        class="top-nav__item"
+        class:active={appState.page === 'home'}
         data-page="home"
         type="button"
+        aria-current={appState.page === 'home' ? 'page' : undefined}
+        onclick={() => (appState.page = 'home')}
       >
         HOME
       </button>
 
       <button
         class="top-nav__item top-nav__item--menu"
-         class:open={methodMenuOpen}
-         id="methodNavBtn"
-         disabled={appState.gameRunning || appState.installing || appState.launching}
-         onclick={toggleMethodMenu}
+        class:open={methodMenuOpen}
+        id="methodNavBtn"
+        disabled={methodDisabled}
+        aria-expanded={methodMenuOpen}
+        onclick={toggleMethodMenu}
         type="button"
       >
         METODE
+      </button>
+
+      <button
+        class="top-nav__item"
+        class:active={appState.page === 'settings'}
+        data-page="settings"
+        type="button"
+        aria-current={appState.page === 'settings' ? 'page' : undefined}
+        onclick={() => { methodMenuOpen = false; appState.page = 'settings'; }}
+      >
+        PENGATURAN
+      </button>
+
+      <button
+        class="top-nav__item"
+        class:active={appState.page === 'about'}
+        data-page="about"
+        type="button"
+        aria-current={appState.page === 'about' ? 'page' : undefined}
+        onclick={() => { methodMenuOpen = false; appState.page = 'about'; }}
+      >
+        TENTANG
       </button>
 
       <div class="top-nav__indicator" id="topNavIndicator"></div>
@@ -107,7 +143,7 @@
       </svg>
     </button>
 
-    <button class="top-bar__btn top-bar__btn--close" id="btnClose" title="Tutup" onclick={handleClose} type="button">
+    <button class="top-bar__btn top-bar__btn--close" id="btnClose" title="Tutup" disabled={closeDisabled} onclick={handleClose} type="button">
       <svg viewBox="0 0 24 24" width="14" height="14">
         <path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
       </svg>

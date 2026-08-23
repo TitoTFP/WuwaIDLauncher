@@ -26,13 +26,13 @@ pub fn validate_game_path(dir: &Path) -> Option<PathBuf> {
     }
 
     let direct_exe = dir.join(GAME_EXE_RELATIVE);
-    if direct_exe.exists() {
+    if direct_exe.is_file() {
         return Some(dir.to_path_buf());
     }
 
     let sub_game_dir = dir.join("Wuthering Waves Game");
     let sub_exe = sub_game_dir.join(GAME_EXE_RELATIVE);
-    if sub_exe.exists() {
+    if sub_exe.is_file() {
         return Some(sub_game_dir);
     }
 
@@ -160,6 +160,15 @@ mod tests {
     #[test]
     fn test_validate_invalid_path() {
         let tmp = tempdir().unwrap();
+        assert!(validate_game_path(tmp.path()).is_none());
+    }
+
+    #[test]
+    fn test_validate_rejects_directory_named_as_game_executable() {
+        let tmp = tempdir().unwrap();
+        let exe_dir = tmp.path().join("Client").join("Binaries").join("Win64");
+        create_dir_all(exe_dir.join("Client-Win64-Shipping.exe")).unwrap();
+
         assert!(validate_game_path(tmp.path()).is_none());
     }
 }

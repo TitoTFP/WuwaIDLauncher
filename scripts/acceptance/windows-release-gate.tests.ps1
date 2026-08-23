@@ -74,7 +74,7 @@ function Initialize-Artifact {
         $executable = Join-Path $Path "WuwaIDLauncher.exe"
         Set-Content -LiteralPath $executable -Value "fixture executable" -NoNewline
 
-        $zip = Join-Path $Path "WuwaIDLauncher-v2.9.0.zip"
+        $zip = Join-Path $Path $script:FixtureZipName
         Compress-Archive -LiteralPath $executable -DestinationPath $zip
 
         $manifestLines = @($zip | ForEach-Object {
@@ -92,7 +92,7 @@ function Set-UnsafeArtifactZip {
     Remove-Item -LiteralPath $Path -Force
     $archive = [IO.Compression.ZipFile]::Open($Path, [IO.Compression.ZipArchiveMode]::Create)
     try {
-        foreach ($entryName in @("../escape.txt", "WuwaIDLauncher.exe")) {
+        foreach ($entryName in @("../escape.txt", "..\escape.txt", "\escape.txt", "C:\escape.txt", "WuwaIDLauncher.exe")) {
             $entry = $archive.CreateEntry($entryName)
             $writer = [IO.StreamWriter]::new($entry.Open())
             try {
@@ -130,10 +130,17 @@ function Assert-WorkflowContract {
     Assert-True ($release -match "workflow_dispatch:") "Release workflow must support manual dispatch."
     Assert-True ($allWorkflows -notmatch "tauri-action|MSI|NSIS|\\.msi|nsis") "Workflows must not build installer bundles."
     Assert-True ($allWorkflows -match "npm ci") "Workflows must use reproducible npm ci installs."
+    Assert-True ($allWorkflows -match "--locked") "Workflows must enforce the committed Cargo.lock."
+    Assert-True ($allWorkflows -match "cargo fmt") "Workflows must check Rust formatting."
+    Assert-True ($release -match "windows-release-gate") "Release workflow must run the Windows release gate."
+    Assert-True ($release -match "ref:\s+\$\{\{.*inputs\.tag") "Manual releases must checkout the requested tag."
+    Assert-True ($allWorkflows -notmatch "uses:\s*[^\r\n]+@(v[0-9]+|stable)\b") "Third-party workflow actions must be pinned to commit SHAs."
 }
 
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ("wuwaid-release-gate-test-" + [guid]::NewGuid().ToString("N"))
 $runner = Join-Path $PSScriptRoot "windows-release-gate.ps1"
+$packageRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$script:FixtureZipName = "WuwaIDLauncher-v{0}.zip" -f ((Get-Content -Raw -LiteralPath (Join-Path $packageRoot "package.json") | ConvertFrom-Json).version)
 
 try {
     $script:TestRoot = $testRoot
@@ -209,7 +216,7 @@ try {
 
     $invalidZipCase = New-CaseDirectory -Name "invalid-zip"
     Initialize-Artifact -Path $invalidZipCase.artifact
-    $invalidZip = Join-Path $invalidZipCase.artifact "WuwaIDLauncher-v2.9.0.zip"
+    $invalidZip = Join-Path $invalidZipCase.artifact $script:FixtureZipName
     Set-UnsafeArtifactZip -Path $invalidZip
     $invalidZipManifest = Join-Path $invalidZipCase.artifact "SHA256sums.txt"
     $invalidZipLines = @(Get-Content -LiteralPath $invalidZipManifest)

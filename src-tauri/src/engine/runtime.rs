@@ -517,7 +517,7 @@ fn spawn_direct(command: &LaunchCommand) -> Result<ManagedProcess, std::io::Erro
 pub fn launch_game(game_path: &Path, dx11: bool) -> Result<LaunchedGame, Box<LaunchFailure>> {
     let command = build_launch_command(game_path, dx11);
     let executable = command.executable.clone();
-    if !executable.exists() {
+    if !executable.is_file() {
         return Err(Box::new(LaunchFailure::new_with_mode(
             command,
             SpawnFailureKind::SpawnFailed,
@@ -670,11 +670,21 @@ pub fn validate_launch_preconditions(
 }
 
 pub fn find_game_process_id() -> Option<u32> {
+    find_game_process_id_for_path(None)
+}
+
+pub fn find_game_process_id_for_path(expected_executable: Option<&Path>) -> Option<u32> {
+    #[cfg(not(windows))]
+    let _ = expected_executable;
+
     #[cfg(windows)]
     {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt;
         use windows::Win32::Foundation::CloseHandle;
-        use windows::Win32::System::ProcessStatus::EnumProcesses;
-        use windows::Win32::System::ProcessStatus::GetModuleBaseNameW;
+        use windows::Win32::System::ProcessStatus::{
+            EnumProcesses, GetModuleBaseNameW, GetModuleFileNameExW,
+        };
         use windows::Win32::System::Threading::{
             OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
         };
@@ -699,15 +709,25 @@ pub fn find_game_process_id() -> Option<u32> {
                         OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid)
                     {
                         let mut name_buf = [0u16; 260];
-                        let len = GetModuleBaseNameW(handle, None, &mut name_buf);
-                        let _ = CloseHandle(handle);
-                        if len > 0 {
-                            let name = String::from_utf16_lossy(&name_buf[..len as usize]);
-                            if name.eq_ignore_ascii_case("Client-Win64-Shipping.exe")
+                        let name_len = GetModuleBaseNameW(handle, None, &mut name_buf);
+                        let is_game_name = name_len > 0 && {
+                            let name = String::from_utf16_lossy(&name_buf[..name_len as usize]);
+                            name.eq_ignore_ascii_case("Client-Win64-Shipping.exe")
                                 || name.eq_ignore_ascii_case("WutheringWaves.exe")
-                            {
-                                return Some(pid);
+                        };
+                        let path_matches = expected_executable.is_none_or(|expected| {
+                            let mut path_buf = [0u16; 32_768];
+                            let path_len = GetModuleFileNameExW(handle, None, &mut path_buf);
+                            if path_len == 0 {
+                                return false;
                             }
+                            let actual = OsString::from_wide(&path_buf[..path_len as usize]);
+                            normalize_process_path(&actual)
+                                .eq_ignore_ascii_case(&normalize_process_path(expected.as_os_str()))
+                        });
+                        let _ = CloseHandle(handle);
+                        if is_game_name && path_matches {
+                            return Some(pid);
                         }
                     }
                 }
@@ -722,41 +742,116 @@ pub fn is_game_running() -> bool {
     find_game_process_id().is_some()
 }
 
-pub fn force_quit_game() -> Result<bool, String> {
+pub fn is_game_running_for_path(expected_executable: Option<&Path>) -> bool {
+    find_game_process_id_for_path(expected_executable).is_some()
+}
+
+#[cfg(windows)]
+fn normalize_process_path(path: &std::ffi::OsStr) -> String {
+    path.to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
+}
+
+pub fn select_force_quit_pid(tracked_pid: Option<u32>, detected_pid: Option<u32>) -> Option<u32> {
+    tracked_pid.or(detected_pid)
+}
+
+#[cfg(windows)]
+fn is_verified_game_pid(pid: u32, expected_executable: Option<&Path>) -> bool {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::ProcessStatus::{GetModuleBaseNameW, GetModuleFileNameExW};
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
+    };
+
+    unsafe {
+        let Ok(handle) = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid)
+        else {
+            return false;
+        };
+        let mut name_buf = [0u16; 260];
+        let name_len = GetModuleBaseNameW(handle, None, &mut name_buf);
+        if name_len == 0 {
+            let _ = CloseHandle(handle);
+            return false;
+        }
+        let name = String::from_utf16_lossy(&name_buf[..name_len as usize]);
+        let is_game_name = name.eq_ignore_ascii_case("Client-Win64-Shipping.exe")
+            || name.eq_ignore_ascii_case("WutheringWaves.exe");
+        let path_matches = expected_executable.is_none_or(|expected| {
+            let mut path_buf = [0u16; 32_768];
+            let path_len = GetModuleFileNameExW(handle, None, &mut path_buf);
+            if path_len == 0 {
+                return false;
+            }
+            let actual = OsString::from_wide(&path_buf[..path_len as usize]);
+            normalize_process_path(&actual) == normalize_process_path(expected.as_os_str())
+        });
+        let _ = CloseHandle(handle);
+        is_game_name && path_matches
+    }
+}
+
+#[cfg(windows)]
+fn terminate_verified_game_pid(
+    pid: u32,
+    expected_executable: Option<&Path>,
+) -> Result<bool, String> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    };
+
+    if !is_verified_game_pid(pid, expected_executable) {
+        return Err(format!(
+            "force_quit_target_not_verified: PID {pid} bukan proses game yang terverifikasi"
+        ));
+    }
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, false, pid)
+            .map_err(|error| format!("force_quit_open_failed: {error}"))?;
+        let result = (|| -> Result<bool, String> {
+            TerminateProcess(handle, 1)
+                .map_err(|error| format!("force_quit_terminate_failed: {error}"))?;
+            let _ = WaitForSingleObject(handle, 5_000);
+            Ok(true)
+        })();
+        let _ = CloseHandle(handle);
+        result
+    }
+}
+
+pub fn force_quit_game_with_pid(
+    tracked_pid: Option<u32>,
+    expected_executable: Option<&Path>,
+) -> Result<bool, String> {
     #[cfg(windows)]
     {
-        if find_game_process_id().is_none() {
+        let detected_pid = tracked_pid
+            .is_none()
+            .then(|| find_game_process_id_for_path(expected_executable))
+            .flatten();
+        let Some(pid) = select_force_quit_pid(tracked_pid, detected_pid) else {
             return Ok(false);
-        }
-
-        let names = ["Client-Win64-Shipping.exe", "WutheringWaves.exe"];
-        let mut found = false;
-        let mut errors = Vec::new();
-        for name in names {
-            match Command::new("taskkill")
-                .args(["/F", "/IM", name])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-            {
-                Ok(status) if status.success() => found = true,
-                Ok(_) => {}
-                Err(error) => errors.push(format!("{name}: {error}")),
-            }
-        }
-        if !errors.is_empty() {
-            return Err(errors.join("; "));
-        }
-        if !found && find_game_process_id().is_some() {
-            return Err("taskkill tidak menghentikan proses game.".to_string());
-        }
-        Ok(found)
+        };
+        return terminate_verified_game_pid(pid, expected_executable);
     }
 
     #[cfg(not(windows))]
     {
+        let _ = tracked_pid;
+        let _ = expected_executable;
         Ok(false)
     }
+}
+
+pub fn force_quit_game() -> Result<bool, String> {
+    force_quit_game_with_pid(None, None)
 }
 
 pub fn trim_memory_working_set() {

@@ -1,5 +1,25 @@
 export type InstallMethod = "resource_mount" | "loader";
 
+export type LauncherPage = "home" | "settings" | "about";
+
+export type LauncherOperation =
+  | "install"
+  | "launch"
+  | "uninstall"
+  | "method-switch"
+  | "folder"
+  | "cache-reset"
+  | "media-sync"
+  | "force-quit"
+  | "launcher-update"
+  | "restart-as-admin"
+  | "close";
+
+export interface OperationToken {
+  readonly id: number;
+  readonly kind: LauncherOperation;
+}
+
 export interface CleanupReport {
   removed: string[];
   preserved: string[];
@@ -141,8 +161,8 @@ export interface ProgressPayload {
 
 export interface PatchStatusPayload {
   status: PatchState;
-  gamePath?: string;
-  installMethod?: InstallMethod;
+  gamePath: string;
+  installMethod: InstallMethod;
   currentVersion?: string;
   latestVersion?: string;
   message?: string;
@@ -190,12 +210,10 @@ export interface LauncherUpdatePayload {
   version: string;
   tag: string;
   body: string;
-  zipUrl: string;
-  checksumsUrl?: string;
 }
 
 export interface ILauncherState {
-  page: "home";
+  page: LauncherPage;
   installing: boolean;
   installed: boolean;
   launching: boolean;
@@ -221,6 +239,7 @@ export interface ILauncherState {
   launcherUpdateStatus: string;
   launcherUpdateError: string;
   launcherUpdateRestartCountdown: number | null;
+  configSavePending: boolean;
   bgmPlaying: boolean;
   bgmVolume: number;
   bgmUrl: string;
@@ -243,5 +262,24 @@ export interface ILauncherState {
   dismissLauncherUpdate(): void;
   dismissFirstLaunchLauncherReleaseNotes(): void;
   init(): Promise<void>;
+  dispose(): void;
   saveConfig(): Promise<void>;
+  beginOperation(kind: LauncherOperation): OperationToken | null;
+  endOperation(token: OperationToken): void;
+  isOperationBlocked(kind: LauncherOperation): boolean;
+  getOperationBusyMessage(kind: LauncherOperation): string;
+  setGamePath(path: string): void;
+  selectGameFolder(): Promise<boolean>;
+  switchInstallMethod(method: InstallMethod): Promise<void>;
+  requestPatchStatus(
+    gamePath: string,
+    installMethod: InstallMethod,
+    manualCheck?: boolean,
+  ): Promise<void>;
+  invalidatePatchStatus(): void;
+  startMediaSync(): Promise<void>;
+  forceQuitGame(): Promise<boolean>;
+  resetWebViewCache(): Promise<void>;
+  performLauncherUpdate(version: string): Promise<void>;
+  restartAsAdmin(): Promise<void>;
 }

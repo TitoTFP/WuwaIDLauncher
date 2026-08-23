@@ -23,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:; media-src 'self' media: http://media.localhost; connect-src 'self' https://api.github.com https://github.com https://raw.githubusercontent.com https://logs.titotfp.my.id https://trakteer.id; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
     }
   },
   "bundle": {

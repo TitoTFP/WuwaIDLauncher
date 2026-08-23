@@ -1,6 +1,7 @@
 <script lang="ts">
   import { appState } from '../lib/launcherState.svelte.ts';
   import { bridge } from '../lib/bridge.ts';
+  import type { LauncherOperation } from '../lib/types';
 
   let dropdownOpen = $state(false);
   let now = $state(Date.now());
@@ -46,27 +47,7 @@
 
   async function handleBrowseGameDir() {
     closeDropdown();
-    try {
-      const selected = await bridge.browseGameFolder();
-      if (selected === '?INVALID') {
-        appState.setStatus('Folder game yang dipilih tidak valid.');
-        return;
-      }
-      if (selected) {
-        const previous = appState.gamePath;
-        appState.gamePath = selected;
-        try {
-          await appState.saveConfig();
-          await bridge.checkPatchStatus(appState.gamePath, appState.config.installMethod);
-        } catch (error) {
-          appState.gamePath = previous;
-          appState.config.gamePath = previous;
-          throw error;
-        }
-      }
-    } catch (error) {
-      appState.setStatus('Gagal memilih folder game.', errorMessage(error));
-    }
+    await appState.selectGameFolder();
   }
 
   async function handleCheckPatch() {
@@ -75,11 +56,13 @@
       appState.setStatus('Pilih folder game terlebih dahulu.');
       return;
     }
-    appState.patchStatusCheckPending = true;
     try {
-      await bridge.checkPatchStatus(appState.gamePath, appState.config.installMethod);
+      await appState.requestPatchStatus(
+        appState.gamePath,
+        appState.config.installMethod,
+        true,
+      );
     } catch (error) {
-      appState.patchStatusCheckPending = false;
       appState.setStatus('Gagal memeriksa status patch.', errorMessage(error));
     }
   }
@@ -96,7 +79,7 @@
   async function handleForceQuit() {
     closeDropdown();
     try {
-      const terminated = await bridge.forceQuitGame();
+      const terminated = await appState.forceQuitGame();
       appState.showToast(
         terminated ? 'Game berhasil dipaksa tutup.' : 'Game tidak sedang berjalan.',
         terminated ? 'ok' : 'info',
@@ -109,7 +92,7 @@
   async function handleRestartAdmin() {
     closeDropdown();
     try {
-      await bridge.restartAsAdmin();
+      await appState.restartAsAdmin();
     } catch (error) {
       appState.setStatus('Gagal menjalankan launcher sebagai admin.', errorMessage(error));
     }
@@ -118,7 +101,7 @@
   async function handleResetCache() {
     closeDropdown();
     try {
-      await bridge.resetWebViewCache();
+      await appState.resetWebViewCache();
       appState.setStatus('Cache tampilan berhasil direset.');
     } catch (error) {
       appState.setStatus('Gagal mereset cache tampilan.', errorMessage(error));
@@ -136,13 +119,11 @@
   }
 
   async function handleDx11Change(event: Event) {
-    const previous = appState.config.dx11;
     appState.config.dx11 = (event.currentTarget as HTMLInputElement).checked;
     try {
       await appState.saveConfig();
       appState.setStatus('Mode DX11 diperbarui.');
     } catch (error) {
-      appState.config.dx11 = previous;
       appState.setStatus('Mode DX11 tidak dapat disimpan.', errorMessage(error));
     }
   }
@@ -151,24 +132,44 @@
 
   function promptUninstall() {
     closeDropdown();
-    if (!appState.gamePath || appState.gameRunning || appState.installing || appState.launching) return;
+    if (
+      !appState.gamePath ||
+      appState.gameRunning ||
+      appState.installing ||
+      appState.launching ||
+      appState.isOperationBlocked('uninstall')
+    ) return;
     showUninstallConfirm = true;
   }
 
   async function handleConfirmUninstall() {
     showUninstallConfirm = false;
-    if (!appState.gamePath || appState.gameRunning || appState.installing || appState.launching) return;
+    if (
+      !appState.gamePath ||
+      appState.gameRunning ||
+      appState.installing ||
+      appState.launching ||
+      appState.isOperationBlocked('uninstall')
+    ) return;
+    const token = appState.beginOperation('uninstall');
+    if (!token) {
+      appState.setStatus('Patch ID tidak dapat dihapus.', appState.getOperationBusyMessage('uninstall'));
+      return;
+    }
     try {
       const res = await bridge.uninstall(appState.gamePath);
       if (res === 'ok') {
         appState.patchState = 'not_installed';
         appState.installed = false;
+        appState.vhVersion = '';
         appState.setStatus('Patch ID berhasil dihapus.');
       } else {
         appState.setStatus('Patch ID tidak dapat dihapus.', res);
       }
     } catch (error) {
       appState.setStatus('Gagal menghapus Patch ID.', errorMessage(error));
+    } finally {
+      appState.endOperation(token);
     }
   }
 
@@ -179,60 +180,75 @@
   async function handlePrimaryAction() {
     if (appState.gameRunning || appState.installing || appState.launching) return;
 
-    try {
-      if (!appState.gamePath) {
-        const selected = await bridge.browseGameFolder();
-        if (selected === '?INVALID') {
-          appState.setStatus('Folder game yang dipilih tidak valid.');
-          return;
-        }
-        if (selected) {
-          const previous = appState.gamePath;
-          appState.gamePath = selected;
-          try {
-            await appState.saveConfig();
-            await bridge.checkPatchStatus(appState.gamePath, appState.config.installMethod);
-          } catch (error) {
-            appState.gamePath = previous;
-            appState.config.gamePath = previous;
-            throw error;
-          }
-        }
+    const primaryOperation = !appState.gamePath
+      ? 'folder'
+      : appState.patchState === 'ready'
+        ? 'launch'
+        : 'install';
+    if (appState.isOperationBlocked(primaryOperation)) {
+      appState.setStatus(
+        'Operasi launcher sedang berjalan.',
+        appState.getOperationBusyMessage(primaryOperation),
+      );
+      return;
+    }
+
+    if (!appState.gamePath) {
+      await appState.selectGameFolder();
+      return;
+    }
+
+    if (appState.patchState === 'ready') {
+      const token = appState.beginOperation('launch');
+      if (!token) {
+        appState.setStatus('Game tidak dapat dijalankan.', appState.getOperationBusyMessage('launch'));
         return;
       }
-
-      if (appState.patchState === 'ready') {
-        appState.launching = true;
+      appState.launching = true;
+      try {
         await bridge.launchGame(appState.gamePath, appState.config.dx11, appState.config.installMethod);
-      } else {
-        const access = await bridge.checkGameFolderWriteAccess(
-          appState.gamePath,
-          appState.config.installMethod,
-          true,
-        );
-        if (access !== 'ok') {
-          if (access === 'needs_admin') {
-            appState.openAdminPrompt(appState.gamePath);
-            return;
-          }
-          appState.setStatus(
-            'Folder game tidak valid atau metode tidak didukung.',
-            access,
-          );
+      } catch (error) {
+        appState.endOperation(token);
+        appState.launching = false;
+        appState.setStatus('Operasi launcher gagal.', errorMessage(error));
+      }
+      return;
+    }
+
+    const token = appState.beginOperation('install');
+    if (!token) {
+      appState.setStatus('Instalasi tidak dapat dimulai.', appState.getOperationBusyMessage('install'));
+      return;
+    }
+    try {
+      const access = await bridge.checkGameFolderWriteAccess(
+        appState.gamePath,
+        appState.config.installMethod,
+        true,
+      );
+      if (access !== 'ok') {
+        appState.endOperation(token);
+        if (access === 'needs_admin') {
+          appState.openAdminPrompt(appState.gamePath);
           return;
         }
-        appState.installing = true;
-        appState.progressPercent = 0;
-        appState.progressStatus = 'Memulai proses instalasi...';
-        await bridge.startInstallation(
-          appState.gamePath,
-          'standard',
-          appState.config.installMethod,
+        appState.setStatus(
+          'Folder game tidak valid atau metode tidak didukung.',
+          access,
         );
+        return;
       }
+      appState.installing = true;
+      appState.progressPercent = 0;
+      appState.progressStatus = 'Memulai proses instalasi...';
+      await bridge.startInstallation(
+        appState.gamePath,
+        'standard',
+        appState.config.installMethod,
+      );
     } catch (error) {
+      appState.endOperation(token);
       appState.installing = false;
-      appState.launching = false;
       appState.setStatus('Operasi launcher gagal.', errorMessage(error));
     }
   }
@@ -247,7 +263,19 @@
   }
 
   let buttonLabel = $derived(getButtonLabel());
-  let isDisabled = $derived(appState.gameRunning || appState.installing || appState.launching);
+  let primaryOperation = $derived<LauncherOperation>(
+    !appState.gamePath
+      ? 'folder'
+      : appState.patchState === 'ready'
+        ? 'launch'
+        : 'install',
+  );
+  let isDisabled = $derived(
+    appState.gameRunning ||
+      appState.installing ||
+      appState.launching ||
+      appState.isOperationBlocked(primaryOperation),
+  );
 </script>
 
 <svelte:window onclick={closeDropdown} />
@@ -321,42 +349,42 @@
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="rp-dropdown" class:open={dropdownOpen} id="rpDropdown" onclick={(e) => e.stopPropagation()}>
-    <button class="rp-dropdown__item" id="menuGameDir" onclick={handleBrowseGameDir} type="button">
+    <button class="rp-dropdown__item" id="menuGameDir" onclick={handleBrowseGameDir} disabled={appState.isOperationBlocked('folder')} type="button">
       <svg viewBox="0 0 24 24" width="14" height="14">
         <path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
       </svg>
       Folder game
     </button>
 
-    <button class="rp-dropdown__item" id="menuCheckVH" onclick={handleCheckPatch} type="button">
+    <button class="rp-dropdown__item" id="menuCheckVH" onclick={handleCheckPatch} disabled={appState.patchStatusCheckPending || appState.isOperationBlocked('install') || appState.isOperationBlocked('method-switch') || appState.isOperationBlocked('folder')} type="button">
       <svg viewBox="0 0 24 24" width="14" height="14">
         <path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z" />
       </svg>
       Perbarui Patch ID
     </button>
 
-    <button class="rp-dropdown__item" id="menuCheckUpdate" onclick={handleCheckLauncherUpdate} type="button">
+    <button class="rp-dropdown__item" id="menuCheckUpdate" onclick={handleCheckLauncherUpdate} disabled={appState.isOperationBlocked('launcher-update')} type="button">
       <svg viewBox="0 0 24 24" width="14" height="14">
         <path fill="currentColor" d="M20 12l-1.41-1.41L13 16.17V4h-2v12.17l-5.58-5.59L4 12l8 8 8-8z" />
       </svg>
       <span id="menuCheckUpdateText">Perbarui Launcher</span>
     </button>
 
-    <button class="rp-dropdown__item" id="menuForceQuit" onclick={handleForceQuit} type="button">
+    <button class="rp-dropdown__item" id="menuForceQuit" onclick={handleForceQuit} disabled={appState.isOperationBlocked('force-quit')} type="button">
       <svg viewBox="0 0 24 24" width="14" height="14">
         <path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
       </svg>
       Paksa tutup game
     </button>
 
-    <button class="rp-dropdown__item" id="menuRestartAdmin" onclick={handleRestartAdmin} type="button">
+    <button class="rp-dropdown__item" id="menuRestartAdmin" onclick={handleRestartAdmin} disabled={appState.isOperationBlocked('restart-as-admin')} type="button">
       <svg viewBox="0 0 24 24" width="14" height="14">
         <path fill="currentColor" d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 4l5 2.18V11c0 3.5-2.33 6.79-5 7.93-2.67-1.14-5-4.43-5-7.93V7.18L12 5z" />
       </svg>
       Jalankan sebagai Admin
     </button>
 
-    <button class="rp-dropdown__item" id="menuResetCache" onclick={handleResetCache} type="button">
+    <button class="rp-dropdown__item" id="menuResetCache" onclick={handleResetCache} disabled={appState.isOperationBlocked('cache-reset')} type="button">
       <svg viewBox="0 0 24 24" width="14" height="14">
         <path fill="currentColor" d="M12 4V1L8 5l4 4V6a6 6 0 1 1-5.65 4H4.26A8 8 0 1 0 12 4z" />
       </svg>
@@ -372,7 +400,7 @@
 
     <div class="rp-dropdown__sep"></div>
 
-    <button class="rp-dropdown__item rp-dropdown__item--danger" id="menuUninstall" onclick={promptUninstall} type="button">
+    <button class="rp-dropdown__item rp-dropdown__item--danger" id="menuUninstall" onclick={promptUninstall} disabled={appState.isOperationBlocked('uninstall')} type="button">
       <svg viewBox="0 0 24 24" width="14" height="14">
         <path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
       </svg>
@@ -394,6 +422,7 @@
         id="chkDx11"
         class="dx11-input"
         checked={!!appState.config.dx11}
+        disabled={appState.isOperationBlocked('folder') || appState.isOperationBlocked('method-switch') || appState.isOperationBlocked('install')}
         onchange={handleDx11Change}
       />
       <span class="dx11-checkmark"></span>
@@ -446,7 +475,7 @@
       </p>
       <div class="modal-actions">
         <button class="modal-btn modal-btn--cancel" id="modalCancel" onclick={handleCancelUninstall} type="button">Batal</button>
-        <button class="modal-btn modal-btn--ok" id="modalOk" onclick={handleConfirmUninstall} type="button">Hapus Patch</button>
+        <button class="modal-btn modal-btn--ok" id="modalOk" onclick={handleConfirmUninstall} disabled={appState.isOperationBlocked('uninstall')} type="button">Hapus Patch</button>
       </div>
     </div>
   </div>

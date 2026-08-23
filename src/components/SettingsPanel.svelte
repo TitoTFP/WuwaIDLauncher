@@ -1,17 +1,16 @@
 <script lang="ts">
-  import { bridge } from '../lib/bridge';
   import { appState } from '../lib/launcherState.svelte';
   import { INSTALL_METHOD_OPTIONS } from '../lib/types';
   import type { InstallMethod } from '../lib/types';
 
-  let saving = $state(false);
+  let saving = $state(0);
 
   function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
   }
 
   async function persist(message: string): Promise<boolean> {
-    saving = true;
+    saving += 1;
     try {
       await appState.saveConfig();
       appState.setStatus(message);
@@ -20,43 +19,25 @@
       appState.setStatus('Pengaturan tidak dapat disimpan.', errorMessage(error));
       return false;
     } finally {
-      saving = false;
+      saving -= 1;
     }
   }
 
   async function changeMethod(event: Event) {
     const method = (event.currentTarget as HTMLSelectElement).value as InstallMethod;
-    const previous = appState.config.installMethod;
     try {
-      if (appState.gamePath) {
-        const report = await bridge.switchMethod(appState.gamePath, method);
-        if (report.failures.length || report.preserved.length) {
-          throw new Error([...report.failures, ...report.preserved].join('; '));
-        }
-      }
-      appState.config.installMethod = method;
-      if (!(await persist('Metode instalasi diperbarui.'))) {
-        appState.config.installMethod = previous;
-        return;
-      }
-      if (appState.gamePath) {
-        await bridge.checkPatchStatus(appState.gamePath, method);
-      }
+      await appState.switchInstallMethod(method);
+      appState.setStatus('Metode instalasi diperbarui.');
     } catch (error) {
-      appState.config.installMethod = previous;
       appState.setStatus('Gagal mengganti metode instalasi.', errorMessage(error));
     }
   }
 
   async function changeVolume(event: Event) {
-    const previous = appState.config.bgmVolume;
     const next = Number((event.currentTarget as HTMLInputElement).value);
     appState.config.bgmVolume = next;
     appState.bgmVolume = appState.config.bgmVolume;
-    if (!(await persist('Volume BGM diperbarui.'))) {
-      appState.config.bgmVolume = previous;
-      appState.bgmVolume = previous;
-    }
+    await persist('Volume BGM diperbarui.');
   }
 
   async function changeBoolean(
@@ -64,35 +45,21 @@
     event: Event,
     message: string,
   ) {
-    const previous = appState.config[key];
     appState.config[key] = (event.currentTarget as HTMLInputElement).checked;
-    if (!(await persist(message))) appState.config[key] = previous;
+    await persist(message);
   }
 
   async function chooseGameFolder() {
-    try {
-      const selected = await bridge.browseGameFolder();
-      if (selected === '?INVALID') {
-        appState.setStatus('Folder game yang dipilih tidak valid.');
-        return;
-      }
-      if (selected) {
-        const previous = appState.gamePath;
-        appState.gamePath = selected;
-        try {
-          await appState.saveConfig();
-          await bridge.checkPatchStatus(selected, appState.config.installMethod);
-          appState.setStatus('Folder game diperbarui.');
-        } catch (error) {
-          appState.gamePath = previous;
-          appState.config.gamePath = previous;
-          throw error;
-        }
-      }
-    } catch (error) {
-      appState.setStatus('Gagal memilih folder game.', errorMessage(error));
-    }
+    await appState.selectGameFolder();
   }
+
+  let controlsDisabled = $derived(
+    appState.gameRunning ||
+      appState.installing ||
+      appState.launching ||
+      appState.isOperationBlocked('folder') ||
+      appState.isOperationBlocked('method-switch'),
+  );
 </script>
 
 <main class="settings-page launcher-page" aria-labelledby="settings-title">
@@ -112,19 +79,19 @@
         <span>Folder game</span>
         <div class="settings-inline">
           <input value={appState.gamePath || 'Belum dipilih'} readonly aria-label="Folder game" />
-          <button type="button" onclick={chooseGameFolder}>Pilih</button>
+          <button type="button" onclick={chooseGameFolder} disabled={controlsDisabled}>Pilih</button>
         </div>
       </label>
       <label>
         <span>Metode instalasi</span>
-        <select value={appState.config.installMethod} onchange={changeMethod} disabled={appState.gameRunning || appState.installing || appState.launching || saving}>
+        <select value={appState.config.installMethod} onchange={changeMethod} disabled={controlsDisabled || saving > 0}>
           {#each INSTALL_METHOD_OPTIONS as option}
             <option value={option.value}>{option.title} — {option.description}</option>
           {/each}
         </select>
       </label>
       <label class="settings-check">
-        <input type="checkbox" checked={appState.config.dx11} onchange={(event) => changeBoolean('dx11', event, 'Mode DX11 diperbarui.')} />
+        <input type="checkbox" checked={appState.config.dx11} disabled={controlsDisabled} onchange={(event) => changeBoolean('dx11', event, 'Mode DX11 diperbarui.')} />
         <span>Gunakan DX11 saat menjalankan game</span>
       </label>
     </section>
@@ -134,10 +101,10 @@
       <p class="settings-note">Mode visual launcher selalu Full dengan video dan semua efek.</p>
       <label>
         <span>Volume BGM: {Math.round(appState.config.bgmVolume * 100)}%</span>
-        <input type="range" min="0" max="1" step="0.01" value={appState.config.bgmVolume} onchange={changeVolume} />
+        <input type="range" min="0" max="1" step="0.01" value={appState.config.bgmVolume} disabled={controlsDisabled} onchange={changeVolume} />
       </label>
       <label class="settings-check">
-        <input type="checkbox" checked={appState.config.bgmEnabled} onchange={(event) => changeBoolean('bgmEnabled', event, 'Preferensi BGM diperbarui.')} />
+        <input type="checkbox" checked={appState.config.bgmEnabled} disabled={controlsDisabled} onchange={(event) => changeBoolean('bgmEnabled', event, 'Preferensi BGM diperbarui.')} />
         <span>Aktifkan musik latar</span>
       </label>
     </section>
@@ -145,7 +112,7 @@
     <section class="settings-card">
       <h2>Update</h2>
       <label class="settings-check">
-        <input type="checkbox" checked={appState.config.autoCheckUpdate} onchange={(event) => changeBoolean('autoCheckUpdate', event, 'Preferensi update diperbarui.')} />
+        <input type="checkbox" checked={appState.config.autoCheckUpdate} disabled={controlsDisabled} onchange={(event) => changeBoolean('autoCheckUpdate', event, 'Preferensi update diperbarui.')} />
         <span>Periksa update launcher otomatis</span>
       </label>
       <p class="settings-note">Saat game berjalan, perubahan metode dan halaman konfigurasi ditahan sampai game selesai.</p>
@@ -153,7 +120,7 @@
 
   </div>
 
-  {#if saving}<p class="settings-saving" role="status">Menyimpan...</p>{/if}
+  {#if saving > 0}<p class="settings-saving" role="status">Menyimpan...</p>{/if}
 </main>
 
 <style>

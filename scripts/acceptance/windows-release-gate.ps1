@@ -350,9 +350,10 @@ function Invoke-ArtifactGate {
         $archive = [IO.Compression.ZipFile]::OpenRead($script:Artifacts.zip)
         $entries = @($archive.Entries | ForEach-Object { $_.FullName })
         $unsafeEntries = @($entries | Where-Object {
-            $_.StartsWith("/", [StringComparison]::Ordinal) -or
-            $_.StartsWith("\\", [StringComparison]::Ordinal) -or
-            $_.Split("/", [StringSplitOptions]::RemoveEmptyEntries) -contains ".."
+            $normalized = $_.Replace("\", "/")
+            $normalized.StartsWith("/", [StringComparison]::Ordinal) -or
+            $normalized -match '^[A-Za-z]:/' -or
+            $normalized.Split("/", [StringSplitOptions]::RemoveEmptyEntries) -contains ".."
         })
         $launcherEntry = @($archive.Entries | Where-Object { $_.FullName.Equals("WuwaIDLauncher.exe", [StringComparison]::Ordinal) })
         Write-JsonFile -Value ([ordered]@{

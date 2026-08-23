@@ -1,12 +1,9 @@
 <script lang="ts">
-  import { bridge } from '../lib/bridge';
   import { appState } from '../lib/launcherState.svelte';
 
   interface Props {
     open?: boolean;
     version?: string;
-    zipUrl?: string;
-    checksumsUrl?: string;
     progress?: number;
     status?: string;
     error?: string;
@@ -14,7 +11,7 @@
     onclose?: () => void;
   }
 
-  let { open = false, version = '', zipUrl = '', checksumsUrl = '', progress = 0, status = '', error = '', restartCountdown = null, onclose }: Props = $props();
+  let { open = false, version = '', progress = 0, status = '', error = '', restartCountdown = null, onclose }: Props = $props();
 
   let isUpdating = $state(false);
   let updateProgress = $state(0);
@@ -28,11 +25,11 @@
   });
 
   async function startUpdate() {
-    if (isUpdating || !version || !zipUrl) return;
+    if (isUpdating || !version) return;
     isUpdating = true;
     updateStatus = 'Mengunduh pembaruan...';
     try {
-      await bridge.performLauncherUpdate(version, zipUrl, checksumsUrl || undefined);
+      await appState.performLauncherUpdate(version);
     } catch (err) {
       isUpdating = false;
       onclose?.();
@@ -78,7 +75,7 @@
       {:else}
         <div class="lu-modal__btns">
           <button class="lu-modal__btn lu-modal__btn--secondary" onclick={dismiss} type="button">Nanti</button>
-          <button class="lu-modal__btn lu-modal__btn--primary" onclick={startUpdate} type="button">Perbarui sekarang</button>
+          <button class="lu-modal__btn lu-modal__btn--primary" onclick={startUpdate} disabled={appState.isOperationBlocked('launcher-update')} type="button">Perbarui sekarang</button>
         </div>
       {/if}
     </div>

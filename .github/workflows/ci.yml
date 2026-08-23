@@ -20,23 +20,26 @@ concurrency:
 jobs:
   verify:
     runs-on: windows-latest
+    env:
+      CARGOFLAGS: --locked
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 22
+          node-version: 20
           cache: npm
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
+          toolchain: 1.97.1
           targets: x86_64-pc-windows-msvc
 
       - name: Cache Rust
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           workspaces: src-tauri -> target
 
@@ -49,11 +52,14 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
       - name: Test backend
-        run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1
 
       - name: Lint backend
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: Build launcher binary
         run: npm run tauri -- build --no-bundle
@@ -68,7 +74,7 @@ jobs:
           Write-Host "WuwaIDLauncher.exe: $($exe.Length) bytes"
 
       - name: Upload launcher artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: WuwaIDLauncher-ci-${{ github.run_number }}
           path: src-tauri/target/release/WuwaIDLauncher.exe

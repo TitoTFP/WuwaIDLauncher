@@ -4,7 +4,6 @@ import type {
   CleanupReport,
   InstallMethod,
   LauncherUpdatePayload,
-  LauncherUpdateRestartPayload,
   LauncherUpdateStatusPayload,
   MediaProgressPayload,
   MediaReadyPayload,
@@ -36,8 +35,8 @@ export const bridge = {
   checkLauncherUpdate: (): Promise<void> => invoke("check_launcher_update"),
   getVhReleaseNotes: (): Promise<void> => invoke("get_vh_release_notes"),
   getLauncherReleaseNotes: (): Promise<void> => invoke("get_launcher_release_notes"),
-  performLauncherUpdate: (version: string, zipUrl: string, checksumsUrl?: string): Promise<void> =>
-    invoke("perform_launcher_update", { version, zipUrl, checksumsUrl }),
+  performLauncherUpdate: (version: string): Promise<void> =>
+    invoke("perform_launcher_update", { version }),
 
   // Patch Management
   checkPatchStatus: (gamePath: string, installMethod: InstallMethod): Promise<void> =>
@@ -108,10 +107,25 @@ export interface EventBridgeCallbacks {
   onLauncherReleaseNotes?: (payload: ReleaseNotePayload) => void;
 }
 
+function restartSecondsFromPayload(payload: unknown): number | null {
+  if (!payload || typeof payload !== "object") return null;
+  const remainingSeconds = (payload as { remainingSeconds?: unknown })
+    .remainingSeconds;
+  if (
+    typeof remainingSeconds !== "number" ||
+    !Number.isFinite(remainingSeconds) ||
+    remainingSeconds < 0
+  ) {
+    return null;
+  }
+  return Math.floor(remainingSeconds);
+}
+
 export async function setupEventBridge(
   callbacks: EventBridgeCallbacks,
 ): Promise<UnlistenFn[]> {
   const unlisteners: UnlistenFn[] = [];
+  let setupFailed = false;
 
   const addListener = async <T>(
     event: string,
@@ -119,7 +133,8 @@ export async function setupEventBridge(
   ) => {
     if (!handler) return;
     const unlisten = await listen<T>(event, (e) => handler(e.payload));
-    unlisteners.push(unlisten);
+    if (setupFailed) unlisten();
+    else unlisteners.push(unlisten);
   };
 
   await Promise.all([
@@ -164,9 +179,12 @@ export async function setupEventBridge(
     addListener<void>("onLauncherUpdateStaged", () =>
       callbacks.onLauncherUpdateStaged?.(),
     ),
-    addListener<LauncherUpdateRestartPayload>("onLauncherUpdateRestarting", (p) =>
-      callbacks.onLauncherUpdateRestarting?.(p.remainingSeconds),
-    ),
+    addListener<unknown>("onLauncherUpdateRestarting", (p) => {
+      const remainingSeconds = restartSecondsFromPayload(p);
+      if (remainingSeconds !== null) {
+        callbacks.onLauncherUpdateRestarting?.(remainingSeconds);
+      }
+    }),
     addListener<string>("onLauncherUpdateError", (error) =>
       callbacks.onLauncherUpdateError?.(error),
     ),
@@ -186,7 +204,11 @@ export async function setupEventBridge(
     addListener<ReleaseNotePayload>("onLauncherReleaseNotes", (p) =>
       callbacks.onLauncherReleaseNotes?.(p),
     ),
-  ]);
+  ]).catch((error) => {
+    setupFailed = true;
+    for (const unlisten of unlisteners) unlisten();
+    throw error;
+  });
 
   return unlisteners;
 }

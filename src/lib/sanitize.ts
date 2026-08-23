@@ -3,34 +3,76 @@ const allowedTags = new Set([
   'h1', 'h2', 'h3', 'blockquote', 'code', 'pre', 'a',
 ]);
 
+const blockedTags = new Set([
+  'script', 'style', 'iframe', 'object', 'embed', 'form', 'meta', 'link', 'base',
+]);
+
 function safeHref(value: string): string | null {
   const href = value.trim();
-  if (/^https?:/i.test(href)) return href;
-  if (/^\/(?!\/)/.test(href) || href.startsWith('#')) return href;
-  return null;
+  if (href.startsWith('#') || /^\/(?!\/)/.test(href)) return href;
+
+  try {
+    const parsed = new URL(href);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function appendSanitizedChildren(source: Node, target: Node, document: Document) {
+  for (const child of Array.from(source.childNodes)) {
+    const sanitized = sanitizeNode(child, document);
+    if (sanitized) target.appendChild(sanitized);
+  }
+}
+
+function sanitizeNode(node: Node, document: Document): Node | null {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return document.createTextNode(node.textContent ?? '');
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) return null;
+
+  const element = node as Element;
+  const tag = element.tagName.toLowerCase();
+  if (blockedTags.has(tag)) return null;
+
+  if (!allowedTags.has(tag)) {
+    const fragment = document.createDocumentFragment();
+    appendSanitizedChildren(element, fragment, document);
+    return fragment;
+  }
+
+  const output = document.createElement(tag);
+  if (tag === 'a') {
+    const href = safeHref(element.getAttribute('href') ?? '');
+    if (href) output.setAttribute('href', href);
+    const title = element.getAttribute('title');
+    if (title) output.setAttribute('title', title);
+    if (href && /^https?:/i.test(href)) {
+      output.setAttribute('target', '_blank');
+      output.setAttribute('rel', 'noopener noreferrer');
+    }
+  }
+
+  appendSanitizedChildren(element, output, document);
+  return output;
 }
 
 export function sanitizeReleaseNotesHtml(input: string): string {
-  let html = input.replace(/<!--[\s\S]*?-->/g, '');
-  html = html.replace(
-    /<\s*(script|style|iframe|object|embed|form|meta|link|base)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi,
-    '',
-  );
+  if (typeof DOMParser === 'undefined') {
+    return input.replace(/[&<>"']/g, (character) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    })[character] ?? character);
+  }
 
-  return html.replace(/<\s*(\/?)\s*([a-z0-9-]+)([^>]*)>/gi, (_match, closing, rawTag, rawAttrs) => {
-    const tag = String(rawTag).toLowerCase();
-    if (!allowedTags.has(tag)) return '';
-    if (closing) return '</' + tag + '>';
-    if (tag === 'br') return '<br>';
-    if (tag !== 'a') return '<' + tag + '>';
-
-    const hrefMatch = String(rawAttrs).match(/\bhref\s*=\s*(['"])(.*?)\1/i);
-    const href = hrefMatch ? safeHref(hrefMatch[2]) : null;
-    const titleMatch = String(rawAttrs).match(/\btitle\s*=\s*(['"])(.*?)\1/i);
-    const title = titleMatch?.[2]?.replace(/["<>]/g, '');
-    const attrs = href
-      ? ' href="' + href.replace(/["<>]/g, '') + '" target="_blank" rel="noopener noreferrer"' + (title ? ' title="' + title + '"' : '')
-      : '';
-    return '<a' + attrs + '>';
-  });
+  const parsed = new DOMParser().parseFromString(input, 'text/html');
+  const fragment = parsed.createDocumentFragment();
+  appendSanitizedChildren(parsed.body, fragment, parsed);
+  const container = parsed.createElement('div');
+  container.appendChild(fragment);
+  return container.innerHTML;
 }

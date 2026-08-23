@@ -5,8 +5,8 @@
 **Launcher Resmi & Patch Installer Bahasa Indonesia untuk Wuthering Waves**
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPL_v3-blue.svg)](LICENSE)
-[![Tauri Version](https://img.shields.io/badge/Tauri-v2.1-24C8D8?logo=tauri)](https://v2.tauri.app/)
-[![Rust](https://img.shields.io/badge/Backend-Rust_1.80%2B-DEA584?logo=rust)](https://www.rust-lang.org/)
+[![Tauri Version](https://img.shields.io/badge/Tauri-v2-24C8D8?logo=tauri)](https://v2.tauri.app/)
+[![Rust](https://img.shields.io/badge/Backend-Rust_1.97%2B-DEA584?logo=rust)](https://www.rust-lang.org/)
 [![Frontend](https://img.shields.io/badge/Frontend-Svelte_5_%2B_TS-FF3E00?logo=svelte)](https://svelte.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Windows_x64-0078D6?logo=windows)](https://microsoft.com)
 [![Launcher Version](https://img.shields.io/badge/Version-2.9.0-brightgreen)](#)
@@ -41,7 +41,7 @@ Kontrak utama launcher sudah diimplementasikan dan diverifikasi melalui test sui
 | Media cache hash, offline fallback, staged replacement, release-note sanitization | **Implemented** | milestone5_contract_tests.rs, media event tests |
 | Self-update checksum, ZIP validation, staging, rollback handoff, cleanup | **Implemented + manual restart smoke** | Checksum/ZIP/handoff tests; valid release asset diperlukan untuk restart end-to-end |
 | Local runtime diagnostics tanpa upload log | **Implemented** | Isi diagnostics tetap lokal; heartbeat active-player hanya mengirim payload minimal |
-| Standalone EXE, updater ZIP, SHA256 manifest | **Implemented** | Artifact gate dan workflow release; MSI/NSIS sengaja tidak dibuat |
+| Distribusi ZIP updater dan SHA256 manifest | **Implemented** | Artifact gate dan workflow release; executable tersedia di dalam ZIP; MSI/NSIS sengaja tidak dibuat |
 | Real game/admin/read-only/tray/offline/restart acceptance | **Partial / manual** | Jalankan matrix acceptance pada Windows release machine |
 | Future features di luar WUT-5 sampai WUT-29 | **Planned** | Tidak menjadi bagian release gate ini |
 
@@ -88,8 +88,8 @@ Acceptance manual Windows tetap diperlukan untuk memvalidasi game nyata, mode ad
 
 ### 1️⃣ Jalankan Launcher
 
-1. Unduh file rilis `WuwaIDLauncher.exe` dari halaman GitHub Releases.
-2. Jalankan aplikasi portable `WuwaIDLauncher.exe`.
+1. Unduh `WuwaIDLauncher-vX.Y.Z.zip` dari halaman GitHub Releases dan verifikasi dengan `SHA256sums.txt`.
+2. Ekstrak ZIP, lalu jalankan `WuwaIDLauncher.exe` dari folder hasil ekstraksi.
 
 ### 2️⃣ Tentukan Folder Game
 
@@ -143,8 +143,8 @@ jadi tinjau sebelum membagikannya secara manual.
 
 ### Prasyarat
 
-- **Node.js** v18+ dan **npm** / **pnpm**
-- **Rust** (stable toolchain)
+- **Node.js** v20+ dan **npm** / **pnpm**
+- **Rust** 1.97.1 melalui `rust-toolchain.toml`
 - **Windows SDK** / `x86_64-pc-windows-msvc` target (atau `cargo-xwin` untuk cross-compilation di Linux)
 
 ### Langkah Pengembangan Lokal
@@ -178,33 +178,48 @@ npm run check
 npm run build
 
 # Menjalankan seluruh unit test, mock HTTP, command integration, dan installer safety tests
-& 'C:\Users\Gipar\.cargo\bin\cargo.exe' test --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1
+cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1
 ```
 
 ### Kompilasi Rilis Distribusi (Windows MSVC)
 
+Build native pada Windows:
+
 ```bash
-# Build binary rilis produksi via Tauri (PowerShell; Cargo harus berada di PATH)
-$env:Path = "C:\Users\Gipar\.cargo\bin;$env:Path"
+# Build binary rilis produksi via Tauri
 npm run tauri -- build --no-bundle
 ```
 
+Cross-build dari Linux menggunakan `cargo-xwin`:
+
+```bash
+npm run build
+CARGOFLAGS=--locked npm run tauri -- build \
+  --runner cargo-xwin \
+  --target x86_64-pc-windows-msvc \
+  --no-bundle \
+  --ci
+```
+
+Binary MSVC berada di `src-tauri/target/x86_64-pc-windows-msvc/release/`.
+
 Artifact release yang diharapkan:
 
-- src-tauri/target/release/WuwaIDLauncher.exe
-- WuwaIDLauncher-v2.9.0.zip
+- WuwaIDLauncher-vX.Y.Z.zip (berisi WuwaIDLauncher.exe)
 - SHA256sums.txt
 
 Checklist sebelum publish:
 
 - [ ] npm run check dan npm run build lulus.
-- [ ] cargo test --all-targets lulus dengan fixture deterministic.
-- [ ] EXE, updater ZIP, dan SHA256sums.txt ada serta versinya 2.9.0.
+- [ ] cargo test --locked --all-targets lulus dengan fixture deterministic.
+- [ ] ZIP dan SHA256sums.txt ada serta menggunakan versi yang sama.
 - [ ] Jalankan acceptance manual pada Windows dengan fixture reversible.
 - [ ] Uji read-only/admin, tray, force quit, offline media, dan self-update restart pada mesin release.
 - [ ] Tinjau diagnostics lokal sebelum membagikannya secara manual.
 
-Gate otomatis terbaru diverifikasi melalui test suite Rust, `npm run check`, dan `npm run build`; acceptance game nyata tetap memerlukan mesin Windows release.
+Gate otomatis mencakup test suite Rust dengan lockfile, format/lint, `npm run check`,
+`npm run build`, dan Windows release gate. Acceptance game nyata tetap memerlukan
+mesin Windows release.
 
 ---
 
@@ -233,7 +248,7 @@ WuwaIDLauncher/
 │   ├── 📁 tests/                 # Integration tests (app command, download, installer safety, media events)
 │   └── 📄 Cargo.toml             # Konfigurasi dependensi Rust
 ├── 📄 package.json               # Konfigurasi npm & dependensi frontend
-├── 📄 tauri.conf.json            # Konfigurasi utama Tauri v2 (window size 1280x720, bundle, identifier)
+├── 📄 src-tauri/tauri.conf.json  # Konfigurasi utama Tauri v2 (window size 1280x720, CSP, identifier)
 └── 📄 README.md                  # Dokumentasi Proyek
 ```
 
