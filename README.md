@@ -208,7 +208,8 @@ CARGOFLAGS=--locked npm run tauri -- build \
   --ci
 ```
 
-Binary MSVC berada di `src-tauri/target/x86_64-pc-windows-msvc/release/`.
+Output direct `cargo xwin` berada di `src-tauri/target/x86_64-pc-windows-msvc/release/wuwaid-launcher.exe`.
+Build melalui Tauri memakai `mainBinaryName` dan menghasilkan `WuwaIDLauncher.exe` pada direktori yang sama.
 
 Artifact release yang diharapkan:
 
