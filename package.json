@@ -11,6 +11,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test:patch-status": "node --test scripts/tests/patch-status-wait.test.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

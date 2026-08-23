@@ -177,6 +177,9 @@ npm run check
 # Build frontend
 npm run build
 
+# Test frontend async state contracts
+npm run test:patch-status
+
 # Menjalankan seluruh unit test, mock HTTP, command integration, dan installer safety tests
 cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1
 ```
@@ -233,7 +236,7 @@ mesin Windows release.
 
 ## 📊 Performa
 
-Optimasi resource yang diterapkan mencakup target memori rendah WebView2, suspend/resume saat game berjalan, pembacaan media berbasis HTTP Range, capture output proses yang dibatasi, dan response metadata HTTP yang dibaca dengan hard limit. Angka benchmark tidak dicantumkan sampai profiling dilakukan pada mesin Windows release.
+Perilaku runtime yang diterapkan mencakup target memori rendah WebView2, launcher yang disembunyikan ke system tray saat game berjalan tanpa men-suspend WebView agar event lifecycle tetap diterima, pembacaan media berbasis HTTP Range, capture output proses yang dibatasi, dan response metadata HTTP yang dibaca dengan hard limit. Angka benchmark tidak dicantumkan sampai profiling dilakukan pada mesin Windows release.
 
 ---
 

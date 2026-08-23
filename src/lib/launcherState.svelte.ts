@@ -1,4 +1,5 @@
 import { bridge, setupEventBridge } from "./bridge";
+import { createPatchStatusWaiter } from "./patchStatusWait.js";
 import {
   DEFAULT_LAUNCHER_CONFIG,
   launcherReleaseNotesSeenStorageKey,
@@ -44,6 +45,8 @@ const OPERATION_LABELS: Record<LauncherOperation, string> = {
   "restart-as-admin": "administrator restart",
   close: "launcher close",
 };
+
+const PATCH_STATUS_EVENT_TIMEOUT_MS = 15_000;
 
 function operationsConflict(
   left: LauncherOperation,
@@ -291,6 +294,8 @@ export class LauncherState implements ILauncherState {
     this.patchStatusGeneration += 1;
     this.latestPatchStatusRequest = null;
     this.patchStatusCheckPending = false;
+    for (const resolve of this.patchStatusWaiters.values()) resolve();
+    this.patchStatusWaiters.clear();
   }
 
   private patchSelectionMatches(request: PatchStatusRequest): boolean {
@@ -323,9 +328,8 @@ export class LauncherState implements ILauncherState {
       }
 
       this.activePatchStatusRequest = request;
-      const eventPromise = new Promise<void>((resolve) => {
-        this.patchStatusWaiters.set(request.generation, resolve);
-      });
+      const eventWaiter = createPatchStatusWaiter(PATCH_STATUS_EVENT_TIMEOUT_MS);
+      this.patchStatusWaiters.set(request.generation, eventWaiter.resolve);
 
       try {
         await bridge.checkPatchStatus(request.gamePath, request.installMethod);
@@ -333,8 +337,9 @@ export class LauncherState implements ILauncherState {
         // that event keeps a same-identity slow response from being attributed to
         // the next generation. A command error exits through the finally block;
         // a successful command is required to emit this payload by contract.
-        await eventPromise;
+        await eventWaiter.promise;
       } finally {
+        eventWaiter.resolve();
         this.patchStatusWaiters.delete(request.generation);
         if (this.activePatchStatusRequest === request) {
           this.activePatchStatusRequest = null;

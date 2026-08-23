@@ -301,101 +301,6 @@ fn configure_webview_memory_target<R: Runtime>(_app: &AppHandle<R>) {
     }
 }
 
-fn suspend_webview<R: Runtime + 'static>(_app: &AppHandle<R>) {
-    #[cfg(windows)]
-    {
-        suspend_webview_attempt(_app.clone(), 0);
-    }
-}
-
-#[cfg(windows)]
-fn suspend_webview_attempt<R: Runtime + 'static>(app: AppHandle<R>, attempt: u8) {
-    use webview2_com::{
-        Microsoft::Web::WebView2::Win32::ICoreWebView2_3, TrySuspendCompletedHandler,
-    };
-    use windows_core::Interface;
-
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
-    if let Err(error) = window.with_webview(move |webview| {
-        let result = unsafe {
-            webview
-                .controller()
-                .SetIsVisible(false)
-                .and_then(|_| webview.controller().CoreWebView2())
-                .and_then(|core| core.cast::<ICoreWebView2_3>())
-                .and_then(|core| {
-                    let retry_app = app.clone();
-                    let callback =
-                        TrySuspendCompletedHandler::create(Box::new(move |result, suspended| {
-                            match result {
-                                Ok(()) if suspended => {
-                                    log::debug!("WebView2 berhasil disuspend");
-                                }
-                                Ok(()) if attempt < 3 => {
-                                    log::debug!(
-                                        "WebView2 menolak suspend; menjadwalkan percobaan ulang"
-                                    );
-                                    let retry_app = retry_app.clone();
-                                    tauri::async_runtime::spawn(async move {
-                                        tokio::time::sleep(Duration::from_millis(150)).await;
-                                        let Some(window) = retry_app.get_webview_window("main")
-                                        else {
-                                            return;
-                                        };
-                                        if matches!(window.is_visible(), Ok(false)) {
-                                            suspend_webview_attempt(retry_app, attempt + 1);
-                                        }
-                                    });
-                                }
-                                Ok(()) => {
-                                    log::debug!("WebView2 menolak suspend setelah percobaan ulang");
-                                }
-                                Err(error) => {
-                                    log::debug!("WebView2 suspend gagal: {error}");
-                                }
-                            }
-                            Ok(())
-                        }));
-                    core.TrySuspend(&callback)
-                })
-        };
-        if let Err(error) = result {
-            log::debug!("Permintaan suspend WebView2 gagal: {error}");
-        }
-    }) {
-        log::debug!("WebView2 tidak dapat disuspend: {error}");
-    }
-}
-
-fn resume_webview<R: Runtime>(_app: &AppHandle<R>) {
-    #[cfg(windows)]
-    {
-        use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_3;
-        use windows_core::Interface;
-
-        let Some(window) = _app.get_webview_window("main") else {
-            return;
-        };
-        if let Err(error) = window.with_webview(|webview| {
-            let result = unsafe {
-                webview
-                    .controller()
-                    .SetIsVisible(true)
-                    .and_then(|_| webview.controller().CoreWebView2())
-                    .and_then(|core| core.cast::<ICoreWebView2_3>())
-                    .and_then(|core| core.Resume())
-            };
-            if let Err(error) = result {
-                log::debug!("Resume WebView2 tidak diperlukan atau gagal: {error}");
-            }
-        }) {
-            log::debug!("WebView2 tidak dapat di-resume: {error}");
-        }
-    }
-}
-
 fn request_close<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     engine::operations::global().request_close()?;
     set_tray_mode(app, false);
@@ -456,7 +361,6 @@ fn launch_error_message(mut evidence: engine::runtime::LaunchEvidence) -> String
 
 fn finish_launch_lifecycle<R: Runtime>(app: &AppHandle<R>) {
     set_launcher_process(app, None);
-    set_tray_mode(app, false);
     emit_runtime_state(
         app,
         engine::runtime::RuntimeState {
@@ -487,10 +391,11 @@ fn emit_tray_state<R: Runtime>(app: &AppHandle<R>, in_tray: bool) {
 }
 
 fn restore_launcher_from_tray<R: Runtime>(app: &AppHandle<R>) {
+    // Keep the WebView event channel live while hidden so lifecycle events reach the UI.
+    set_tray_mode(app, false);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.set_focus();
-        resume_webview(app);
     }
     emit_tray_state(app, false);
 }
@@ -567,7 +472,6 @@ fn minimize_window<R: Runtime>(window: WebviewWindow<R>) {
             set_tray_mode(app, true);
             let _ = window.hide();
             emit_tray_state(app, true);
-            suspend_webview(app);
             notify_tray_minimized(app);
         }
     }
@@ -1841,7 +1745,6 @@ fn launch_game<R: Runtime>(
                     set_tray_mode(&app_handle, true);
                     let _ = window.hide();
                     emit_tray_state(&app_handle, true);
-                    suspend_webview(&app_handle);
                     notify_tray_minimized(&app_handle);
                 }
                 engine::runtime::trim_memory_working_set();
@@ -1972,7 +1875,6 @@ fn force_quit_game<R: Runtime>(app: AppHandle<R>) -> Result<bool, String> {
     }
 
     set_launcher_process(&app, None);
-    set_tray_mode(&app, false);
     emit_runtime_state(
         &app,
         engine::runtime::RuntimeState {
@@ -2085,7 +1987,6 @@ pub fn run() {
                         }
                     }
                     "show" => {
-                        set_tray_mode(app, true);
                         restore_launcher_from_tray(app);
                     }
                     _ => {}
@@ -2098,7 +1999,6 @@ pub fn run() {
                     } = event
                     {
                         let app = tray.app_handle();
-                        set_tray_mode(app, true);
                         restore_launcher_from_tray(app);
                     }
                 })
@@ -2202,6 +2102,72 @@ mod tests {
             tray_notification_body(),
             "Launcher berjalan di system tray. Klik ikon tray untuk membukanya kembali."
         );
+    }
+
+    #[test]
+    fn restoring_launcher_from_tray_delivers_recovery_state() {
+        let app = tauri::test::mock_builder()
+            .manage(RuntimeCoordinator::default())
+            .build(tauri::generate_context!())
+            .unwrap();
+        let handle = app.handle();
+        let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let (tray_tx, tray_rx) = sync_channel(1);
+        let tray_listener = app.listen_any("onLauncherTrayState", move |event| {
+            let _ = tray_tx.send(event.payload().to_string());
+        });
+
+        set_tray_mode(handle, true);
+        assert!(is_tray_mode(handle));
+
+        restore_launcher_from_tray(handle);
+
+        assert!(!is_tray_mode(handle));
+        assert!(window.is_visible().unwrap());
+        let payload: serde_json::Value =
+            serde_json::from_str(&tray_rx.recv_timeout(Duration::from_secs(1)).unwrap()).unwrap();
+        assert_eq!(payload["inTray"], false);
+        assert_eq!(
+            window_minimize_action(is_tray_mode(handle)),
+            WindowMinimizeAction::Minimize
+        );
+        app.unlisten(tray_listener);
+    }
+
+    #[test]
+    fn finishing_launch_lifecycle_delivers_runtime_and_completion_events() {
+        let app = tauri::test::mock_builder()
+            .manage(RuntimeCoordinator::default())
+            .build(tauri::generate_context!())
+            .unwrap();
+        let handle = app.handle();
+        let _window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let (runtime_tx, runtime_rx) = sync_channel(1);
+        let (finish_tx, finish_rx) = sync_channel(1);
+        let runtime_listener = app.listen_any("onGameRuntimeState", move |event| {
+            let _ = runtime_tx.send(event.payload().to_string());
+        });
+        let finish_listener = app.listen_any("onGameLaunchFinished", move |event| {
+            let _ = finish_tx.send(event.payload().to_string());
+        });
+
+        set_launcher_process(handle, Some(42));
+        set_tray_mode(handle, true);
+        finish_launch_lifecycle(handle);
+
+        let runtime_payload: serde_json::Value =
+            serde_json::from_str(&runtime_rx.recv_timeout(Duration::from_secs(1)).unwrap())
+                .unwrap();
+        assert_eq!(runtime_payload["active"], false);
+        assert!(finish_rx.recv_timeout(Duration::from_secs(1)).is_ok());
+        assert!(!is_tray_mode(handle));
+        assert!(coordinator_launcher_pid(handle).is_none());
+        app.unlisten(runtime_listener);
+        app.unlisten(finish_listener);
     }
 
     #[test]
