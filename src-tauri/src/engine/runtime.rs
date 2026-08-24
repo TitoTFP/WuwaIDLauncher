@@ -23,6 +23,12 @@ pub struct RuntimeState {
     pub origin: ProcessOrigin,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProcessIdentity {
+    pub pid: u32,
+    pub creation_time: u64,
+}
+
 const MAX_OUTPUT_TAIL_BYTES: usize = 8 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -158,28 +164,21 @@ impl LaunchEvidence {
     }
 
     pub fn user_message(&self) -> String {
+        let reason = self
+            .error
+            .as_deref()
+            .map(compact_detail)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| default_failure_reason(self.failure_kind).to_string());
         format!(
-            "launch_failure: kind={}; mode={}; executable={}; args={}; pid={}; exit_code={}; error={}; stderr={}; stdout={}; game_log_tail={}; evidence_path={}",
+            "launch_failure: kind={}; exit_code={}; reason={}; evidence_path={}",
             self.failure_kind
                 .map(SpawnFailureKind::as_str)
                 .unwrap_or("none"),
-            self.launch_mode.map(LaunchMode::as_str).unwrap_or("none"),
-            self.command.executable.to_string_lossy(),
-            if self.command.arguments.is_empty() {
-                "none".to_string()
-            } else {
-                self.command.arguments.join(" ")
-            },
-            self.pid
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "none".to_string()),
             self.exit_code
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "none".to_string()),
-            detail_or_none(self.error.as_deref().unwrap_or_default()),
-            detail_or_none(&self.stderr),
-            detail_or_none(&self.stdout),
-            detail_or_none(&self.game_log_tail),
+            reason,
             self.evidence_path
                 .as_ref()
                 .map(|value| value.to_string_lossy().to_string())
@@ -281,6 +280,40 @@ impl LaunchedGame {
             ManagedProcess::Elevated(process) => process.wait(),
         }
     }
+
+    pub fn finalize(&mut self) -> Result<ProcessResult, String> {
+        match &mut self.process {
+            ManagedProcess::Direct(process) => process.finalize_result(),
+            #[cfg(windows)]
+            ManagedProcess::Elevated(process) => process
+                .try_wait()?
+                .ok_or_else(|| "process_finalize_failed: process has not exited".to_string()),
+        }
+    }
+
+    #[cfg(windows)]
+    pub fn duplicate_termination_handle(&self) -> Result<Option<usize>, String> {
+        use windows::Win32::Foundation::{DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE};
+        use windows::Win32::System::Threading::GetCurrentProcess;
+
+        let ManagedProcess::Elevated(process) = &self.process else {
+            return Ok(None);
+        };
+        let mut duplicate = HANDLE::default();
+        unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),
+                process.handle,
+                GetCurrentProcess(),
+                &mut duplicate,
+                0,
+                false,
+                DUPLICATE_SAME_ACCESS,
+            )
+            .map_err(|error| format!("process_handle_duplicate_failed: {error}"))?;
+        }
+        Ok(Some(duplicate.0 as usize))
+    }
 }
 
 fn now_millis() -> u128 {
@@ -290,12 +323,28 @@ fn now_millis() -> u128 {
         .unwrap_or_default()
 }
 
-fn detail_or_none(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        "none".to_string()
+fn compact_detail(value: &str) -> String {
+    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    const MAX_LENGTH: usize = 180;
+    if compact.chars().count() > MAX_LENGTH {
+        format!(
+            "{}…",
+            compact.chars().take(MAX_LENGTH - 1).collect::<String>()
+        )
     } else {
-        trimmed.replace('\n', "\\n").replace('\r', "\\r")
+        compact
+    }
+}
+
+fn default_failure_reason(kind: Option<SpawnFailureKind>) -> &'static str {
+    match kind {
+        Some(SpawnFailureKind::ElevationRequired) => "Administrator permission required",
+        Some(SpawnFailureKind::ElevationCancelled) => "Administrator permission cancelled",
+        Some(SpawnFailureKind::SpawnFailed) => "Process could not start",
+        Some(SpawnFailureKind::ImmediateExit) => "Process exited immediately",
+        Some(SpawnFailureKind::ProcessNotDetected) => "Process was not detected",
+        Some(SpawnFailureKind::ProcessCrashed) => "Process exited unexpectedly",
+        None => "Unknown launch failure",
     }
 }
 
@@ -408,6 +457,14 @@ fn join_capture(capture: Option<JoinHandle<Vec<u8>>>) -> String {
         .unwrap_or_default()
 }
 
+fn join_finished_capture(capture: &mut Option<JoinHandle<Vec<u8>>>) -> String {
+    if capture.as_ref().is_some_and(|thread| thread.is_finished()) {
+        join_capture(capture.take())
+    } else {
+        String::new()
+    }
+}
+
 impl DirectProcess {
     fn completed_result(&mut self, status: ExitStatus) -> ProcessResult {
         if let Some(result) = self.completed.clone() {
@@ -416,11 +473,25 @@ impl DirectProcess {
 
         let result = ProcessResult {
             exit_code: status.code(),
-            stdout: join_capture(self.stdout.take()),
-            stderr: join_capture(self.stderr.take()),
+            // Do not join here: a handed-off child can inherit the pipe and
+            // keep the reader alive after this root process exits.
+            stdout: join_finished_capture(&mut self.stdout),
+            stderr: join_finished_capture(&mut self.stderr),
         };
         self.completed = Some(result.clone());
         result
+    }
+
+    fn finalize_result(&mut self) -> Result<ProcessResult, String> {
+        let Some(mut result) = self.completed.clone() else {
+            return Err("process_finalize_failed: process has not exited".to_string());
+        };
+        // Reader threads may still be held open by a descendant that inherited
+        // the pipe. Never block lifecycle cleanup on that descendant.
+        result.stdout = join_finished_capture(&mut self.stdout);
+        result.stderr = join_finished_capture(&mut self.stderr);
+        self.completed = Some(result.clone());
+        Ok(result)
     }
 
     fn try_wait(&mut self) -> Result<Option<ProcessResult>, String> {
@@ -435,15 +506,14 @@ impl DirectProcess {
     }
 
     fn wait(&mut self) -> Result<ProcessResult, String> {
-        if let Some(result) = self.completed.clone() {
-            return Ok(result);
+        if self.completed.is_none() {
+            let status = self
+                .child
+                .wait()
+                .map_err(|error| format!("process_wait_failed: {error}"))?;
+            self.completed_result(status);
         }
-
-        let status = self
-            .child
-            .wait()
-            .map_err(|error| format!("process_wait_failed: {error}"))?;
-        Ok(self.completed_result(status))
+        self.finalize_result()
     }
 }
 
@@ -555,6 +625,29 @@ pub fn launch_game(game_path: &Path, dx11: bool) -> Result<LaunchedGame, Box<Lau
     }
 }
 
+/// Launches through the real Windows `runas` path for lifecycle acceptance
+/// coverage. Production launch still chooses direct mode first and only falls
+/// back here when Windows reports that elevation is required.
+#[cfg(windows)]
+pub fn launch_game_elevated(
+    game_path: &Path,
+    dx11: bool,
+) -> Result<LaunchedGame, Box<LaunchFailure>> {
+    let command = build_launch_command(game_path, dx11);
+    if !command.executable.is_file() {
+        return Err(Box::new(LaunchFailure::new_with_mode(
+            command,
+            SpawnFailureKind::SpawnFailed,
+            format!(
+                "executable_missing: {:?}",
+                game_path.join(GAME_EXE_RELATIVE)
+            ),
+            Some(LaunchMode::Elevated),
+        )));
+    }
+    spawn_elevated(&command)
+}
+
 #[cfg(windows)]
 fn spawn_elevated(command: &LaunchCommand) -> Result<LaunchedGame, Box<LaunchFailure>> {
     use std::os::windows::ffi::OsStrExt;
@@ -648,6 +741,252 @@ pub fn reconcile_runtime_state(
     }
 }
 
+pub fn reconcile_runtime_state_with_owned(
+    launcher_pid: Option<u32>,
+    detected_pid: Option<u32>,
+    owned_pid: Option<u32>,
+) -> RuntimeState {
+    let active = detected_pid.or(owned_pid).is_some();
+    RuntimeState {
+        active,
+        origin: if owned_pid.is_some()
+            || (active && launcher_pid.is_some() && launcher_pid == detected_pid)
+        {
+            ProcessOrigin::Launcher
+        } else {
+            ProcessOrigin::External
+        },
+    }
+}
+
+/// Returns whether `candidate_pid` is the root or a descendant of `root_pid`.
+/// The parent list is a snapshot, so a missing root entry is still valid when
+/// the child retains the root PID as its parent after the root exits.
+pub fn process_tree_contains(
+    root_pid: u32,
+    candidate_pid: u32,
+    parent_pids: &[(u32, u32)],
+) -> bool {
+    if root_pid == candidate_pid {
+        return true;
+    }
+
+    let mut current = candidate_pid;
+    for _ in 0..=parent_pids.len() {
+        let Some((_, parent_pid)) = parent_pids
+            .iter()
+            .find(|(process_pid, _)| *process_pid == current)
+        else {
+            return false;
+        };
+        if *parent_pid == root_pid {
+            return true;
+        }
+        if *parent_pid == 0 || *parent_pid == current {
+            return false;
+        }
+        current = *parent_pid;
+    }
+    false
+}
+
+#[cfg(windows)]
+fn process_tree_depth(
+    root_pid: u32,
+    candidate_pid: u32,
+    parent_pids: &[(u32, u32)],
+) -> Option<usize> {
+    if root_pid == candidate_pid {
+        return Some(0);
+    }
+
+    let mut current = candidate_pid;
+    for depth in 1..=parent_pids.len() {
+        let (_, parent_pid) = parent_pids
+            .iter()
+            .find(|(process_pid, _)| *process_pid == current)?;
+        if *parent_pid == root_pid {
+            return Some(depth);
+        }
+        if *parent_pid == 0 || *parent_pid == current {
+            return None;
+        }
+        current = *parent_pid;
+    }
+    None
+}
+
+pub fn process_identity(pid: u32) -> Option<ProcessIdentity> {
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+            let identity = process_identity_from_handle_value(handle.0 as usize, pid);
+            let _ = CloseHandle(handle);
+            return identity;
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+#[cfg(windows)]
+fn process_identity_from_handle_value(raw_handle: usize, pid: u32) -> Option<ProcessIdentity> {
+    use windows::Win32::Foundation::{FILETIME, HANDLE};
+    use windows::Win32::System::Threading::GetProcessTimes;
+
+    unsafe {
+        let handle = HANDLE(raw_handle as *mut std::ffi::c_void);
+        let mut creation = FILETIME::default();
+        let mut exit = FILETIME::default();
+        let mut kernel = FILETIME::default();
+        let mut user = FILETIME::default();
+        GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user)
+            .ok()
+            .map(|_| ProcessIdentity {
+                pid,
+                creation_time: (u64::from(creation.dwHighDateTime) << 32)
+                    | u64::from(creation.dwLowDateTime),
+            })
+    }
+}
+
+#[cfg(windows)]
+fn process_identity_from_termination_handle(raw_handle: usize) -> Option<ProcessIdentity> {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::Threading::GetProcessId;
+
+    let pid = unsafe { GetProcessId(HANDLE(raw_handle as *mut std::ffi::c_void)) };
+    if pid == 0 {
+        return None;
+    }
+    process_identity_from_handle_value(raw_handle, pid)
+}
+
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+struct ProcessSnapshotEntry {
+    pid: u32,
+    parent_pid: u32,
+}
+
+#[cfg(windows)]
+fn process_snapshot() -> Option<Vec<ProcessSnapshotEntry>> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()? };
+    let mut entry = PROCESSENTRY32W::default();
+    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+    let mut entries = Vec::new();
+
+    unsafe {
+        if Process32FirstW(snapshot, &mut entry).is_ok() {
+            loop {
+                entries.push(ProcessSnapshotEntry {
+                    pid: entry.th32ProcessID,
+                    parent_pid: entry.th32ParentProcessID,
+                });
+                if Process32NextW(snapshot, &mut entry).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snapshot);
+    }
+
+    Some(entries)
+}
+
+#[cfg(windows)]
+fn launcher_identity_matches_snapshot(pid: u32, identity: ProcessIdentity) -> bool {
+    let Some(entries) = process_snapshot() else {
+        return false;
+    };
+    if !entries.iter().any(|entry| entry.pid == pid) {
+        return true;
+    }
+    process_identity(pid) == Some(identity)
+}
+
+pub fn has_process_tree_descendant(root_pid: u32) -> Option<bool> {
+    #[cfg(windows)]
+    {
+        let entries = process_snapshot()?;
+        let parent_pids: Vec<_> = entries
+            .iter()
+            .map(|entry| (entry.pid, entry.parent_pid))
+            .collect();
+        return Some(entries.iter().any(|entry| {
+            entry.pid != root_pid && process_tree_contains(root_pid, entry.pid, &parent_pids)
+        }));
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = root_pid;
+        None
+    }
+}
+
+pub fn find_launcher_game_process_id(
+    launcher_pid: u32,
+    expected_executable: Option<&Path>,
+) -> Option<u32> {
+    find_launcher_game_process_id_with_identity(launcher_pid, None, expected_executable)
+}
+
+pub fn find_launcher_game_process_id_with_identity(
+    launcher_pid: u32,
+    launcher_identity: Option<ProcessIdentity>,
+    expected_executable: Option<&Path>,
+) -> Option<u32> {
+    #[cfg(windows)]
+    {
+        let launcher_identity = launcher_identity?;
+        if launcher_identity.pid != launcher_pid {
+            return None;
+        }
+        let entries = process_snapshot()?;
+        if entries.iter().any(|entry| entry.pid == launcher_pid)
+            && process_identity(launcher_pid) != Some(launcher_identity)
+        {
+            return None;
+        }
+        let parent_pids: Vec<_> = entries
+            .iter()
+            .map(|entry| (entry.pid, entry.parent_pid))
+            .collect();
+        let mut candidates: Vec<_> = entries
+            .into_iter()
+            .filter(|entry| process_tree_contains(launcher_pid, entry.pid, &parent_pids))
+            .filter(|entry| is_verified_game_pid(entry.pid, expected_executable))
+            .filter_map(|entry| {
+                process_tree_depth(launcher_pid, entry.pid, &parent_pids)
+                    .map(|depth| (depth, entry.pid))
+            })
+            .collect();
+        candidates.sort_unstable();
+        return candidates.first().map(|(_, pid)| *pid);
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (launcher_pid, launcher_identity, expected_executable);
+        None
+    }
+}
+
 pub fn validate_launch_preconditions(
     game_path: &str,
     method: InstallMethod,
@@ -670,68 +1009,20 @@ pub fn validate_launch_preconditions(
 }
 
 pub fn find_game_process_id_for_path(expected_executable: Option<&Path>) -> Option<u32> {
-    #[cfg(not(windows))]
-    let _ = expected_executable;
-
     #[cfg(windows)]
     {
-        use std::ffi::OsString;
-        use std::os::windows::ffi::OsStringExt;
-        use windows::Win32::Foundation::CloseHandle;
-        use windows::Win32::System::ProcessStatus::{
-            EnumProcesses, GetModuleBaseNameW, GetModuleFileNameExW,
-        };
-        use windows::Win32::System::Threading::{
-            OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
-        };
-
-        let mut process_ids = [0u32; 1024];
-        let mut bytes_returned = 0u32;
-
-        unsafe {
-            if EnumProcesses(
-                process_ids.as_mut_ptr(),
-                (process_ids.len() * std::mem::size_of::<u32>()) as u32,
-                &mut bytes_returned,
-            )
-            .is_ok()
-            {
-                let count = bytes_returned as usize / std::mem::size_of::<u32>();
-                for &pid in &process_ids[..count] {
-                    if pid == 0 {
-                        continue;
-                    }
-                    if let Ok(handle) =
-                        OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid)
-                    {
-                        let mut name_buf = [0u16; 260];
-                        let name_len = GetModuleBaseNameW(handle, None, &mut name_buf);
-                        let is_game_name = name_len > 0 && {
-                            let name = String::from_utf16_lossy(&name_buf[..name_len as usize]);
-                            name.eq_ignore_ascii_case("Client-Win64-Shipping.exe")
-                                || name.eq_ignore_ascii_case("WutheringWaves.exe")
-                        };
-                        let path_matches = expected_executable.is_none_or(|expected| {
-                            let mut path_buf = [0u16; 32_768];
-                            let path_len = GetModuleFileNameExW(handle, None, &mut path_buf);
-                            if path_len == 0 {
-                                return false;
-                            }
-                            let actual = OsString::from_wide(&path_buf[..path_len as usize]);
-                            normalize_process_path(&actual)
-                                .eq_ignore_ascii_case(&normalize_process_path(expected.as_os_str()))
-                        });
-                        let _ = CloseHandle(handle);
-                        if is_game_name && path_matches {
-                            return Some(pid);
-                        }
-                    }
-                }
-            }
-        }
+        return process_snapshot()?
+            .into_iter()
+            .filter(|entry| is_verified_game_pid(entry.pid, expected_executable))
+            .map(|entry| entry.pid)
+            .next();
     }
 
-    None
+    #[cfg(not(windows))]
+    {
+        let _ = expected_executable;
+        None
+    }
 }
 
 pub fn is_game_running_for_path(expected_executable: Option<&Path>) -> bool {
@@ -788,28 +1079,128 @@ fn is_verified_game_pid(pid: u32, expected_executable: Option<&Path>) -> bool {
     }
 }
 
-#[cfg(windows)]
-fn terminate_verified_game_pid(
+pub fn is_verified_game_process(
     pid: u32,
+    identity: Option<ProcessIdentity>,
     expected_executable: Option<&Path>,
-) -> Result<bool, String> {
+) -> bool {
+    #[cfg(windows)]
+    {
+        if identity.is_some_and(|expected| process_identity(pid) != Some(expected)) {
+            return false;
+        }
+        return is_verified_game_pid(pid, expected_executable);
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (pid, identity, expected_executable);
+        false
+    }
+}
+
+/// Returns true only when a verified game process is still in the tracked
+/// launcher tree. The launcher identity is mandatory: a path/name match alone
+/// must never be allowed to claim or terminate an unrelated instance.
+pub fn is_launcher_owned_game_process(
+    launcher_pid: u32,
+    launcher_identity: Option<ProcessIdentity>,
+    game_pid: u32,
+    game_identity: Option<ProcessIdentity>,
+    expected_executable: Option<&Path>,
+) -> bool {
+    #[cfg(windows)]
+    {
+        let Some(launcher_identity) = launcher_identity else {
+            return false;
+        };
+        if launcher_identity.pid != launcher_pid
+            || !is_verified_game_process(game_pid, game_identity, expected_executable)
+        {
+            return false;
+        }
+        let Some(entries) = process_snapshot() else {
+            return false;
+        };
+        if entries.iter().any(|entry| entry.pid == launcher_pid)
+            && process_identity(launcher_pid) != Some(launcher_identity)
+        {
+            return false;
+        }
+        let parent_pids: Vec<_> = entries
+            .iter()
+            .map(|entry| (entry.pid, entry.parent_pid))
+            .collect();
+        process_tree_contains(launcher_pid, game_pid, &parent_pids)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (
+            launcher_pid,
+            launcher_identity,
+            game_pid,
+            game_identity,
+            expected_executable,
+        );
+        false
+    }
+}
+
+#[cfg(windows)]
+fn verified_game_tree(
+    game_pid: u32,
+    game_identity: Option<ProcessIdentity>,
+    expected_executable: Option<&Path>,
+    allow_unverified_root: bool,
+) -> Result<Vec<u32>, String> {
+    if game_identity.is_some_and(|expected| {
+        process_identity(game_pid).is_some_and(|current| current != expected)
+    }) {
+        return Err(format!(
+            "force_quit_target_stale: PID {game_pid} identity no longer cocok"
+        ));
+    }
+    if !allow_unverified_root && !is_verified_game_pid(game_pid, expected_executable) {
+        return Err(format!(
+            "force_quit_target_not_verified: PID {game_pid} bukan proses game yang terverifikasi"
+        ));
+    }
+
+    let entries =
+        process_snapshot().ok_or_else(|| "force_quit_process_snapshot_failed".to_string())?;
+    let parent_pids: Vec<_> = entries
+        .iter()
+        .map(|entry| (entry.pid, entry.parent_pid))
+        .collect();
+    let mut pids: Vec<_> = entries
+        .into_iter()
+        .filter(|entry| process_tree_contains(game_pid, entry.pid, &parent_pids))
+        .map(|entry| entry.pid)
+        .collect();
+    if !pids.contains(&game_pid) {
+        pids.push(game_pid);
+    }
+    pids.sort_by_key(|pid| {
+        std::cmp::Reverse(process_tree_depth(game_pid, *pid, &parent_pids).unwrap_or(0))
+    });
+    pids.dedup();
+    Ok(pids)
+}
+
+#[cfg(windows)]
+fn terminate_process_pid(pid: u32) -> Result<bool, String> {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{
         OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
     };
 
-    if !is_verified_game_pid(pid, expected_executable) {
-        return Err(format!(
-            "force_quit_target_not_verified: PID {pid} bukan proses game yang terverifikasi"
-        ));
-    }
-
     unsafe {
         let handle = OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, false, pid)
-            .map_err(|error| format!("force_quit_open_failed: {error}"))?;
+            .map_err(|error| format!("force_quit_open_failed: PID {pid}: {error}"))?;
         let result = (|| -> Result<bool, String> {
             TerminateProcess(handle, 1)
-                .map_err(|error| format!("force_quit_terminate_failed: {error}"))?;
+                .map_err(|error| format!("force_quit_terminate_failed: PID {pid}: {error}"))?;
             let _ = WaitForSingleObject(handle, 5_000);
             Ok(true)
         })();
@@ -818,28 +1209,228 @@ fn terminate_verified_game_pid(
     }
 }
 
-pub fn force_quit_game_with_pid(
-    tracked_pid: Option<u32>,
+#[cfg(windows)]
+fn terminate_process_handle(raw_handle: usize) -> Result<bool, String> {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::Threading::{TerminateProcess, WaitForSingleObject};
+
+    let handle = HANDLE(raw_handle as *mut std::ffi::c_void);
+    unsafe {
+        TerminateProcess(handle, 1)
+            .map_err(|error| format!("force_quit_handle_terminate_failed: {error}"))?;
+        let _ = WaitForSingleObject(handle, 5_000);
+    }
+    Ok(true)
+}
+
+#[cfg(windows)]
+pub fn close_termination_handle(raw_handle: usize) {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+
+    unsafe {
+        let _ = CloseHandle(HANDLE(raw_handle as *mut std::ffi::c_void));
+    }
+}
+
+#[cfg(windows)]
+fn terminate_process_tree_elevated(game_pid: u32) -> Result<bool, String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{CloseHandle, GetLastError};
+    use windows::Win32::System::Threading::WaitForSingleObject;
+    use windows::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
+    use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+
+    let taskkill = std::env::var_os("WINDIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"))
+        .join("System32")
+        .join("taskkill.exe");
+    let verb: Vec<u16> = std::ffi::OsStr::new("runas")
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let executable: Vec<u16> = taskkill.as_os_str().encode_wide().chain(Some(0)).collect();
+    let parameters: Vec<u16> = std::ffi::OsStr::new(&format!("/PID {game_pid} /T /F"))
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOCLOSEPROCESS,
+        lpVerb: PCWSTR::from_raw(verb.as_ptr()),
+        lpFile: PCWSTR::from_raw(executable.as_ptr()),
+        lpParameters: PCWSTR::from_raw(parameters.as_ptr()),
+        nShow: SW_HIDE.0,
+        ..Default::default()
+    };
+
+    if !unsafe { ShellExecuteExW(&mut info).is_ok() } {
+        return Err(format!("force_quit_elevated_failed: {}", unsafe {
+            GetLastError().0
+        }));
+    }
+    let handle = info.hProcess;
+    unsafe {
+        let _ = WaitForSingleObject(handle, 10_000);
+        let _ = CloseHandle(handle);
+    }
+    Ok(true)
+}
+
+#[cfg(windows)]
+fn terminate_verified_game_tree(
+    game_pid: u32,
+    game_identity: Option<ProcessIdentity>,
     expected_executable: Option<&Path>,
+    allow_unverified_root: bool,
+    termination_handle: Option<usize>,
+) -> Result<bool, String> {
+    let pids = verified_game_tree(
+        game_pid,
+        game_identity,
+        expected_executable,
+        allow_unverified_root,
+    )?;
+    let mut terminated = false;
+    for pid in pids {
+        if pid == game_pid {
+            if let Some(handle) = termination_handle {
+                terminated |= terminate_process_handle(handle)?;
+                continue;
+            }
+        } else if let Some(entries) = process_snapshot() {
+            let parent_pids: Vec<_> = entries
+                .iter()
+                .map(|entry| (entry.pid, entry.parent_pid))
+                .collect();
+            if !process_tree_contains(game_pid, pid, &parent_pids) {
+                continue;
+            }
+        } else {
+            return terminate_process_tree_elevated(game_pid);
+        }
+        match terminate_process_pid(pid) {
+            Ok(value) => terminated |= value,
+            Err(error) => {
+                log::warn!("Force quit PID {pid} membutuhkan elevated fallback: {error}");
+                return terminate_process_tree_elevated(game_pid);
+            }
+        }
+    }
+    Ok(terminated)
+}
+
+pub fn force_quit_game_with_ownership(
+    tracked_pid: Option<u32>,
+    tracked_identity: Option<ProcessIdentity>,
+    game_pid: Option<u32>,
+    game_identity: Option<ProcessIdentity>,
+    expected_executable: Option<&Path>,
+    termination_handle: Option<usize>,
 ) -> Result<bool, String> {
     #[cfg(windows)]
     {
-        let detected_pid = tracked_pid
-            .is_none()
-            .then(|| find_game_process_id_for_path(expected_executable))
-            .flatten();
-        let Some(pid) = select_force_quit_pid(tracked_pid, detected_pid) else {
+        let Some(root_pid) = tracked_pid else {
             return Ok(false);
         };
-        return terminate_verified_game_pid(pid, expected_executable);
+        let handle_identity = termination_handle.and_then(process_identity_from_termination_handle);
+        if tracked_identity
+            .zip(handle_identity)
+            .is_some_and(|(tracked, handle)| tracked != handle)
+        {
+            return Err(
+                "force_quit_target_stale: retained process handle identity mismatch".to_string(),
+            );
+        }
+        let root_identity = tracked_identity.or(handle_identity);
+        let root_identity_matches = root_identity
+            .is_some_and(|identity| launcher_identity_matches_snapshot(root_pid, identity));
+        let retained_handle_matches_root = termination_handle.is_some()
+            && handle_identity.is_some()
+            && handle_identity == root_identity;
+        let resolved_game_pid = find_launcher_game_process_id_with_identity(
+            root_pid,
+            root_identity,
+            expected_executable,
+        )
+        .or_else(|| {
+            game_pid.filter(|pid| {
+                is_launcher_owned_game_process(
+                    root_pid,
+                    root_identity,
+                    *pid,
+                    game_identity,
+                    expected_executable,
+                )
+            })
+        })
+        .or_else(|| {
+            (root_identity_matches
+                && (retained_handle_matches_root
+                    || is_verified_game_pid(root_pid, expected_executable)))
+            .then_some(root_pid)
+        });
+        let Some(resolved_game_pid) = resolved_game_pid else {
+            return Err(
+                "force_quit_target_not_verified: launcher-owned game process tidak ditemukan"
+                    .to_string(),
+            );
+        };
+        let resolved_identity = if game_pid == Some(resolved_game_pid) {
+            game_identity
+        } else if resolved_game_pid == root_pid {
+            root_identity
+        } else {
+            None
+        };
+        let root_handle = (resolved_game_pid == root_pid && retained_handle_matches_root)
+            .then_some(termination_handle)
+            .flatten();
+        return terminate_verified_game_tree(
+            resolved_game_pid,
+            resolved_identity,
+            expected_executable,
+            root_handle.is_some(),
+            root_handle,
+        );
     }
 
     #[cfg(not(windows))]
     {
-        let _ = tracked_pid;
-        let _ = expected_executable;
+        let _ = (
+            tracked_pid,
+            tracked_identity,
+            game_pid,
+            game_identity,
+            expected_executable,
+            termination_handle,
+        );
         Ok(false)
     }
+}
+
+pub fn force_quit_game_with_identity(
+    tracked_pid: Option<u32>,
+    tracked_identity: Option<ProcessIdentity>,
+    expected_executable: Option<&Path>,
+    termination_handle: Option<usize>,
+) -> Result<bool, String> {
+    force_quit_game_with_ownership(
+        tracked_pid,
+        tracked_identity,
+        None,
+        None,
+        expected_executable,
+        termination_handle,
+    )
+}
+
+pub fn force_quit_game_with_pid(
+    tracked_pid: Option<u32>,
+    expected_executable: Option<&Path>,
+) -> Result<bool, String> {
+    force_quit_game_with_identity(tracked_pid, None, expected_executable, None)
 }
 
 pub fn force_quit_game() -> Result<bool, String> {
@@ -885,6 +1476,84 @@ mod tests {
         assert_eq!(command.arguments, vec!["-dx11"]);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn direct_process_try_wait_does_not_join_inherited_pipes() {
+        use std::time::{Duration, Instant};
+
+        let temp = tempfile::tempdir().unwrap();
+        let shell = std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into());
+        let shell_path = PathBuf::from(shell);
+        let mut command = LaunchCommand::new(&shell_path, temp.path(), false);
+        command.arguments = vec![
+            "/C".to_string(),
+            "start".to_string(),
+            "".to_string(),
+            "/B".to_string(),
+            shell_path.display().to_string(),
+            "/C".to_string(),
+            "timeout /T 2 /NOBREAK >NUL".to_string(),
+        ];
+        let managed = spawn_direct(&command).unwrap();
+        let pid = match &managed {
+            ManagedProcess::Direct(process) => process.child.id(),
+            #[cfg(windows)]
+            ManagedProcess::Elevated(_) => unreachable!(),
+        };
+        let mut launched = LaunchedGame {
+            pid,
+            mode: LaunchMode::Direct,
+            process: managed,
+        };
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(5);
+        loop {
+            if launched.try_wait().unwrap().is_some() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "root process did not exit");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(started.elapsed() < Duration::from_secs(2));
+        let _ = launched.finalize();
+    }
+
+    #[test]
+    fn process_tree_matching_requires_verified_ancestry() {
+        let parents = [(99, 42), (123, 99), (777, 500)];
+
+        assert!(process_tree_contains(42, 42, &parents));
+        assert!(process_tree_contains(42, 99, &parents));
+        assert!(process_tree_contains(42, 123, &parents));
+        assert!(!process_tree_contains(42, 777, &parents));
+        assert!(!process_tree_contains(42, 500, &parents));
+    }
+
+    #[test]
+    fn owned_runtime_state_survives_child_handoff_without_claiming_external_games() {
+        assert_eq!(
+            reconcile_runtime_state_with_owned(Some(42), Some(99), Some(99)),
+            RuntimeState {
+                active: true,
+                origin: ProcessOrigin::Launcher,
+            }
+        );
+        assert_eq!(
+            reconcile_runtime_state_with_owned(None, Some(99), None),
+            RuntimeState {
+                active: true,
+                origin: ProcessOrigin::External,
+            }
+        );
+        assert_eq!(
+            reconcile_runtime_state_with_owned(Some(42), None, Some(99)),
+            RuntimeState {
+                active: true,
+                origin: ProcessOrigin::Launcher,
+            }
+        );
+    }
+
     #[test]
     fn spawn_error_classification_distinguishes_elevation_and_cancel() {
         assert_eq!(
@@ -899,7 +1568,7 @@ mod tests {
     }
 
     #[test]
-    fn launch_failure_message_keeps_actionable_evidence_fields_non_empty() {
+    fn launch_failure_message_is_compact_and_keeps_evidence_local() {
         let command = LaunchCommand::new(
             Path::new(r"C:\Games\Client-Win64-Shipping.exe"),
             Path::new(r"C:\Games"),
@@ -910,11 +1579,19 @@ mod tests {
         let message = evidence.user_message();
 
         assert!(message.contains("elevation_required"));
-        assert!(message.contains("pid=none"));
         assert!(message.contains("exit_code=none"));
-        assert!(message.contains("stderr=none"));
-        assert!(message.contains("stdout=none"));
-        assert!(message.contains("game_log_tail=none"));
+        assert!(message.contains("reason=Administrator permission required"));
+        assert!(message.contains("evidence_path=none"));
+        assert!(!message.contains("game_log_tail"));
+        assert!(!message.contains("stderr="));
+        assert!(!message.contains("stdout="));
+    }
+
+    #[test]
+    fn compact_failure_detail_handles_unicode_without_panicking() {
+        let detail = compact_detail(&"é".repeat(200));
+        assert!(detail.chars().count() <= 180);
+        assert!(detail.ends_with('…'));
     }
 
     #[test]

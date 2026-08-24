@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   CleanupReport,
   InstallMethod,
+  GameExitPayload,
   LauncherUpdatePayload,
   LauncherUpdateStatusPayload,
   MediaProgressPayload,
@@ -34,15 +35,20 @@ export const bridge = {
   // Update & Release Notes
   checkLauncherUpdate: (): Promise<void> => invoke("check_launcher_update"),
   getVhReleaseNotes: (): Promise<void> => invoke("get_vh_release_notes"),
-  getLauncherReleaseNotes: (): Promise<void> => invoke("get_launcher_release_notes"),
+  getLauncherReleaseNotes: (): Promise<void> =>
+    invoke("get_launcher_release_notes"),
   performLauncherUpdate: (version: string): Promise<void> =>
     invoke("perform_launcher_update", { version }),
 
   // Patch Management
-  checkPatchStatus: (gamePath: string, installMethod: InstallMethod): Promise<void> =>
-    invoke("check_patch_status", { gamePath, installMethod }),
-  switchMethod: (gamePath: string, newMethod: InstallMethod): Promise<CleanupReport> =>
-    invoke("switch_method", { gamePath, newMethod }),
+  checkPatchStatus: (
+    gamePath: string,
+    installMethod: InstallMethod,
+  ): Promise<void> => invoke("check_patch_status", { gamePath, installMethod }),
+  switchMethod: (
+    gamePath: string,
+    newMethod: InstallMethod,
+  ): Promise<CleanupReport> => invoke("switch_method", { gamePath, newMethod }),
   startInstallation: (
     gamePath: string,
     vhMode: string,
@@ -76,7 +82,6 @@ export const bridge = {
   notifyUiInteractive: (installMethod: InstallMethod): Promise<void> =>
     invoke("notify_ui_interactive", { installMethod }),
   resetWebViewCache: (): Promise<void> => invoke("reset_webview_cache"),
-
 };
 
 // Event listener helper for Tauri events
@@ -93,6 +98,7 @@ export interface EventBridgeCallbacks {
   onLaunchError?: (error: string) => void;
   onGameLaunchStarted?: () => void;
   onGameLaunchFinished?: () => void;
+  onGameExit?: (payload: GameExitPayload) => void;
   onLauncherUpdateProgress?: (percent: number, statusText: string) => void;
   onLauncherUpdateAvailable?: (payload: LauncherUpdatePayload) => void;
   onLauncherUpdateStatus?: (payload: LauncherUpdateStatusPayload) => void;
@@ -165,6 +171,9 @@ export async function setupEventBridge(
     ),
     addListener<void>("onGameLaunchFinished", () =>
       callbacks.onGameLaunchFinished?.(),
+    ),
+    addListener<GameExitPayload>("onGameExit", (payload) =>
+      callbacks.onGameExit?.(payload),
     ),
     addListener<{ percent: number; status: string }>(
       "onLauncherUpdateProgress",

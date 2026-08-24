@@ -80,6 +80,8 @@ fn operations_conflict(left: OperationKind, right: OperationKind) -> bool {
         | (OperationKind::MethodSwitch, OperationKind::GameLaunch)
         | (OperationKind::GameLaunch, OperationKind::Uninstall)
         | (OperationKind::Uninstall, OperationKind::GameLaunch) => true,
+        (OperationKind::GameLaunch, OperationKind::ForceQuit)
+        | (OperationKind::ForceQuit, OperationKind::GameLaunch) => false,
         _ => true,
     }
 }
@@ -217,5 +219,13 @@ mod tests {
         assert!(error.contains("game launch"));
         drop(launch);
         assert!(coordinator.request_close().is_ok());
+    }
+
+    #[test]
+    fn force_quit_can_interrupt_game_launch() {
+        let coordinator = OperationCoordinator::default();
+        let launch = coordinator.try_acquire(OperationKind::GameLaunch).unwrap();
+        assert!(coordinator.try_acquire(OperationKind::ForceQuit).is_ok());
+        drop(launch);
     }
 }

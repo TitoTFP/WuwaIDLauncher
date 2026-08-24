@@ -1,4 +1,9 @@
 import { bridge, setupEventBridge } from "./bridge";
+import {
+  compactText,
+  createGameExitDeduper,
+  gameExitToast,
+} from "./gameExitNotice.js";
 import { createPatchStatusWaiter } from "./patchStatusWait.js";
 import {
   DEFAULT_LAUNCHER_CONFIG,
@@ -62,6 +67,13 @@ function operationsConflict(
     return false;
   }
 
+  if (
+    (left === "launch" && right === "force-quit") ||
+    (right === "launch" && left === "force-quit")
+  ) {
+    return false;
+  }
+
   return true;
 }
 
@@ -106,9 +118,12 @@ export class LauncherState implements ILauncherState {
   vhVersion: string = $state<string>("");
   statusMessage: string = $state<string>("");
   diagnosticMessage: string = $state<string>("");
-  mediaStatus: MediaStatusPayload["status"] | "" = $state<MediaStatusPayload["status"] | "">("");
+  mediaStatus: MediaStatusPayload["status"] | "" = $state<
+    MediaStatusPayload["status"] | ""
+  >("");
   mediaStatusMessage: string = $state<string>("");
-  mediaProgress: MediaProgressPayload | null = $state<MediaProgressPayload | null>(null);
+  mediaProgress: MediaProgressPayload | null =
+    $state<MediaProgressPayload | null>(null);
   launcherUpdateProgress: number = $state<number>(0);
   launcherUpdateStatus: string = $state<string>("");
   launcherUpdateError: string = $state<string>("");
@@ -125,7 +140,8 @@ export class LauncherState implements ILauncherState {
     null,
   );
   releaseNotesLoading: boolean = $state<boolean>(true);
-  firstLaunchLauncherReleaseNotes: ReleaseNotePayload | null = $state<ReleaseNotePayload | null>(null);
+  firstLaunchLauncherReleaseNotes: ReleaseNotePayload | null =
+    $state<ReleaseNotePayload | null>(null);
 
   // Launcher Self-Update
   launcherUpdateAvailable: boolean = $state<boolean>(false);
@@ -133,6 +149,7 @@ export class LauncherState implements ILauncherState {
     $state<LauncherUpdatePayload | null>(null);
   toasts: ToastMessage[] = $state<ToastMessage[]>([]);
   private toastSequence = 0;
+  private acceptGameExit = createGameExitDeduper();
   private operationSequence = 0;
   private activeOperations: ActiveOperation[] = $state<ActiveOperation[]>([]);
   private operationByKind = new Map<LauncherOperation, OperationToken>();
@@ -140,8 +157,6 @@ export class LauncherState implements ILauncherState {
   private initPromise: Promise<void> | null = null;
   private initialized = false;
   private lifecycleGeneration = 0;
-  private configRevision = 0;
-  private lastSavedConfigRevision = 0;
   private pendingConfigSaveCount = 0;
   private saveQueue: Promise<void> = Promise.resolve();
   private patchStatusGeneration = 0;
@@ -162,7 +177,10 @@ export class LauncherState implements ILauncherState {
     const kind = /gagal|tidak|error|invalid|konflik|failed/i.test(message)
       ? "err"
       : "info";
-    const text = diagnostic && diagnostic !== message ? `${message}\n${diagnostic}` : message;
+    const text =
+      diagnostic && diagnostic !== message
+        ? `${message}\n${diagnostic}`
+        : message;
     this.showToast(text, kind);
   }
 
@@ -328,7 +346,9 @@ export class LauncherState implements ILauncherState {
       }
 
       this.activePatchStatusRequest = request;
-      const eventWaiter = createPatchStatusWaiter(PATCH_STATUS_EVENT_TIMEOUT_MS);
+      const eventWaiter = createPatchStatusWaiter(
+        PATCH_STATUS_EVENT_TIMEOUT_MS,
+      );
       this.patchStatusWaiters.set(request.generation, eventWaiter.resolve);
 
       try {
@@ -544,7 +564,9 @@ export class LauncherState implements ILauncherState {
         );
       }
     } catch {
-      this.setStatus("Konfigurasi launcher tidak dapat dimuat; memakai default.");
+      this.setStatus(
+        "Konfigurasi launcher tidak dapat dimuat; memakai default.",
+      );
     }
     if (!isCurrent()) return;
 
@@ -640,14 +662,17 @@ export class LauncherState implements ILauncherState {
         this.clearStatus();
         const completedPath = this.gamePath;
         const completedMethod = this.config.installMethod;
-        bridge.getVhVersion().then((version) => {
-          if (
-            this.gamePath === completedPath &&
-            this.config.installMethod === completedMethod
-          ) {
-            this.vhVersion = version;
-          }
-        }).catch(() => {});
+        bridge
+          .getVhVersion()
+          .then((version) => {
+            if (
+              this.gamePath === completedPath &&
+              this.config.installMethod === completedMethod
+            ) {
+              this.vhVersion = version;
+            }
+          })
+          .catch(() => {});
       },
       onInstallError: (err) => {
         if (!this.endCurrentOperation("install")) return;
@@ -664,11 +689,15 @@ export class LauncherState implements ILauncherState {
         );
       },
       onLaunchError: (err) => {
-        if (!this.endCurrentOperation("launch")) return;
+        this.endCurrentOperation("launch");
         this.launching = false;
-        this.setStatus(
-          "Game tidak dapat dijalankan.",
-          err || "Tidak ada detail error.",
+        this.clearStatus();
+        const detail = compactText(err || "");
+        this.showToast(
+          detail
+            ? `Game tidak dapat dijalankan: ${detail}`
+            : "Game tidak dapat dijalankan.",
+          "err",
         );
       },
       onGameLaunchStarted: () => {
@@ -677,6 +706,15 @@ export class LauncherState implements ILauncherState {
       onGameLaunchFinished: () => {
         if (!this.endCurrentOperation("launch")) return;
         this.launching = false;
+      },
+      onGameExit: (payload) => {
+        if (!this.acceptGameExit(payload)) return;
+        this.endCurrentOperation("launch");
+        this.launching = false;
+        this.gameRunning = false;
+        this.clearStatus();
+        const toast = gameExitToast(payload);
+        this.showToast(toast.message, toast.kind);
       },
       onLauncherUpdateProgress: (percent, statusText) => {
         this.launcherUpdateProgress = percent;
@@ -692,7 +730,10 @@ export class LauncherState implements ILauncherState {
             ? "Launcher sedang dimulai ulang..."
             : `Update selesai diunduh. Launcher akan tertutup otomatis dan dibuka kembali dalam ${safeSeconds} detik.`;
         if (safeSeconds === 0) this.endCurrentOperation("launcher-update");
-        else this.setStatus("Launcher akan tertutup otomatis lalu dibuka kembali.");
+        else
+          this.setStatus(
+            "Launcher akan tertutup otomatis lalu dibuka kembali.",
+          );
       },
       onLauncherUpdateError: (error) => {
         this.endCurrentOperation("launcher-update");
@@ -754,7 +795,11 @@ export class LauncherState implements ILauncherState {
       onLauncherReleaseNotes: (payload) => {
         if (payload.tag.trim()) {
           try {
-            if (!localStorage.getItem(launcherReleaseNotesSeenStorageKey(payload.tag))) {
+            if (
+              !localStorage.getItem(
+                launcherReleaseNotesSeenStorageKey(payload.tag),
+              )
+            ) {
               this.firstLaunchLauncherReleaseNotes = payload;
             }
           } catch {
@@ -821,7 +866,6 @@ export class LauncherState implements ILauncherState {
     this.gamePath = this.config.gamePath;
     this.bgmVolume = this.config.bgmVolume;
 
-    const revision = ++this.configRevision;
     const serialized = JSON.stringify(this.config);
     this.pendingConfigSaveCount += 1;
     this.configSavePending = true;
@@ -837,9 +881,6 @@ export class LauncherState implements ILauncherState {
 
     try {
       await save;
-      if (revision === this.configRevision) {
-        this.lastSavedConfigRevision = revision;
-      }
     } finally {
       this.pendingConfigSaveCount -= 1;
       this.configSavePending = this.pendingConfigSaveCount > 0;

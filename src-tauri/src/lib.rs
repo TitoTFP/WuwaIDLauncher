@@ -3,7 +3,7 @@ pub mod engine;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::http::{Request, Response};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -17,6 +17,8 @@ const WUWAID_LATEST_CHECKSUMS_URL: &str =
     "https://github.com/TitoTFP/WuwaID/releases/latest/download/SHA256sums.txt";
 const SUPPORT_URL: &str = "https://trakteer.id/TitoTFP";
 const LAUNCHER_UPDATE_RESTART_DELAY_SECONDS: u64 = 12;
+const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const PROCESS_HANDOFF_GRACE: Duration = Duration::from_secs(3);
 
 #[cfg(windows)]
 fn windows_directory() -> PathBuf {
@@ -232,9 +234,19 @@ fn window_minimize_action(tray_mode: bool) -> WindowMinimizeAction {
     }
 }
 
+fn should_hide_to_tray(tray_mode: bool, launcher_pid: Option<u32>) -> bool {
+    tray_mode || launcher_pid.is_some()
+}
+
 #[derive(Default)]
 struct RuntimeCoordinator {
     launcher_pid: Mutex<Option<u32>>,
+    launcher_root_pid: Mutex<Option<u32>>,
+    launcher_game_pid: Mutex<Option<u32>>,
+    launcher_identity: Mutex<Option<engine::runtime::ProcessIdentity>>,
+    launcher_game_identity: Mutex<Option<engine::runtime::ProcessIdentity>>,
+    #[cfg(windows)]
+    termination_handle: Mutex<Option<usize>>,
     force_quit_requested: Mutex<bool>,
     tray_mode: Mutex<bool>,
 }
@@ -244,15 +256,93 @@ fn coordinator_launcher_pid<R: Runtime>(app: &AppHandle<R>) -> Option<u32> {
         .and_then(|state| state.launcher_pid.lock().ok().and_then(|value| *value))
 }
 
+fn coordinator_launcher_root_pid<R: Runtime>(app: &AppHandle<R>) -> Option<u32> {
+    app.try_state::<RuntimeCoordinator>()
+        .and_then(|state| state.launcher_root_pid.lock().ok().and_then(|value| *value))
+}
+
+fn coordinator_launcher_identity<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Option<engine::runtime::ProcessIdentity> {
+    app.try_state::<RuntimeCoordinator>()
+        .and_then(|state| state.launcher_identity.lock().ok().and_then(|value| *value))
+}
+
+fn coordinator_launcher_game_pid<R: Runtime>(app: &AppHandle<R>) -> Option<u32> {
+    app.try_state::<RuntimeCoordinator>()
+        .and_then(|state| state.launcher_game_pid.lock().ok().and_then(|value| *value))
+}
+
+fn coordinator_launcher_game_identity<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Option<engine::runtime::ProcessIdentity> {
+    app.try_state::<RuntimeCoordinator>().and_then(|state| {
+        state
+            .launcher_game_identity
+            .lock()
+            .ok()
+            .and_then(|value| *value)
+    })
+}
+
+#[cfg(windows)]
+fn set_launcher_termination_handle<R: Runtime>(app: &AppHandle<R>, handle: Option<usize>) {
+    if let Some(state) = app.try_state::<RuntimeCoordinator>() {
+        if let Ok(mut value) = state.termination_handle.lock() {
+            if let Some(previous) = std::mem::replace(&mut *value, handle) {
+                engine::runtime::close_termination_handle(previous);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn take_launcher_termination_handle<R: Runtime>(app: &AppHandle<R>) -> Option<usize> {
+    app.try_state::<RuntimeCoordinator>()
+        .and_then(|state| state.termination_handle.lock().ok()?.take())
+}
+
 fn set_launcher_process<R: Runtime>(app: &AppHandle<R>, pid: Option<u32>) {
     if let Some(state) = app.try_state::<RuntimeCoordinator>() {
         if let Ok(mut value) = state.launcher_pid.lock() {
             *value = pid;
         }
+        if let Ok(mut value) = state.launcher_root_pid.lock() {
+            *value = pid;
+        }
+        if let Ok(mut value) = state.launcher_game_pid.lock() {
+            *value = pid;
+        }
+        let identity = pid.and_then(engine::runtime::process_identity);
+        if let Ok(mut value) = state.launcher_identity.lock() {
+            *value = identity;
+        }
+        if let Ok(mut value) = state.launcher_game_identity.lock() {
+            *value = identity;
+        }
+        #[cfg(windows)]
+        if pid.is_none() {
+            if let Ok(mut value) = state.termination_handle.lock() {
+                if let Some(handle) = value.take() {
+                    engine::runtime::close_termination_handle(handle);
+                }
+            }
+        }
         if pid.is_some() {
             if let Ok(mut value) = state.force_quit_requested.lock() {
                 *value = false;
             }
+        }
+    }
+}
+
+fn set_launcher_game_process<R: Runtime>(app: &AppHandle<R>, pid: u32) {
+    if let Some(state) = app.try_state::<RuntimeCoordinator>() {
+        if let Ok(mut value) = state.launcher_game_pid.lock() {
+            *value = Some(pid);
+        }
+        if let Ok(mut value) = state.launcher_game_identity.lock() {
+            *value = engine::runtime::process_identity(pid);
         }
     }
 }
@@ -328,6 +418,62 @@ fn take_force_quit_requested<R: Runtime>(app: &AppHandle<R>) -> bool {
         .unwrap_or(false)
 }
 
+fn launcher_force_quit_pid(tracked_pid: Option<u32>) -> Result<u32, String> {
+    tracked_pid.ok_or_else(|| {
+        "force_quit_target_not_launcher_launched: tidak ada game launcher-launched aktif"
+            .to_string()
+    })
+}
+
+fn emit_game_exit_notice<R: Runtime>(
+    app: &AppHandle<R>,
+    evidence: &engine::runtime::LaunchEvidence,
+    origin: engine::runtime::ProcessOrigin,
+    status: &'static str,
+    reason: impl Into<String>,
+) {
+    if origin != engine::runtime::ProcessOrigin::Launcher {
+        return;
+    }
+    let id = format!(
+        "{}:{}",
+        evidence.started_at_ms,
+        evidence.pid.unwrap_or_default()
+    );
+    let _ = app.emit(
+        "onGameExit",
+        serde_json::json!({
+            "id": id,
+            "status": status,
+            "reason": reason.into(),
+        }),
+    );
+}
+
+fn complete_launcher_exit<R: Runtime>(
+    app: &AppHandle<R>,
+    evidence: &engine::runtime::LaunchEvidence,
+    status: &'static str,
+    reason: impl Into<String>,
+) {
+    let _ = save_launch_evidence(evidence.clone());
+    emit_game_exit_notice(
+        app,
+        evidence,
+        engine::runtime::ProcessOrigin::Launcher,
+        status,
+        reason,
+    );
+    finish_launch_lifecycle(app);
+}
+
+fn exit_reason(prefix: &str, exit_code: Option<i32>) -> String {
+    match exit_code {
+        Some(code) => format!("{prefix} (exit code {code})"),
+        None => prefix.to_string(),
+    }
+}
+
 fn save_launch_evidence(mut evidence: engine::runtime::LaunchEvidence) -> Option<PathBuf> {
     let diagnostics_dir = get_appdata_dir().join("Diagnostics");
     if std::fs::create_dir_all(&diagnostics_dir).is_err() {
@@ -357,6 +503,21 @@ fn launch_error_message(mut evidence: engine::runtime::LaunchEvidence) -> String
     let path = save_launch_evidence(evidence.clone());
     evidence.evidence_path = path;
     evidence.user_message()
+}
+
+fn emit_launch_failure<R: Runtime>(
+    app: &AppHandle<R>,
+    game_path: &str,
+    dx11: bool,
+    error: impl Into<String>,
+) {
+    let mut evidence = engine::runtime::LaunchEvidence::for_failure(
+        engine::runtime::build_launch_command(Path::new(game_path), dx11),
+        engine::runtime::SpawnFailureKind::SpawnFailed,
+        None,
+    );
+    evidence.error = Some(error.into());
+    let _ = app.emit("onLaunchError", launch_error_message(evidence));
 }
 
 fn finish_launch_lifecycle<R: Runtime>(app: &AppHandle<R>) {
@@ -412,16 +573,52 @@ fn spawn_runtime_monitor<R: Runtime>(app: AppHandle<R>) {
             let expected_executable = configured_game_executable();
             let detected_pid =
                 engine::runtime::find_game_process_id_for_path(expected_executable.as_deref());
-            let state = engine::runtime::reconcile_runtime_state(
-                coordinator_launcher_pid(&app),
-                detected_pid,
-            );
+            let launcher_root_pid = coordinator_launcher_root_pid(&app);
+            let launcher_identity = coordinator_launcher_identity(&app);
+            let current_pid = coordinator_launcher_game_pid(&app);
+            let current_identity = coordinator_launcher_game_identity(&app);
+            let owned_pid = launcher_root_pid.and_then(|root_pid| {
+                engine::runtime::find_launcher_game_process_id_with_identity(
+                    root_pid,
+                    launcher_identity,
+                    expected_executable.as_deref(),
+                )
+                .or_else(|| {
+                    current_pid.filter(|pid| {
+                        engine::runtime::is_launcher_owned_game_process(
+                            root_pid,
+                            launcher_identity,
+                            *pid,
+                            current_identity,
+                            expected_executable.as_deref(),
+                        )
+                    })
+                })
+            });
+            if let Some(pid) = owned_pid {
+                set_launcher_game_process(&app, pid);
+            }
+            let tracked_pid = coordinator_launcher_pid(&app);
+            let state = if owned_pid.is_some() {
+                engine::runtime::reconcile_runtime_state_with_owned(
+                    tracked_pid,
+                    detected_pid,
+                    owned_pid,
+                )
+            } else if tracked_pid.is_some() {
+                // Keep ownership through a short process-discovery gap. The
+                // launch monitor is responsible for clearing this state only
+                // after the owned tree has actually finished.
+                engine::runtime::RuntimeState {
+                    active: true,
+                    origin: engine::runtime::ProcessOrigin::Launcher,
+                }
+            } else {
+                engine::runtime::reconcile_runtime_state(None, detected_pid)
+            };
             if previous != Some(state) {
                 emit_runtime_state(&app, state);
                 previous = Some(state);
-            }
-            if detected_pid.is_none() && coordinator_launcher_pid(&app).is_some() {
-                set_launcher_process(&app, None);
             }
         }
     });
@@ -464,7 +661,10 @@ pub fn parse_range_header(range_header: &str, total_len: u64) -> Option<(u64, u6
 #[tauri::command]
 fn minimize_window<R: Runtime>(window: WebviewWindow<R>) {
     let app = window.app_handle();
-    match window_minimize_action(is_tray_mode(app)) {
+    match window_minimize_action(should_hide_to_tray(
+        is_tray_mode(app),
+        coordinator_launcher_pid(app),
+    )) {
         WindowMinimizeAction::Minimize => {
             let _ = window.minimize();
         }
@@ -1672,6 +1872,61 @@ fn check_game_folder_write_access(
     }
 }
 
+fn wait_for_launcher_process_tree<R: Runtime>(
+    app: &AppHandle<R>,
+    process: &mut engine::runtime::LaunchedGame,
+    root_pid: u32,
+    launcher_identity: Option<engine::runtime::ProcessIdentity>,
+    expected_executable: &Path,
+) -> Result<engine::runtime::ProcessResult, String> {
+    let mut root_result = None;
+    let mut handoff_started_at = None;
+
+    loop {
+        if root_result.is_none() {
+            if let Some(result) = process.try_wait()? {
+                root_result = Some(result);
+                handoff_started_at = Some(Instant::now());
+            }
+        }
+
+        let current_pid = coordinator_launcher_game_pid(app);
+        let current_identity = coordinator_launcher_game_identity(app);
+        let owned_pid = engine::runtime::find_launcher_game_process_id_with_identity(
+            root_pid,
+            launcher_identity,
+            Some(expected_executable),
+        )
+        .or_else(|| {
+            current_pid.filter(|pid| {
+                engine::runtime::is_launcher_owned_game_process(
+                    root_pid,
+                    launcher_identity,
+                    *pid,
+                    current_identity,
+                    Some(expected_executable),
+                )
+            })
+        });
+        if let Some(pid) = owned_pid {
+            set_launcher_game_process(app, pid);
+            handoff_started_at = Some(Instant::now());
+        }
+        let has_descendant = engine::runtime::has_process_tree_descendant(root_pid);
+
+        if root_result.is_some()
+            && owned_pid.is_none()
+            && has_descendant == Some(false)
+            && handoff_started_at
+                .is_some_and(|started_at| started_at.elapsed() >= PROCESS_HANDOFF_GRACE)
+        {
+            return process.finalize();
+        }
+
+        std::thread::sleep(PROCESS_POLL_INTERVAL);
+    }
+}
+
 #[tauri::command]
 fn launch_game<R: Runtime>(
     app: AppHandle<R>,
@@ -1682,30 +1937,43 @@ fn launch_game<R: Runtime>(
     let method = match engine::method::InstallMethod::parse(&install_method) {
         Ok(method) => method,
         Err(error) => {
-            let _ = app.emit("onLaunchError", error.clone());
-            return Err(error);
+            emit_launch_failure(&app, &game_path, dx11, error);
+            return Ok(());
         }
     };
     let normalized_game_path =
         match engine::runtime::validate_launch_preconditions(&game_path, method) {
             Ok(path) => path,
             Err(error) => {
-                let _ = app.emit("onLaunchError", error.clone());
-                return Err(error);
+                emit_launch_failure(&app, &game_path, dx11, error);
+                return Ok(());
             }
         };
     if method == engine::method::InstallMethod::Loader {
         if let Err(error) = validate_loader_metadata(&normalized_game_path) {
-            let _ = app.emit("onLaunchError", error.clone());
-            return Err(error);
+            emit_launch_failure(&app, &game_path, dx11, error);
+            return Ok(());
         }
     }
-    let operation =
-        engine::operations::global().try_acquire(engine::operations::OperationKind::GameLaunch)?;
+    let operation = match engine::operations::global()
+        .try_acquire(engine::operations::OperationKind::GameLaunch)
+    {
+        Ok(operation) => operation,
+        Err(error) => {
+            emit_launch_failure(&app, &game_path, dx11, error);
+            return Ok(());
+        }
+    };
     let expected_executable = normalized_game_path.join(engine::path::GAME_EXE_RELATIVE);
     if let Some(pid) = engine::runtime::find_game_process_id_for_path(Some(&expected_executable)) {
         drop(operation);
-        return Err(format!("busy: game sedang berjalan (pid {pid})"));
+        emit_launch_failure(
+            &app,
+            &game_path,
+            dx11,
+            format!("busy: game sedang berjalan (pid {pid})"),
+        );
+        return Ok(());
     }
     let canonical_method = method.as_str().to_string();
     log::info!(
@@ -1729,11 +1997,16 @@ fn launch_game<R: Runtime>(
                 {
                     service.send_launch(method);
                 }
-                let mut evidence = engine::runtime::LaunchEvidence::for_process(
-                    command,
-                    process.mode,
-                    process.id(),
-                );
+                let root_pid = process.id();
+                let mut evidence =
+                    engine::runtime::LaunchEvidence::for_process(command, process.mode, root_pid);
+                #[cfg(windows)]
+                match process.duplicate_termination_handle() {
+                    Ok(handle) => set_launcher_termination_handle(&app_handle, handle),
+                    Err(error) => {
+                        log::warn!("Handle paksa tutup elevated tidak dapat disimpan: {error}");
+                    }
+                }
                 // Hide immediately after a successful spawn. Process discovery is
                 // still handled by the runtime monitor and no longer delays this.
                 if let Some(window) = app_handle.get_webview_window("main") {
@@ -1744,33 +2017,8 @@ fn launch_game<R: Runtime>(
                 }
                 engine::runtime::trim_memory_working_set();
 
-                match process.try_wait() {
-                    Ok(Some(result)) => {
-                        evidence.failure_kind =
-                            Some(engine::runtime::SpawnFailureKind::ImmediateExit);
-                        evidence.exit_code = result.exit_code;
-                        evidence.stdout = result.stdout;
-                        evidence.stderr = result.stderr;
-                        evidence.game_log_tail = engine::runtime::collect_game_log_tail(&p);
-                        evidence.mark_finished();
-                        let _ = app_handle.emit("onLaunchError", launch_error_message(evidence));
-                        finish_launch_lifecycle(&app_handle);
-                        return;
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        evidence.failure_kind =
-                            Some(engine::runtime::SpawnFailureKind::SpawnFailed);
-                        evidence.error = Some(error);
-                        evidence.game_log_tail = engine::runtime::collect_game_log_tail(&p);
-                        let _ = app_handle.emit("onLaunchError", launch_error_message(evidence));
-                        finish_launch_lifecycle(&app_handle);
-                        return;
-                    }
-                }
-
                 evidence.mark_detected();
-                set_launcher_process(&app_handle, Some(process.id()));
+                set_launcher_process(&app_handle, Some(root_pid));
                 emit_runtime_state(
                     &app_handle,
                     engine::runtime::RuntimeState {
@@ -1785,7 +2033,13 @@ fn launch_game<R: Runtime>(
                 let operation_for_monitor = operation;
                 tokio::task::spawn_blocking(move || {
                     let _operation = operation_for_monitor;
-                    let process_result = process.wait();
+                    let process_result = wait_for_launcher_process_tree(
+                        &app_for_monitor,
+                        &mut process,
+                        root_pid,
+                        coordinator_launcher_identity(&app_for_monitor),
+                        &p_for_monitor.join(engine::path::GAME_EXE_RELATIVE),
+                    );
                     match process_result {
                         Ok(result) => {
                             evidence.exit_code = result.exit_code;
@@ -1795,16 +2049,35 @@ fn launch_game<R: Runtime>(
                                 engine::runtime::collect_game_log_tail(&p_for_monitor);
                             evidence.mark_finished();
                             let force_quit = take_force_quit_requested(&app_for_monitor);
-                            if !force_quit && result.exit_code.unwrap_or(0) != 0 {
+                            if force_quit {
+                                complete_launcher_exit(
+                                    &app_for_monitor,
+                                    &evidence,
+                                    "force_quit",
+                                    "Proses dihentikan oleh launcher.",
+                                );
+                            } else if evidence.exit_code.unwrap_or(0) != 0 {
                                 evidence.failure_kind =
                                     Some(engine::runtime::SpawnFailureKind::ProcessCrashed);
                                 evidence.error = Some(
                                     "game process exited with a non-zero exit code".to_string(),
                                 );
-                                let _ = app_for_monitor
-                                    .emit("onLaunchError", launch_error_message(evidence.clone()));
+                                complete_launcher_exit(
+                                    &app_for_monitor,
+                                    &evidence,
+                                    "crashed",
+                                    exit_reason(
+                                        "Proses game berhenti tidak terduga",
+                                        evidence.exit_code,
+                                    ),
+                                );
                             } else {
-                                let _ = save_launch_evidence(evidence.clone());
+                                complete_launcher_exit(
+                                    &app_for_monitor,
+                                    &evidence,
+                                    "normal",
+                                    "Proses game selesai secara normal.",
+                                );
                             }
                         }
                         Err(error) => {
@@ -1813,11 +2086,14 @@ fn launch_game<R: Runtime>(
                             evidence.error = Some(error);
                             evidence.game_log_tail =
                                 engine::runtime::collect_game_log_tail(&p_for_monitor);
-                            let _ = app_for_monitor
-                                .emit("onLaunchError", launch_error_message(evidence.clone()));
+                            complete_launcher_exit(
+                                &app_for_monitor,
+                                &evidence,
+                                "crashed",
+                                "Pemantauan proses game gagal.",
+                            );
                         }
                     }
-                    finish_launch_lifecycle(&app_for_monitor);
                 });
             }
             Err(mut error) => {
@@ -1834,7 +2110,13 @@ fn launch_game<R: Runtime>(
 fn force_quit_game<R: Runtime>(app: AppHandle<R>) -> Result<bool, String> {
     let operation =
         engine::operations::global().try_acquire(engine::operations::OperationKind::ForceQuit)?;
-    let tracked_pid = coordinator_launcher_pid(&app);
+    let tracked_pid = match launcher_force_quit_pid(coordinator_launcher_pid(&app)) {
+        Ok(pid) => pid,
+        Err(error) => {
+            drop(operation);
+            return Err(error);
+        }
+    };
     let expected_executable = match configured_game_executable() {
         Some(path) => path,
         None => {
@@ -1844,42 +2126,36 @@ fn force_quit_game<R: Runtime>(app: AppHandle<R>) -> Result<bool, String> {
             );
         }
     };
-    if tracked_pid.is_some() {
-        mark_force_quit_requested(&app);
-    }
-    let terminated =
-        match engine::runtime::force_quit_game_with_pid(tracked_pid, Some(&expected_executable)) {
-            Ok(terminated) => terminated,
-            Err(error) => {
-                if tracked_pid.is_none()
-                    && engine::runtime::find_game_process_id_for_path(Some(&expected_executable))
-                        .is_none()
-                {
-                    set_launcher_process(&app, None);
-                }
-                let _ = app.emit("onLaunchError", format!("force_quit_failed: {error}"));
-                drop(operation);
-                return Err(error);
-            }
-        };
-
-    if tracked_pid.is_some() {
-        log::info!("Force quit game requested for tracked PID");
-        drop(operation);
-        return Ok(terminated);
-    }
-
-    set_launcher_process(&app, None);
-    emit_runtime_state(
-        &app,
-        engine::runtime::RuntimeState {
-            active: false,
-            origin: engine::runtime::ProcessOrigin::External,
-        },
+    mark_force_quit_requested(&app);
+    #[cfg(windows)]
+    let termination_handle = take_launcher_termination_handle(&app);
+    #[cfg(not(windows))]
+    let termination_handle = None;
+    let quit_result = engine::runtime::force_quit_game_with_ownership(
+        Some(tracked_pid),
+        coordinator_launcher_identity(&app),
+        coordinator_launcher_game_pid(&app),
+        coordinator_launcher_game_identity(&app),
+        Some(&expected_executable),
+        termination_handle,
     );
-    restore_launcher_from_tray(&app);
-    let _ = app.emit("onGameLaunchFinished", ());
-    log::info!("Force quit game requested");
+    #[cfg(windows)]
+    if let Some(handle) = termination_handle {
+        engine::runtime::close_termination_handle(handle);
+    }
+    let terminated = match quit_result {
+        Ok(terminated) => terminated,
+        Err(error) => {
+            let _ = take_force_quit_requested(&app);
+            drop(operation);
+            return Err(error);
+        }
+    };
+
+    if !terminated {
+        let _ = take_force_quit_requested(&app);
+    }
+    log::info!("Force quit game requested for tracked PID {tracked_pid}");
     drop(operation);
     Ok(terminated)
 }
@@ -2089,6 +2365,12 @@ mod tests {
             WindowMinimizeAction::Minimize
         );
         assert_eq!(window_minimize_action(true), WindowMinimizeAction::Hide);
+        assert!(should_hide_to_tray(false, Some(42)));
+        assert!(!should_hide_to_tray(false, None));
+        assert_eq!(launcher_force_quit_pid(Some(42)).unwrap(), 42);
+        assert!(launcher_force_quit_pid(None)
+            .unwrap_err()
+            .contains("not_launcher_launched"));
     }
 
     #[test]
@@ -2132,6 +2414,152 @@ mod tests {
     }
 
     #[test]
+    fn launcher_game_minimize_stays_in_tray_after_restore() {
+        let app = tauri::test::mock_builder()
+            .manage(RuntimeCoordinator::default())
+            .plugin(tauri_plugin_notification::init())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let handle = app.handle();
+        let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let (tray_tx, tray_rx) = sync_channel(4);
+        let tray_listener = app.listen_any("onLauncherTrayState", move |event| {
+            let _ = tray_tx.send(event.payload().to_string());
+        });
+
+        set_launcher_process(handle, Some(42));
+        set_tray_mode(handle, true);
+        restore_launcher_from_tray(handle);
+        assert!(window.is_visible().unwrap());
+        assert_eq!(
+            tray_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            "{\"inTray\":false}"
+        );
+
+        minimize_window(window.clone());
+        assert!(is_tray_mode(handle));
+        assert_eq!(
+            tray_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            "{\"inTray\":true}"
+        );
+
+        restore_launcher_from_tray(handle);
+        assert!(!is_tray_mode(handle));
+        assert!(window.is_visible().unwrap());
+        assert_eq!(
+            tray_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            "{\"inTray\":false}"
+        );
+
+        minimize_window(window.clone());
+        assert!(is_tray_mode(handle));
+        assert_eq!(
+            tray_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            "{\"inTray\":true}"
+        );
+        app.unlisten(tray_listener);
+    }
+
+    #[test]
+    fn force_quit_exit_restores_launcher_lifecycle() {
+        let _env_lock = lock_test_environment();
+        let appdata = tempfile::tempdir().unwrap();
+        std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
+        let app = tauri::test::mock_builder()
+            .manage(RuntimeCoordinator::default())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let handle = app.handle();
+        let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let evidence = engine::runtime::LaunchEvidence::for_process(
+            engine::runtime::LaunchCommand::new(
+                Path::new(r"C:\\Games\\Client-Win64-Shipping.exe"),
+                Path::new(r"C:\\Games"),
+                false,
+            ),
+            engine::runtime::LaunchMode::Direct,
+            42,
+        );
+        let (tx, rx) = sync_channel(1);
+        let listener = app.listen_any("onGameExit", move |event| {
+            let _ = tx.send(event.payload().to_string());
+        });
+
+        set_launcher_process(handle, Some(42));
+        set_tray_mode(handle, true);
+        mark_force_quit_requested(handle);
+        assert!(take_force_quit_requested(handle));
+        complete_launcher_exit(
+            handle,
+            &evidence,
+            "force_quit",
+            "Proses dihentikan oleh launcher.",
+        );
+
+        let payload: serde_json::Value =
+            serde_json::from_str(&rx.recv_timeout(Duration::from_secs(1)).unwrap()).unwrap();
+        assert_eq!(payload["status"], "force_quit");
+        assert!(!is_tray_mode(handle));
+        assert!(window.is_visible().unwrap());
+        assert!(coordinator_launcher_pid(handle).is_none());
+        assert!(appdata.path().join("Diagnostics").exists());
+        app.unlisten(listener);
+        std::env::remove_var("WUWAID_E2E_APPDATA");
+    }
+
+    #[test]
+    fn external_game_never_emits_launcher_exit_notice_or_restores_tray() {
+        let app = tauri::test::mock_builder()
+            .manage(RuntimeCoordinator::default())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let handle = app.handle();
+        let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let evidence = engine::runtime::LaunchEvidence::for_process(
+            engine::runtime::LaunchCommand::new(
+                Path::new(r"C:\\Games\\Client-Win64-Shipping.exe"),
+                Path::new(r"C:\\Games"),
+                false,
+            ),
+            engine::runtime::LaunchMode::Direct,
+            99,
+        );
+        let (tx, rx) = sync_channel(1);
+        let listener = app.listen_any("onGameExit", move |_event| {
+            let _ = tx.send(());
+        });
+        let (tray_tx, tray_rx) = sync_channel(1);
+        let tray_listener = app.listen_any("onLauncherTrayState", move |event| {
+            let _ = tray_tx.send(event.payload().to_string());
+        });
+
+        let state = engine::runtime::reconcile_runtime_state(None, Some(99));
+        assert_eq!(state.origin, engine::runtime::ProcessOrigin::External);
+        assert!(state.active);
+        assert!(coordinator_launcher_pid(handle).is_none());
+        emit_game_exit_notice(
+            handle,
+            &evidence,
+            engine::runtime::ProcessOrigin::External,
+            "normal",
+            "Proses eksternal selesai.",
+        );
+        assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
+        minimize_window(window.clone());
+        assert!(!is_tray_mode(handle));
+        assert!(tray_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        assert!(window.is_visible().unwrap());
+        app.unlisten(listener);
+        app.unlisten(tray_listener);
+    }
+
+    #[test]
     fn finishing_launch_lifecycle_delivers_runtime_and_completion_events() {
         let app = tauri::test::mock_builder()
             .manage(RuntimeCoordinator::default())
@@ -2163,6 +2591,47 @@ mod tests {
         assert!(coordinator_launcher_pid(handle).is_none());
         app.unlisten(runtime_listener);
         app.unlisten(finish_listener);
+    }
+
+    #[test]
+    fn game_exit_notice_payload_is_compact_and_stable() {
+        let app = tauri::test::mock_builder()
+            .manage(RuntimeCoordinator::default())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let handle = app.handle();
+        let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let evidence = engine::runtime::LaunchEvidence::for_process(
+            engine::runtime::LaunchCommand::new(
+                Path::new(r"C:\Games\Client-Win64-Shipping.exe"),
+                Path::new(r"C:\Games"),
+                false,
+            ),
+            engine::runtime::LaunchMode::Direct,
+            42,
+        );
+        let (tx, rx) = sync_channel(1);
+        let listener = app.listen_any("onGameExit", move |event| {
+            let _ = tx.send(event.payload().to_string());
+        });
+
+        emit_game_exit_notice(
+            handle,
+            &evidence,
+            engine::runtime::ProcessOrigin::Launcher,
+            "crashed",
+            "Proses berhenti.",
+        );
+
+        let payload: serde_json::Value =
+            serde_json::from_str(&rx.recv_timeout(Duration::from_secs(1)).unwrap()).unwrap();
+        assert_eq!(payload["id"], format!("{}:42", evidence.started_at_ms));
+        assert_eq!(payload["status"], "crashed");
+        assert_eq!(payload["reason"], "Proses berhenti.");
+        assert!(window.is_visible().unwrap());
+        app.unlisten(listener);
     }
 
     #[test]
@@ -2864,6 +3333,10 @@ mod tests {
             .build()
             .unwrap();
 
+        let (launch_error_tx, launch_error_rx) = sync_channel(1);
+        let launch_error_listener = app.listen_any("onLaunchError", move |event| {
+            let _ = launch_error_tx.send(event.payload().to_string());
+        });
         assert_ipc_response(
             &window,
             ipc_request(
@@ -2874,8 +3347,21 @@ mod tests {
                     "installMethod": "loader",
                 }),
             ),
-            Err("invalid_game_path: executable game tidak ditemukan".to_string()),
+            Ok(()),
         );
+        assert!(launch_error_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .contains("invalid_game_path: executable game tidak ditemukan"));
+        let diagnostics_dir = appdata.path().join("Diagnostics");
+        let diagnostic_files = std::fs::read_dir(&diagnostics_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>();
+        assert_eq!(diagnostic_files.len(), 1);
+        let diagnostic = std::fs::read_to_string(diagnostic_files[0].path()).unwrap();
+        assert!(diagnostic.contains("invalid_game_path: executable game tidak ditemukan"));
+        app.unlisten(launch_error_listener);
 
         let (install_error_tx, install_error_rx) = sync_channel(1);
         let install_error_listener = app.listen_any("onInstallError", move |event| {

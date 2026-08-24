@@ -16,6 +16,11 @@ path = "src/main.rs"
 test = false
 required-features = ["app"]
 
+[[bin]]
+name = "wut-game-lifecycle-fixture"
+path = "tests/support/wut-game-lifecycle-fixture.rs"
+test = false
+
 [features]
 app = []
 
@@ -47,6 +52,7 @@ windows-core = "0.61"
 windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_ProcessStatus",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Threading",
     "Win32_Graphics_Dwm",
     "Win32_Foundation",

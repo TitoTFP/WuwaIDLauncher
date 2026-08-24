@@ -78,12 +78,10 @@
 
   async function handleForceQuit() {
     closeDropdown();
+    if (forceQuitDisabled) return;
     try {
       const terminated = await appState.forceQuitGame();
-      appState.showToast(
-        terminated ? 'Game berhasil dipaksa tutup.' : 'Game tidak sedang berjalan.',
-        terminated ? 'ok' : 'info',
-      );
+      if (!terminated) appState.showToast('Game tidak sedang berjalan.', 'info');
     } catch (error) {
       appState.setStatus('Gagal menutup game.', errorMessage(error));
     }
@@ -207,10 +205,11 @@
       appState.launching = true;
       try {
         await bridge.launchGame(appState.gamePath, appState.config.dx11, appState.config.installMethod);
-      } catch (error) {
+      } catch {
+        // The backend emits onLaunchError for launch failures. Keep this path
+        // to release the local guard only when the invoke itself fails.
         appState.endOperation(token);
         appState.launching = false;
-        appState.setStatus('Operasi launcher gagal.', errorMessage(error));
       }
       return;
     }
@@ -275,6 +274,11 @@
       appState.installing ||
       appState.launching ||
       appState.isOperationBlocked(primaryOperation),
+  );
+  let forceQuitDisabled = $derived(
+    !appState.gameRunning ||
+      appState.gameOrigin !== 'launcher' ||
+      appState.isOperationBlocked('force-quit'),
   );
 </script>
 
@@ -370,7 +374,7 @@
       <span id="menuCheckUpdateText">Perbarui Launcher</span>
     </button>
 
-    <button class="rp-dropdown__item" id="menuForceQuit" onclick={handleForceQuit} disabled={appState.isOperationBlocked('force-quit')} type="button">
+    <button class="rp-dropdown__item" id="menuForceQuit" onclick={handleForceQuit} disabled={forceQuitDisabled} type="button">
       <svg viewBox="0 0 24 24" width="14" height="14">
         <path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
       </svg>

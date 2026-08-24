@@ -187,6 +187,12 @@ export interface LauncherUpdateStatusPayload {
   message: string;
 }
 
+export interface GameExitPayload {
+  id: string;
+  status: "normal" | "crashed" | "force_quit";
+  reason: string;
+}
+
 export interface MediaReadyPayload {
   bgmUrl: string;
   videoUrl: string;

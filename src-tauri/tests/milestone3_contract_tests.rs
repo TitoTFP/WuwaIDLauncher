@@ -42,6 +42,27 @@ fn runtime_reconciliation_distinguishes_launcher_external_and_idle() {
 }
 
 #[test]
+fn runtime_reconciliation_accepts_verified_descendant_handoff() {
+    let parents = [(99, 42), (123, 99)];
+
+    assert!(runtime::process_tree_contains(42, 123, &parents));
+    assert_eq!(
+        runtime::reconcile_runtime_state_with_owned(Some(42), Some(123), Some(123)),
+        RuntimeState {
+            active: true,
+            origin: ProcessOrigin::Launcher,
+        }
+    );
+    assert_eq!(
+        runtime::reconcile_runtime_state_with_owned(Some(42), Some(777), None),
+        RuntimeState {
+            active: true,
+            origin: ProcessOrigin::External,
+        }
+    );
+}
+
+#[test]
 fn launch_preconditions_reject_invalid_and_uninstalled_patch() {
     let (_temp, game) = mock_game();
     let not_ready =

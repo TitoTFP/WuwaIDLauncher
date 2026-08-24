@@ -1,0 +1,8 @@
+{
+  "ignore": [
+    "node_modules/**",
+    "dist/**",
+    ".pi-glla/**",
+    ".pi-subagents/**"
+  ]
+}
