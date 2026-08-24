@@ -213,10 +213,6 @@ pub fn loader_dll_path(game_path: &Path) -> PathBuf {
     signature::get_loader_dll_path(game_path)
 }
 
-pub fn loader_marker_path(game_path: &Path) -> PathBuf {
-    signature::get_loader_marker_path(game_path)
-}
-
 pub fn validate_installed_loader(game_path: &Path) -> Result<bool, String> {
     let pak_path = loader_pak_path(game_path);
     let dll_path = loader_dll_path(game_path);

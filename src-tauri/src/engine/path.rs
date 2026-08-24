@@ -58,66 +58,6 @@ pub fn normalize_game_path(input_path: &str) -> Option<PathBuf> {
     None
 }
 
-/// Autodetects the Wuthering Waves installation path from common locations and Windows Registry.
-pub fn detect_game_path() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        if let Some(valid) = scan_windows_registry().and_then(|p| normalize_game_path(&p)) {
-            return Some(valid);
-        }
-    }
-
-    let common_paths = [
-        r"C:\Wuthering Waves",
-        r"C:\Program Files\Wuthering Waves",
-        r"C:\Program Files (x86)\Wuthering Waves",
-        r"C:\Program Files\Epic Games\WutheringWaves",
-        r"D:\Wuthering Waves",
-        r"D:\Games\Wuthering Waves",
-        r"E:\Wuthering Waves",
-        r"E:\Games\Wuthering Waves",
-    ];
-
-    for candidate in common_paths {
-        let p = Path::new(candidate);
-        if let Some(valid) = validate_game_path(p) {
-            return Some(valid);
-        }
-    }
-
-    None
-}
-
-#[cfg(windows)]
-fn scan_windows_registry() -> Option<String> {
-    use winreg::enums::*;
-    use winreg::RegKey;
-
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let uninstall_keys = [
-        r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Wuthering Waves",
-        r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Wuthering Waves",
-        r"SOFTWARE\Kuro Games\Wuthering Waves",
-    ];
-
-    for key_path in uninstall_keys {
-        if let Ok(key) = hklm.open_subkey(key_path) {
-            if let Ok(location) = key.get_value::<String, _>("InstallLocation") {
-                if !location.is_empty() {
-                    return Some(location);
-                }
-            }
-            if let Ok(icon) = key.get_value::<String, _>("DisplayIcon") {
-                if let Some(parent) = Path::new(&icon).parent() {
-                    return Some(parent.to_string_lossy().to_string());
-                }
-            }
-        }
-    }
-
-    None
-}
-
 pub fn get_pak_dir(game_path: &Path) -> PathBuf {
     game_path.join(PAK_FOLDER_RELATIVE)
 }

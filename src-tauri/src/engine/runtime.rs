@@ -669,10 +669,6 @@ pub fn validate_launch_preconditions(
     Ok(normalized)
 }
 
-pub fn find_game_process_id() -> Option<u32> {
-    find_game_process_id_for_path(None)
-}
-
 pub fn find_game_process_id_for_path(expected_executable: Option<&Path>) -> Option<u32> {
     #[cfg(not(windows))]
     let _ = expected_executable;
@@ -736,10 +732,6 @@ pub fn find_game_process_id_for_path(expected_executable: Option<&Path>) -> Opti
     }
 
     None
-}
-
-pub fn is_game_running() -> bool {
-    find_game_process_id().is_some()
 }
 
 pub fn is_game_running_for_path(expected_executable: Option<&Path>) -> bool {
@@ -871,12 +863,6 @@ pub fn trim_memory_working_set() {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-
-    #[test]
-    fn test_is_game_running_smoke() {
-        // Should not panic
-        let _ = is_game_running();
-    }
 
     #[test]
     fn test_trim_working_set_smoke() {

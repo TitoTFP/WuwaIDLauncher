@@ -144,27 +144,6 @@ where
     .await
 }
 
-pub async fn download_file_with_expected_size_limited<F>(
-    url: &str,
-    dest_path: &Path,
-    expected_size: Option<u64>,
-    max_bytes: u64,
-    on_progress: F,
-) -> Result<u64, String>
-where
-    F: Fn(DownloadProgress) + Send + 'static,
-{
-    download_file_with_expected_size_limited_policy(
-        url,
-        dest_path,
-        expected_size,
-        max_bytes,
-        DownloadRedirectPolicy::AnyHttps,
-        on_progress,
-    )
-    .await
-}
-
 pub async fn download_file_with_expected_size_limited_policy<F>(
     url: &str,
     dest_path: &Path,

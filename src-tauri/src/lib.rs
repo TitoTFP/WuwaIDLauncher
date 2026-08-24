@@ -561,11 +561,6 @@ fn get_app_version() -> String {
     app_version_value()
 }
 
-/// Serves cached media while keeping the filesystem outside the webview.
-pub fn media_response(appdata: &Path, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
-    media_response_from_path(appdata, request)
-}
-
 fn media_protocol_handler<R: Runtime>(
     _context: tauri::UriSchemeContext<'_, R>,
     request: Request<Vec<u8>>,
@@ -1955,8 +1950,8 @@ fn restart_as_admin() -> Result<(), String> {
 // -----------------------------------------------------------------------------
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    tauri::Builder::default()
+pub fn run<R: tauri::Runtime>(context: tauri::Context<R>) {
+    tauri::Builder::<R>::new()
         .manage(RuntimeCoordinator::default())
         .manage(engine::active_player::ActivePlayerService::new(
             get_appdata_dir(),
@@ -2032,7 +2027,7 @@ pub fn run() {
             uninstall,
             restart_as_admin,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building wuwaid launcher application")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
@@ -2108,7 +2103,7 @@ mod tests {
     fn restoring_launcher_from_tray_delivers_recovery_state() {
         let app = tauri::test::mock_builder()
             .manage(RuntimeCoordinator::default())
-            .build(tauri::generate_context!())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .unwrap();
         let handle = app.handle();
         let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
@@ -2140,7 +2135,7 @@ mod tests {
     fn finishing_launch_lifecycle_delivers_runtime_and_completion_events() {
         let app = tauri::test::mock_builder()
             .manage(RuntimeCoordinator::default())
-            .build(tauri::generate_context!())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .unwrap();
         let handle = app.handle();
         let _window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
@@ -2206,7 +2201,7 @@ mod tests {
                 get_app_version,
                 check_game_folder_write_access
             ])
-            .build(tauri::generate_context!())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .unwrap();
         let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()

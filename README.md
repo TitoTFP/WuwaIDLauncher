@@ -58,7 +58,7 @@ Acceptance manual Windows tetap diperlukan untuk memvalidasi game nyata, mode ad
   - **Metode 1 — `resource_mount` (Resource Mount):** Deploy file PAK + signature + berkas mount ke folder resource game aktif (`Client/Saved/Resources/<ver>/Mount/`) tanpa menyentuh signature utama game. Dilengkapi proteksi rollback transaksional dan verifikasi integritas struktur Unreal PAK.
   - **Metode 2 — `loader` (Loader):** Menempatkan loader `winhttp.dll` dan folder `wuwaIndonesia/` pada direktori binaries game (`Client/Binaries/Win64/`).
 - **Dynamic Method Switcher:** Berpindah metode instalasi secara instan dengan pembersihan artefak pada path kanonis metode sebelumnya. Path kanonis diperlakukan sebagai target launcher, termasuk saat artefak berasal dari launcher lama.
-- **Deteksi Folder Game Otomatis:** Mendeteksi lokasi direktori game melalui Windows Registry dan jalur default sistem.
+- **Pemilihan Folder Game:** Membuka dialog folder interaktif untuk memilih lokasi instalasi Wuthering Waves dan memvalidasi folder yang dipilih.
 - **Engine PAK Packer & FNV64:** Modul Rust murni untuk pembuatan paket PAK Unreal Engine kompatibel dengan hashing FNV64 & index SHA-1.
 
 ### 🎬 Live Media Ingestion & Dynamic Release Notes
@@ -93,8 +93,8 @@ Acceptance manual Windows tetap diperlukan untuk memvalidasi game nyata, mode ad
 
 ### 2️⃣ Tentukan Folder Game
 
-1. Launcher akan mendeteksi folder Wuthering Waves secara otomatis.
-2. Jika belum terdeteksi, klik ikon hamburger di kanan bawah ➔ **Folder Game** dan pilih folder utama tempat `Client-Win64-Shipping.exe` berada.
+1. Klik ikon hamburger di kanan bawah ➔ **Folder Game**.
+2. Pilih folder utama tempat `Client-Win64-Shipping.exe` berada; launcher akan memvalidasi folder tersebut.
 
 ### 3️⃣ Pilih Metode & Instal Patch
 
@@ -199,11 +199,6 @@ Cross-build dari Linux menggunakan `cargo-xwin`:
 npm run build
 
 # Rebuild binary MSVC langsung tanpa membuat bundle installer
-cargo xwin build --locked --release \
-  --manifest-path src-tauri/Cargo.toml \
-  --target x86_64-pc-windows-msvc
-
-# Build Tauri release tanpa bundle installer
 CARGOFLAGS=--locked npm run tauri -- build \
   --runner cargo-xwin \
   --target x86_64-pc-windows-msvc \
@@ -211,8 +206,7 @@ CARGOFLAGS=--locked npm run tauri -- build \
   --ci
 ```
 
-Output direct `cargo xwin` berada di `src-tauri/target/x86_64-pc-windows-msvc/release/wuwaid-launcher.exe`.
-Build melalui Tauri memakai `mainBinaryName` dan menghasilkan `WuwaIDLauncher.exe` pada direktori yang sama.
+Output build berada di `src-tauri/target/x86_64-pc-windows-msvc/release/WuwaIDLauncher.exe`.
 
 Artifact release yang diharapkan:
 

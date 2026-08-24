@@ -8,16 +8,14 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node scripts/run-frontend-gate.mjs build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "check": "node scripts/run-frontend-gate.mjs check",
     "test:patch-status": "node --test scripts/tests/patch-status-wait.test.mjs",
-    "tauri": "tauri"
+    "tauri": "node scripts/run-tauri.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.2.0",
-    "@tauri-apps/plugin-dialog": "^2.2.0",
-    "@tauri-apps/plugin-process": "^2.2.0",
     "marked": "^18.0.9",
     "svelte": "^5.20.0"
   },

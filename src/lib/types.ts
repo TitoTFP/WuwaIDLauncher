@@ -101,7 +101,8 @@ export function normalizeInstallMethod(value: unknown): InstallMethod {
 }
 
 export function normalizeLauncherConfig(raw: unknown): NormalizedConfigResult {
-  const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const value =
+    raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const diagnostics: string[] = [];
   let repaired = raw === null || typeof raw !== "object";
   const config: LauncherConfig = { ...DEFAULT_LAUNCHER_CONFIG };
@@ -113,7 +114,12 @@ export function normalizeLauncherConfig(raw: unknown): NormalizedConfigResult {
   }
 
   const method = normalizeInstallMethod(value.installMethod);
-  if ("installMethod" in value && !["resource_mount", "loader", "method2", "method3"].includes(value.installMethod as string)) {
+  if (
+    "installMethod" in value &&
+    !["resource_mount", "loader", "method2", "method3"].includes(
+      value.installMethod as string,
+    )
+  ) {
     repaired = true;
     diagnostics.push("Metode instalasi tidak valid; memakai resource_mount.");
   }
@@ -121,15 +127,22 @@ export function normalizeLauncherConfig(raw: unknown): NormalizedConfigResult {
 
   if ("launcherVisualMode" in value || "perf" in value) {
     repaired = true;
-    diagnostics.push("Pengaturan performa lama dihapus; launcher memakai mode Penuh.");
+    diagnostics.push(
+      "Pengaturan performa lama dihapus; launcher memakai mode Penuh.",
+    );
   }
 
   if ("autoCheckUpdate" in value) {
     repaired = true;
-    diagnostics.push("Pemeriksaan update otomatis selalu aktif; pengaturan lama dihapus.");
+    diagnostics.push(
+      "Pemeriksaan update otomatis selalu aktif; pengaturan lama dihapus.",
+    );
   }
 
-  for (const [key, fallback] of [["dx11", config.dx11], ["bgmEnabled", config.bgmEnabled]] as const) {
+  for (const [key, fallback] of [
+    ["dx11", config.dx11],
+    ["bgmEnabled", config.bgmEnabled],
+  ] as const) {
     if (typeof value[key] === "boolean") config[key] = value[key] as boolean;
     else if (key in value) {
       config[key] = fallback;
@@ -172,10 +185,6 @@ export interface PatchStatusPayload {
 export interface LauncherUpdateStatusPayload {
   kind: "ok" | "info";
   message: string;
-}
-
-export interface LauncherUpdateRestartPayload {
-  remainingSeconds: number;
 }
 
 export interface MediaReadyPayload {
