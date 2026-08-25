@@ -61,7 +61,7 @@ Acceptance manual Windows tetap diperlukan untuk memvalidasi game nyata, mode ad
 - **Pemilihan Folder Game:** Membuka dialog folder interaktif untuk memilih lokasi instalasi Wuthering Waves dan memvalidasi folder yang dipilih.
 - **Engine PAK Packer & FNV64:** Modul Rust murni untuk pembuatan paket PAK Unreal Engine kompatibel dengan hashing FNV64 & index SHA-1.
 - **Opsi Peluncuran:** Toggle opt-in DirectX 11 dan optimisasi environment C# (`-ForceEnableCSharpEnvironment`); keduanya diteruskan sebagai argumen proses tanpa memodifikasi shortcut Steam maupun executable game.
-- **Hide UID:** Toggle opt-in memilih PAK terjemahan tanpa label UID. Perubahan varian ditandai sebagai patch yang perlu dipasang ulang, bukan dianggap instalasi siap.
+- **Hide UID:** Toggle opt-in memilih PAK terjemahan dengan tiga surface UID database diganti U+3164 Hangul Filler (`ㅤ`). Perubahan varian ditandai sebagai patch yang perlu dipasang ulang, bukan dianggap instalasi siap.
 
 ### 🎬 Live Media Ingestion & Dynamic Release Notes
 
@@ -111,10 +111,12 @@ Rilis WuwaID menyediakan PAK normal mentah, `winhttp.dll`, dan `SHA256sums.txt`.
 Launcher memverifikasi SHA-256 serta struktur PAK normal sebelum menggunakannya.
 
 Jika **Sembunyikan UID** aktif, launcher membuat salinan lokal melalui crate repak V12,
-mengubah tepat dua ID berikut di database terjemahan, lalu mengemasnya kembali:
+mengubah tepat tiga ID berikut di database terjemahan menjadi U+3164 Hangul Filler yang tidak terlihat,
+lalu mengemasnya kembali:
 
 - `Text_FriendMyUid_Text`
 - `Text_UserId_Text`
+- `PrefabTextItem_1341587207_Text`
 
 PAK hasil Hide UID hanya disimpan di cache launcher dan dipasang dengan nama PAK
 normal. Launcher gagal dengan pesan jelas bila database atau salah satu ID target tidak
@@ -234,7 +236,8 @@ Artifact release yang diharapkan:
 
 Checklist sebelum publish:
 
-- [ ] npm run check dan npm run build lulus.
+- [ ] `npm run check` lulus.
+- [ ] `npm run build` lulus.
 - [ ] cargo test --locked --all-targets lulus dengan fixture deterministic.
 - [ ] ZIP dan SHA256sums.txt ada serta menggunakan versi yang sama.
 - [ ] Jalankan acceptance manual pada Windows dengan fixture reversible.

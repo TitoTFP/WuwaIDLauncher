@@ -31,7 +31,8 @@ fn create_hide_uid_source_pak(path: &Path) {
         .execute_batch(
             "CREATE TABLE MultiText (Id TEXT, Content TEXT, RedirectDbIndex INTEGER);
              INSERT INTO MultiText VALUES ('Text_FriendMyUid_Text', 'ID Pengguna: {0}', 0);
-             INSERT INTO MultiText VALUES ('Text_UserId_Text', 'ID Pengguna: {0}', 0);",
+             INSERT INTO MultiText VALUES ('Text_UserId_Text', 'ID Pengguna: {0}', 0);
+             INSERT INTO MultiText VALUES ('PrefabTextItem_1341587207_Text', 'UID:00000000000', 0);",
         )
         .unwrap();
     repak::pack_v12(temp.path(), path).unwrap();

@@ -2467,6 +2467,7 @@ mod tests {
                     "CREATE TABLE MultiText (Id TEXT, Content TEXT, RedirectDbIndex INTEGER);
                      INSERT INTO MultiText VALUES ('Text_FriendMyUid_Text', 'ID Pengguna: {{0}}', 0);
                      INSERT INTO MultiText VALUES ('Text_UserId_Text', 'ID Pengguna: {{0}}', 0);
+                     INSERT INTO MultiText VALUES ('PrefabTextItem_1341587207_Text', 'UID:00000000000', 0);
                      INSERT INTO MultiText VALUES ('Unrelated_Text', '{unrelated_content}', 0);"
                 ))
                 .unwrap();

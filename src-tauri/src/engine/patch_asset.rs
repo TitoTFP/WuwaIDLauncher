@@ -5,10 +5,15 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const NORMAL_PAK_FILE_NAME: &str = "pakchunk0-ID-WindowsNoEditor_1000_P.pak";
-pub const HIDE_UID_PATCH_VERSION: &str = "hide_uid_v1";
+pub const HIDE_UID_PATCH_VERSION: &str = "hide_uid_v2";
+const HIDE_UID_REPLACEMENT: &str = "\u{3164}";
 const UID_DATABASE_RELATIVE_PATH: &str = "Client/Content/Aki/ConfigDB/en/lang_multi_text.db";
 const UID_TABLE_NAME: &str = "MultiText";
-const UID_TARGET_IDS: [&str; 2] = ["Text_FriendMyUid_Text", "Text_UserId_Text"];
+const UID_TARGET_IDS: [&str; 3] = [
+    "Text_FriendMyUid_Text",
+    "Text_UserId_Text",
+    "PrefabTextItem_1341587207_Text",
+];
 const MAX_PAK_BYTES: u64 = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,8 +151,8 @@ fn patch_uid_database(database: &Path) -> Result<(), String> {
 
         let changed = transaction
             .execute(
-                &format!("UPDATE {UID_TABLE_NAME} SET Content = '' WHERE Id = ?1"),
-                params![id],
+                &format!("UPDATE {UID_TABLE_NAME} SET Content = ?1 WHERE Id = ?2"),
+                params![HIDE_UID_REPLACEMENT, id],
             )
             .map_err(|error| format!("hide_uid_database_update_failed:{id}: {error}"))?;
         if changed != 1 {
@@ -179,9 +184,9 @@ fn patch_uid_database(database: &Path) -> Result<(), String> {
                 |row| row.get(0),
             )
             .map_err(|error| format!("hide_uid_database_verify_query_failed:{id}: {error}"))?;
-        if !content.is_empty() {
+        if content != HIDE_UID_REPLACEMENT {
             return Err(format!(
-                "hide_uid_database_verify_failed: {id} tidak kosong"
+                "hide_uid_database_verify_failed: {id} bukan karakter pengganti"
             ));
         }
     }
@@ -281,7 +286,8 @@ mod tests {
             .execute_batch(
                 "CREATE TABLE MultiText (Id TEXT, Content TEXT, RedirectDbIndex INTEGER);
                  INSERT INTO MultiText VALUES ('Text_FriendMyUid_Text', 'ID Pengguna: {0}', 0);
-                 INSERT INTO MultiText VALUES ('Text_UserId_Text', 'ID Pengguna: {0}', 0);",
+                 INSERT INTO MultiText VALUES ('Text_UserId_Text', 'ID Pengguna: {0}', 0);
+                 INSERT INTO MultiText VALUES ('PrefabTextItem_1341587207_Text', 'UID:00000000000', 0);",
             )
             .unwrap();
         connection
@@ -324,10 +330,11 @@ mod tests {
     }
 
     #[test]
-    fn patches_only_the_two_uid_records() {
+    fn patches_only_uid_records() {
         let temp = tempfile::tempdir().unwrap();
         let database = temp.path().join("lang_multi_text.db");
         create_database(&database, false);
+        assert_eq!(HIDE_UID_REPLACEMENT, "\u{3164}");
 
         patch_uid_database(&database).unwrap();
         let connection = Connection::open(database).unwrap();
@@ -339,7 +346,7 @@ mod tests {
                     |row| row.get(0),
                 )
                 .unwrap();
-            assert!(content.is_empty());
+            assert_eq!(content, HIDE_UID_REPLACEMENT);
         }
         let unrelated: String = connection
             .query_row(
@@ -420,7 +427,7 @@ mod tests {
                     |row| row.get(0),
                 )
                 .unwrap();
-            assert!(content.is_empty());
+            assert_eq!(content, HIDE_UID_REPLACEMENT);
         }
 
         let second = prepare_hide_uid_pak(&source, &source_hash, &cache).unwrap();
@@ -435,7 +442,7 @@ mod tests {
         assert!(cached_derived_pak_is_valid(&regenerated));
 
         let new_algorithm =
-            prepare_hide_uid_pak_with_version(&source, &changed_hash, &cache, "hide_uid_v2")
+            prepare_hide_uid_pak_with_version(&source, &changed_hash, &cache, "hide_uid_v3")
                 .unwrap();
         assert_ne!(regenerated, new_algorithm);
         assert!(installer::validate_pak_file(&new_algorithm).unwrap());
