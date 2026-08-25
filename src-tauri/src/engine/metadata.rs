@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const GAMES_KEY: &str = "games";
 const SCHEMA_KEY: &str = "_schemaVersion";
-const CURRENT_SCHEMA_VERSION: u64 = 2;
+const CURRENT_SCHEMA_VERSION: u64 = 3;
 
 static METADATA_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -54,7 +54,12 @@ fn game_entries(object: &Map<String, Value>) -> Map<String, Value> {
 
 fn migrate_legacy_entry(object: &Map<String, Value>, key: &str) -> Option<Map<String, Value>> {
     let mut entry = Map::new();
-    for field in ["_vhVersion", "_installMethod", "_loaderSha256"] {
+    for field in [
+        "_vhVersion",
+        "_installMethod",
+        "_loaderSha256",
+        "_patchVariant",
+    ] {
         if let Some(value) = object.get(field) {
             entry.insert(field.to_string(), value.clone());
         }
@@ -215,6 +220,17 @@ pub fn update_installation(
     install_method: &str,
     loader_hash: Option<&str>,
 ) -> Result<(), String> {
+    update_installation_with_variant(path, game_path, version, install_method, loader_hash, None)
+}
+
+pub fn update_installation_with_variant(
+    path: &Path,
+    game_path: &Path,
+    version: Option<&str>,
+    install_method: &str,
+    loader_hash: Option<&str>,
+    patch_variant: Option<&str>,
+) -> Result<(), String> {
     let key = game_key(game_path)?;
     update_object(path, |object| {
         let mut entry = current_game_entry(object, &key).unwrap_or_default();
@@ -238,6 +254,20 @@ pub fn update_installation(
         object.insert(
             "_installMethod".to_string(),
             Value::String(install_method.to_string()),
+        );
+        let variant = patch_variant
+            .map(str::trim)
+            .filter(|value| matches!(*value, "normal" | "hide_uid"))
+            .or_else(|| {
+                entry
+                    .get("_patchVariant")
+                    .and_then(Value::as_str)
+                    .filter(|value| matches!(*value, "normal" | "hide_uid"))
+            })
+            .unwrap_or("normal");
+        entry.insert(
+            "_patchVariant".to_string(),
+            Value::String(variant.to_string()),
         );
         match loader_hash.filter(|hash| !hash.trim().is_empty()) {
             Some(hash) => {
@@ -279,6 +309,7 @@ pub fn remove_game(path: &Path, game_path: &Path) -> Result<(), String> {
     // identify another game's installation after the keyed entry is removed.
     object.remove("_vhVersion");
     object.remove("_installMethod");
+    object.remove("_patchVariant");
     if object
         .keys()
         .all(|key| key == "_cachedReleaseNotes" || key == SCHEMA_KEY)
@@ -313,7 +344,35 @@ mod tests {
         let key = game_key(&game).unwrap();
         assert_eq!(object["games"][key.clone()]["_vhVersion"], "v3.0.0");
         assert_eq!(object["_cachedReleaseNotes"]["tag"], "v3.0.0");
-        assert_eq!(object["games"][key]["_installMethod"], "resource_mount");
+        assert_eq!(
+            object["games"][key.clone()]["_installMethod"],
+            "resource_mount"
+        );
+        assert_eq!(object["games"][key]["_patchVariant"], "normal");
+    }
+
+    #[test]
+    fn installation_variant_is_persisted_and_preserved_by_method_updates() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("versions.json");
+        let game = temp.path().join("game");
+        fs::create_dir_all(&game).unwrap();
+
+        update_installation_with_variant(
+            &path,
+            &game,
+            Some("v1"),
+            "resource_mount",
+            None,
+            Some("hide_uid"),
+        )
+        .unwrap();
+        update_installation(&path, &game, None, "loader", None).unwrap();
+
+        assert_eq!(
+            read_game_field(&path, &game, "_patchVariant").unwrap(),
+            Some("hide_uid".to_string())
+        );
     }
 
     #[test]

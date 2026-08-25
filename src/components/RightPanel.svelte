@@ -131,6 +131,29 @@
     }
   }
 
+  async function handleCSharpEnvironmentChange(event: Event) {
+    appState.config.csharpEnvironment = (event.currentTarget as HTMLInputElement).checked;
+    try {
+      await appState.saveConfig();
+      appState.setStatus('Optimisasi C# diperbarui.');
+    } catch (error) {
+      appState.setStatus('Optimisasi C# tidak dapat disimpan.', errorMessage(error));
+    }
+  }
+
+  async function handleHideUidChange(event: Event) {
+    appState.config.hideUid = (event.currentTarget as HTMLInputElement).checked;
+    try {
+      await appState.saveConfig();
+      if (appState.gamePath) {
+        await appState.requestPatchStatus(appState.gamePath, appState.config.installMethod);
+      }
+      appState.setStatus('Pilihan sembunyikan UID diperbarui.');
+    } catch (error) {
+      appState.setStatus('Pilihan sembunyikan UID tidak dapat diterapkan.', errorMessage(error));
+    }
+  }
+
   let showUninstallConfirm = $state(false);
 
   function promptUninstall() {
@@ -209,7 +232,12 @@
       }
       appState.launching = true;
       try {
-        await bridge.launchGame(appState.gamePath, appState.config.dx11, appState.config.installMethod);
+        await bridge.launchGame(
+          appState.gamePath,
+          appState.config.dx11,
+          appState.config.csharpEnvironment,
+          appState.config.installMethod,
+        );
       } catch {
         // The backend emits onLaunchError for launch failures. Keep this path
         // to release the local guard only when the invoke itself fails.
@@ -249,6 +277,7 @@
         appState.gamePath,
         'standard',
         appState.config.installMethod,
+        appState.config.hideUid,
       );
     } catch (error) {
       appState.endOperation(token);
@@ -436,6 +465,36 @@
       />
       <span class="dx11-checkmark"></span>
       <span class="dx11-text">Jalankan game dengan DirectX 11</span>
+    </label>
+  </div>
+
+  <div class="dx11-row" id="csharpEnvironmentRow">
+    <label class="dx11-label" for="chkCSharpEnvironment">
+      <input
+        type="checkbox"
+        id="chkCSharpEnvironment"
+        class="dx11-input"
+        checked={!!appState.config.csharpEnvironment}
+        disabled={appState.launching || appState.gameRunning}
+        onchange={handleCSharpEnvironmentChange}
+      />
+      <span class="dx11-checkmark"></span>
+      <span class="dx11-text">Aktifkan optimisasi C#</span>
+    </label>
+  </div>
+
+  <div class="dx11-row" id="hideUidRow">
+    <label class="dx11-label" for="chkHideUid">
+      <input
+        type="checkbox"
+        id="chkHideUid"
+        class="dx11-input"
+        checked={!!appState.config.hideUid}
+        disabled={appState.isOperationBlocked('folder') || appState.isOperationBlocked('method-switch') || appState.isOperationBlocked('install')}
+        onchange={handleHideUidChange}
+      />
+      <span class="dx11-checkmark"></span>
+      <span class="dx11-text">Sembunyikan UID</span>
     </label>
   </div>
 

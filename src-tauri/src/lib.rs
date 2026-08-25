@@ -502,10 +502,15 @@ fn emit_launch_failure<R: Runtime>(
     app: &AppHandle<R>,
     game_path: &str,
     dx11: bool,
+    csharp_environment: bool,
     error: impl Into<String>,
 ) {
     let mut evidence = engine::runtime::LaunchEvidence::for_failure(
-        engine::runtime::build_launch_command(Path::new(game_path), dx11),
+        engine::runtime::build_launch_command_with_options(
+            Path::new(game_path),
+            dx11,
+            csharp_environment,
+        ),
         engine::runtime::SpawnFailureKind::SpawnFailed,
         None,
     );
@@ -1467,6 +1472,7 @@ async fn check_patch_status<R: Runtime>(
     app: AppHandle<R>,
     game_path: String,
     install_method: String,
+    hide_uid: bool,
 ) -> Result<(), String> {
     let method = match engine::method::InstallMethod::parse(&install_method) {
         Ok(method) => method,
@@ -1477,6 +1483,7 @@ async fn check_patch_status<R: Runtime>(
                     "status": "invalid",
                     "gamePath": game_path,
                     "installMethod": install_method,
+                    "hideUid": hide_uid,
                     "message": error
                 }),
             );
@@ -1493,6 +1500,7 @@ async fn check_patch_status<R: Runtime>(
                     "status": "invalid",
                     "gamePath": game_path,
                     "installMethod": method.as_str(),
+                    "hideUid": hide_uid,
                     "message": "Folder game tidak valid atau executable game tidak ditemukan."
                 }),
             );
@@ -1507,6 +1515,18 @@ async fn check_patch_status<R: Runtime>(
         && validate_loader_metadata(&normalized_path).is_err()
     {
         local = engine::patch_status::LocalPatchState::Invalid;
+    }
+    let desired_variant = engine::patch_asset::PatchVariant::from_hide_uid(hide_uid);
+    if matches!(local, engine::patch_status::LocalPatchState::Ready) {
+        let metadata_path = get_appdata_dir().join("versions.json");
+        let installed_variant =
+            engine::metadata::read_game_field(&metadata_path, &normalized_path, "_patchVariant")?;
+        if !engine::patch_asset::installed_variant_matches(
+            installed_variant.as_deref(),
+            desired_variant,
+        ) {
+            local = engine::patch_status::LocalPatchState::Invalid;
+        }
     }
     let current_version = get_installed_patch_version(&normalized_path)
         .map_err(|error| format!("Gagal membaca metadata instalasi patch: {error}"))?;
@@ -1527,6 +1547,7 @@ async fn check_patch_status<R: Runtime>(
             "status": status.as_str(),
             "gamePath": normalized_path,
             "installMethod": method.as_str(),
+            "hideUid": hide_uid,
             "currentVersion": current_version,
             "latestVersion": latest_version
         }),
@@ -1569,12 +1590,105 @@ fn reset_webview_cache<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     check_and_sync_media(app)
 }
 
+async fn ensure_cached_patch_asset<R: Runtime>(
+    app: &AppHandle<R>,
+    asset_name: &str,
+    destination: &Path,
+    expected_hash: &str,
+) -> Result<(), String> {
+    if destination.exists()
+        && engine::downloader::verify_sha256(destination, expected_hash).unwrap_or(false)
+    {
+        return Ok(());
+    }
+    let url = format!("{}{}", WUWAID_LATEST_DOWNLOAD_BASE_URL, asset_name);
+    let content_len = engine::downloader::get_asset_content_length(&url)
+        .await
+        .map_err(|error| format!("Gagal memverifikasi metadata asset {asset_name}: {error}"))?;
+    let app_progress = app.clone();
+    engine::downloader::download_file_with_expected_size(
+        &url,
+        destination,
+        Some(content_len),
+        move |progress| {
+            let _ = app_progress.emit(
+                "onProgressUpdate",
+                serde_json::json!({
+                    "percent": (progress.percent as f32 * 0.85) as u8,
+                    "status": format!("Mengunduh patch... {}", progress.status),
+                    "downloadedBytes": progress.downloaded_bytes,
+                    "totalBytes": progress.total_bytes,
+                    "speedMbps": progress.speed_mbps
+                }),
+            );
+        },
+    )
+    .await
+    .map_err(|error| format!("Gagal mengunduh {asset_name}: {error}"))?;
+    if !engine::downloader::verify_sha256(destination, expected_hash).unwrap_or(false) {
+        let _ = std::fs::remove_file(destination);
+        return Err(format!(
+            "Integritas file {asset_name} gagal diverifikasi (SHA-256 mismatch)."
+        ));
+    }
+    Ok(())
+}
+
+async fn prepare_patch_asset<R: Runtime>(
+    app: &AppHandle<R>,
+    checksums: &std::collections::HashMap<String, String>,
+    variant: engine::patch_asset::PatchVariant,
+) -> Result<PathBuf, String> {
+    let cache_dir = get_appdata_dir().join("Cache");
+    std::fs::create_dir_all(&cache_dir)
+        .map_err(|error| format!("Gagal membuat cache patch: {error}"))?;
+    match engine::patch_asset::select_release_asset(checksums, variant)? {
+        engine::patch_asset::ReleaseAsset::Archive => {
+            let archive_hash = checksums
+                .get(engine::patch_asset::ARCHIVE_FILE_NAME)
+                .ok_or_else(|| "Checksum WuwaID.zip tidak ditemukan.".to_string())?;
+            let archive_path = cache_dir.join(engine::patch_asset::ARCHIVE_FILE_NAME);
+            ensure_cached_patch_asset(
+                app,
+                engine::patch_asset::ARCHIVE_FILE_NAME,
+                &archive_path,
+                archive_hash,
+            )
+            .await?;
+            let pak_hash = checksums
+                .get(variant.pak_file_name())
+                .ok_or_else(|| format!("Checksum {} tidak ditemukan.", variant.pak_file_name()))?;
+            let pak_path = cache_dir.join(variant.pak_file_name());
+            engine::patch_asset::extract_selected_patch(
+                &archive_path,
+                variant,
+                pak_hash,
+                &pak_path,
+            )?;
+            Ok(pak_path)
+        }
+        engine::patch_asset::ReleaseAsset::LegacyPak => {
+            let asset_name = engine::patch_asset::NORMAL_PAK_FILE_NAME;
+            let expected_hash = checksums
+                .get(asset_name)
+                .ok_or_else(|| format!("Checksum {asset_name} tidak ditemukan."))?;
+            let pak_path = cache_dir.join(asset_name);
+            ensure_cached_patch_asset(app, asset_name, &pak_path, expected_hash).await?;
+            if !engine::installer::validate_pak_file(&pak_path)? {
+                return Err("Struktur PAK rilis lama tidak valid.".to_string());
+            }
+            Ok(pak_path)
+        }
+    }
+}
+
 #[tauri::command]
 fn start_installation<R: Runtime>(
     app: AppHandle<R>,
     game_path: String,
     _vh_mode: String,
     install_method: String,
+    hide_uid: bool,
 ) -> Result<(), String> {
     let method = match engine::method::InstallMethod::parse(&install_method) {
         Ok(method) => method,
@@ -1602,10 +1716,12 @@ fn start_installation<R: Runtime>(
         return Err(error);
     }
     let canonical_method = method.as_str().to_string();
+    let patch_variant = engine::patch_asset::PatchVariant::from_hide_uid(hide_uid);
     log::info!(
-        "Start installation: path={}, method={}",
+        "Start installation: path={}, method={}, variant={}",
         normalized_game_path,
-        canonical_method
+        canonical_method,
+        patch_variant.as_str()
     );
 
     let app_handle = app.clone();
@@ -1652,92 +1768,13 @@ fn start_installation<R: Runtime>(
             .or_else(|| known_patch_version(&versions_path, p))
             .unwrap_or_else(|| "unknown".to_string());
 
-        let cache_pak = get_appdata_dir()
-            .join("Cache")
-            .join(engine::path::PAK_FILE_NAME);
-        if let Some(parent) = cache_pak.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-
-        let target_asset_name = engine::path::PAK_FILE_NAME;
-        let expected_hash = checksums
-            .get(target_asset_name)
-            .cloned()
-            .unwrap_or_default();
-
-        if expected_hash.is_empty() {
-            log::error!("Checksum for {} not found in manifest", target_asset_name);
-            let _ = app_handle.emit(
-                "onInstallError",
-                format!(
-                    "Checksum SHA-256 untuk file {} tidak ditemukan pada server release.",
-                    target_asset_name
-                ),
-            );
-            return;
-        }
-
-        let mut need_download = true;
-        if cache_pak.exists()
-            && engine::downloader::verify_sha256(&cache_pak, &expected_hash).unwrap_or(false)
-        {
-            need_download = false;
-        }
-
-        if need_download {
-            let pak_url = format!("{}{}", WUWAID_LATEST_DOWNLOAD_BASE_URL, target_asset_name);
-            let app_progress = app_handle.clone();
-
-            // Query HEAD metadata before streaming download and pass expected size
-            let content_len = match engine::downloader::get_asset_content_length(&pak_url).await {
-                Ok(len) => len,
-                Err(e) => {
-                    log::error!("Failed to fetch asset metadata: {}", e);
-                    let _ = app_handle.emit(
-                        "onInstallError",
-                        format!("Gagal memverifikasi metadata asset rilis: {}", e),
-                    );
-                    return;
-                }
-            };
-
-            let dl_res = engine::downloader::download_file_with_expected_size(
-                &pak_url,
-                &cache_pak,
-                Some(content_len),
-                move |prog| {
-                    let _ = app_progress.emit(
-                        "onProgressUpdate",
-                        serde_json::json!({
-                            "percent": (prog.percent as f32 * 0.85) as u8,
-                            "status": format!("Mengunduh patch... {}", prog.status),
-                            "downloadedBytes": prog.downloaded_bytes,
-                            "totalBytes": prog.total_bytes,
-                            "speedMbps": prog.speed_mbps
-                        }),
-                    );
-                },
-            )
-            .await;
-
-            if let Err(e) = dl_res {
-                log::error!("Patch download failed: {}", e);
-                let _ = app_handle.emit(
-                    "onInstallError",
-                    format!("Gagal mengunduh patch mod: {}", e),
-                );
+        let cache_pak = match prepare_patch_asset(&app_handle, &checksums, patch_variant).await {
+            Ok(path) => path,
+            Err(error) => {
+                let _ = app_handle.emit("onInstallError", error);
                 return;
             }
-
-            if !engine::downloader::verify_sha256(&cache_pak, &expected_hash).unwrap_or(false) {
-                let _ = std::fs::remove_file(&cache_pak);
-                let _ = app_handle.emit(
-                    "onInstallError",
-                    "Integritas file patch gagal diverifikasi (SHA-256 mismatch).".to_string(),
-                );
-                return;
-            }
-        }
+        };
 
         let loader_cache = if method == engine::method::InstallMethod::Loader {
             let loader_cache = get_appdata_dir().join("Cache").join("winhttp.dll");
@@ -1837,12 +1874,13 @@ fn start_installation<R: Runtime>(
             &cache_pak,
             loader_cache.as_deref(),
             || {
-                engine::metadata::update_installation(
+                engine::metadata::update_installation_with_variant(
                     &versions_path,
                     p,
                     Some(&patch_version),
                     &canonical_method,
                     loader_sha256.as_deref(),
+                    Some(patch_variant.as_str()),
                 )
             },
         ) {
@@ -1958,12 +1996,13 @@ fn launch_game<R: Runtime>(
     app: AppHandle<R>,
     game_path: String,
     dx11: bool,
+    csharp_environment: bool,
     install_method: String,
 ) -> Result<(), String> {
     let method = match engine::method::InstallMethod::parse(&install_method) {
         Ok(method) => method,
         Err(error) => {
-            emit_launch_failure(&app, &game_path, dx11, error);
+            emit_launch_failure(&app, &game_path, dx11, csharp_environment, error);
             return Ok(());
         }
     };
@@ -1971,13 +2010,13 @@ fn launch_game<R: Runtime>(
         match engine::runtime::validate_launch_preconditions(&game_path, method) {
             Ok(path) => path,
             Err(error) => {
-                emit_launch_failure(&app, &game_path, dx11, error);
+                emit_launch_failure(&app, &game_path, dx11, csharp_environment, error);
                 return Ok(());
             }
         };
     if method == engine::method::InstallMethod::Loader {
         if let Err(error) = validate_loader_metadata(&normalized_game_path) {
-            emit_launch_failure(&app, &game_path, dx11, error);
+            emit_launch_failure(&app, &game_path, dx11, csharp_environment, error);
             return Ok(());
         }
     }
@@ -1986,7 +2025,7 @@ fn launch_game<R: Runtime>(
     {
         Ok(operation) => operation,
         Err(error) => {
-            emit_launch_failure(&app, &game_path, dx11, error);
+            emit_launch_failure(&app, &game_path, dx11, csharp_environment, error);
             return Ok(());
         }
     };
@@ -1997,15 +2036,17 @@ fn launch_game<R: Runtime>(
             &app,
             &game_path,
             dx11,
+            csharp_environment,
             format!("busy: game sedang berjalan (pid {pid})"),
         );
         return Ok(());
     }
     let canonical_method = method.as_str().to_string();
     log::info!(
-        "Launch game: path={}, dx11={}, method={}",
+        "Launch game: path={}, dx11={}, csharp_environment={}, method={}",
         normalized_game_path.display(),
         dx11,
+        csharp_environment,
         canonical_method
     );
     let app_handle = app.clone();
@@ -2014,9 +2055,10 @@ fn launch_game<R: Runtime>(
     tauri::async_runtime::spawn(async move {
         let operation = operation;
         let _ = app_handle.emit("onGameLaunchStarted", ());
-        let command = engine::runtime::build_launch_command(&p, dx11);
+        let command =
+            engine::runtime::build_launch_command_with_options(&p, dx11, csharp_environment);
 
-        match engine::runtime::launch_game(&p, dx11) {
+        match engine::runtime::launch_game_with_options(&p, dx11, csharp_environment) {
             Ok(mut process) => {
                 if let Some(service) =
                     app_handle.try_state::<engine::active_player::ActivePlayerService>()
@@ -3073,9 +3115,14 @@ mod tests {
             let _ = tx.send(event.payload().to_string());
         });
 
-        check_patch_status(app.handle().clone(), String::new(), "bogus".to_string())
-            .await
-            .unwrap();
+        check_patch_status(
+            app.handle().clone(),
+            String::new(),
+            "bogus".to_string(),
+            false,
+        )
+        .await
+        .unwrap();
         let payload = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
         assert_eq!(json["status"], "invalid");
@@ -3404,6 +3451,7 @@ mod tests {
                 serde_json::json!({
                     "gamePath": game.path().parent().unwrap().join("missing-game").to_string_lossy(),
                     "dx11": false,
+                    "csharpEnvironment": false,
                     "installMethod": "loader",
                 }),
             ),
@@ -3435,6 +3483,7 @@ mod tests {
                     "gamePath": game.path().to_string_lossy(),
                     "vhMode": "standard",
                     "installMethod": "unknown",
+                    "hideUid": false,
                 }),
             ),
             Ok(()),
@@ -3453,7 +3502,7 @@ mod tests {
             &window,
             ipc_request(
                 "check_patch_status",
-                serde_json::json!({"gamePath": "", "installMethod": "unknown"}),
+                serde_json::json!({"gamePath": "", "installMethod": "unknown", "hideUid": false}),
             ),
             Ok(()),
         );

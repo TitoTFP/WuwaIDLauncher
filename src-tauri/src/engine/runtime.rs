@@ -42,14 +42,26 @@ pub struct LaunchCommand {
 
 impl LaunchCommand {
     pub fn new(executable: &Path, working_directory: &Path, dx11: bool) -> Self {
+        Self::new_with_options(executable, working_directory, dx11, false)
+    }
+
+    pub fn new_with_options(
+        executable: &Path,
+        working_directory: &Path,
+        dx11: bool,
+        csharp_environment: bool,
+    ) -> Self {
+        let mut arguments = Vec::with_capacity(2);
+        if dx11 {
+            arguments.push("-dx11".to_string());
+        }
+        if csharp_environment {
+            arguments.push("-ForceEnableCSharpEnvironment".to_string());
+        }
         Self {
             executable: executable.to_path_buf(),
             working_directory: working_directory.to_path_buf(),
-            arguments: if dx11 {
-                vec!["-dx11".to_string()]
-            } else {
-                Vec::new()
-            },
+            arguments,
         }
     }
 }
@@ -364,9 +376,17 @@ pub fn classify_spawn_error(raw_code: Option<i32>) -> SpawnFailureKind {
 }
 
 pub fn build_launch_command(game_path: &Path, dx11: bool) -> LaunchCommand {
+    build_launch_command_with_options(game_path, dx11, false)
+}
+
+pub fn build_launch_command_with_options(
+    game_path: &Path,
+    dx11: bool,
+    csharp_environment: bool,
+) -> LaunchCommand {
     let executable = game_path.join(GAME_EXE_RELATIVE);
     let work_dir = get_binary_dir(game_path);
-    LaunchCommand::new(&executable, &work_dir, dx11)
+    LaunchCommand::new_with_options(&executable, &work_dir, dx11, csharp_environment)
 }
 
 pub fn collect_game_log_tail(game_path: &Path) -> String {
@@ -587,7 +607,15 @@ fn spawn_direct(command: &LaunchCommand) -> Result<ManagedProcess, std::io::Erro
 }
 
 pub fn launch_game(game_path: &Path, dx11: bool) -> Result<LaunchedGame, Box<LaunchFailure>> {
-    let command = build_launch_command(game_path, dx11);
+    launch_game_with_options(game_path, dx11, false)
+}
+
+pub fn launch_game_with_options(
+    game_path: &Path,
+    dx11: bool,
+    csharp_environment: bool,
+) -> Result<LaunchedGame, Box<LaunchFailure>> {
+    let command = build_launch_command_with_options(game_path, dx11, csharp_environment);
     let executable = command.executable.clone();
     if !executable.is_file() {
         return Err(Box::new(LaunchFailure::new_with_mode(
@@ -635,7 +663,16 @@ pub fn launch_game_elevated(
     game_path: &Path,
     dx11: bool,
 ) -> Result<LaunchedGame, Box<LaunchFailure>> {
-    let command = build_launch_command(game_path, dx11);
+    launch_game_elevated_with_options(game_path, dx11, false)
+}
+
+#[cfg(windows)]
+pub fn launch_game_elevated_with_options(
+    game_path: &Path,
+    dx11: bool,
+    csharp_environment: bool,
+) -> Result<LaunchedGame, Box<LaunchFailure>> {
+    let command = build_launch_command_with_options(game_path, dx11, csharp_environment);
     if !command.executable.is_file() {
         return Err(Box::new(LaunchFailure::new_with_mode(
             command,
@@ -1763,6 +1800,17 @@ mod tests {
         );
         assert_eq!(command.working_directory, PathBuf::from(r"C:\Games"));
         assert_eq!(command.arguments, vec!["-dx11"]);
+
+        let combined = LaunchCommand::new_with_options(
+            Path::new(r"C:\Games\Client-Win64-Shipping.exe"),
+            Path::new(r"C:\Games"),
+            true,
+            true,
+        );
+        assert_eq!(
+            combined.arguments,
+            vec!["-dx11", "-ForceEnableCSharpEnvironment"]
+        );
     }
 
     #[cfg(windows)]

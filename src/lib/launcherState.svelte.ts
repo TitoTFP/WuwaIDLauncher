@@ -34,6 +34,7 @@ interface PatchStatusRequest {
   generation: number;
   gamePath: string;
   installMethod: InstallMethod;
+  hideUid: boolean;
   manualCheck: boolean;
 }
 
@@ -319,7 +320,8 @@ export class LauncherState implements ILauncherState {
   private patchSelectionMatches(request: PatchStatusRequest): boolean {
     return (
       samePath(this.gamePath, request.gamePath) &&
-      this.config.installMethod === request.installMethod
+      this.config.installMethod === request.installMethod &&
+      this.config.hideUid === request.hideUid
     );
   }
 
@@ -332,6 +334,7 @@ export class LauncherState implements ILauncherState {
       generation: ++this.patchStatusGeneration,
       gamePath,
       installMethod,
+      hideUid: this.config.hideUid,
       manualCheck,
     };
     this.latestPatchStatusRequest = request;
@@ -352,7 +355,11 @@ export class LauncherState implements ILauncherState {
       this.patchStatusWaiters.set(request.generation, eventWaiter.resolve);
 
       try {
-        await bridge.checkPatchStatus(request.gamePath, request.installMethod);
+        await bridge.checkPatchStatus(
+          request.gamePath,
+          request.installMethod,
+          request.hideUid,
+        );
         // The backend emits the result before the command completes. Waiting for
         // that event keeps a same-identity slow response from being attributed to
         // the next generation. A command error exits through the finally block;
@@ -590,7 +597,8 @@ export class LauncherState implements ILauncherState {
         if (
           !request ||
           !samePath(payload.gamePath, request.gamePath) ||
-          payload.installMethod !== request.installMethod
+          payload.installMethod !== request.installMethod ||
+          payload.hideUid !== request.hideUid
         ) {
           return;
         }

@@ -63,6 +63,8 @@ export interface LauncherConfig {
   gamePath: string;
   installMethod: InstallMethod;
   dx11: boolean;
+  csharpEnvironment: boolean;
+  hideUid: boolean;
   bgmVolume: number;
   bgmEnabled: boolean;
 }
@@ -71,6 +73,8 @@ export const DEFAULT_LAUNCHER_CONFIG: LauncherConfig = {
   gamePath: "",
   installMethod: "resource_mount",
   dx11: false,
+  csharpEnvironment: false,
+  hideUid: false,
   bgmVolume: 0.35,
   bgmEnabled: true,
 };
@@ -141,6 +145,8 @@ export function normalizeLauncherConfig(raw: unknown): NormalizedConfigResult {
 
   for (const [key, fallback] of [
     ["dx11", config.dx11],
+    ["csharpEnvironment", config.csharpEnvironment],
+    ["hideUid", config.hideUid],
     ["bgmEnabled", config.bgmEnabled],
   ] as const) {
     if (typeof value[key] === "boolean") config[key] = value[key] as boolean;
@@ -177,6 +183,7 @@ export interface PatchStatusPayload {
   status: PatchState;
   gamePath: string;
   installMethod: InstallMethod;
+  hideUid: boolean;
   currentVersion?: string;
   latestVersion?: string;
   message?: string;

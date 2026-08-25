@@ -60,6 +60,8 @@ Acceptance manual Windows tetap diperlukan untuk memvalidasi game nyata, mode ad
 - **Dynamic Method Switcher:** Berpindah metode instalasi secara instan dengan pembersihan artefak pada path kanonis metode sebelumnya. Path kanonis diperlakukan sebagai target launcher, termasuk saat artefak berasal dari launcher lama.
 - **Pemilihan Folder Game:** Membuka dialog folder interaktif untuk memilih lokasi instalasi Wuthering Waves dan memvalidasi folder yang dipilih.
 - **Engine PAK Packer & FNV64:** Modul Rust murni untuk pembuatan paket PAK Unreal Engine kompatibel dengan hashing FNV64 & index SHA-1.
+- **Opsi Peluncuran:** Toggle opt-in DirectX 11 dan optimisasi environment C# (`-ForceEnableCSharpEnvironment`); keduanya diteruskan sebagai argumen proses tanpa memodifikasi shortcut Steam maupun executable game.
+- **Hide UID:** Toggle opt-in memilih PAK terjemahan tanpa label UID. Perubahan varian ditandai sebagai patch yang perlu dipasang ulang, bukan dianggap instalasi siap.
 
 ### 🎬 Live Media Ingestion & Dynamic Release Notes
 
@@ -100,7 +102,17 @@ Acceptance manual Windows tetap diperlukan untuk memvalidasi game nyata, mode ad
 
 1. Pilih metode instalasi yang diinginkan dari menu **METODE** di launcher.
 2. Klik tombol **Instal Patch ID** (atau **Perbarui Patch**).
-3. Setelah selesai, klik **Mainkan** untuk langsung masuk ke Sol3 dalam Bahasa Indonesia!
+3. Aktifkan **Sembunyikan UID** sebelum instalasi bila menginginkan varian tersebut. Aktifkan **Optimisasi C#** bila ingin meluncurkan game dengan flag environment C#.
+4. Setelah selesai, klik **Mainkan** untuk langsung masuk ke Sol3 dalam Bahasa Indonesia!
+
+### Kontrak Asset Patch
+
+Rilis baru menyediakan `WuwaID.zip`, `winhttp.dll`, dan `SHA256sums.txt`. ZIP wajib berisi tepat dua member di root:
+
+- `pakchunk0-ID-WindowsNoEditor_1000_P.pak`
+- `pakchunk0-ID-WindowsNoEditor-HideUID_1000_P.pak`
+
+Manifest checksum memuat hash ZIP, kedua PAK internal, dan `winhttp.dll`. Launcher memverifikasi ZIP sebelum ekstraksi, hanya mengekstrak nama member yang dipilih, lalu memverifikasi hash serta struktur PAK. Rilis lama yang hanya menyediakan PAK normal mentah tetap didukung untuk instalasi normal. Hide UID pada rilis lama ditolak dengan pesan jelas dan tidak pernah diturunkan diam-diam ke PAK normal.
 
 ### Mapping Metode dan Recovery
 

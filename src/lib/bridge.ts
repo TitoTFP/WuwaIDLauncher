@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen, type Event, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   CleanupReport,
   InstallMethod,
@@ -44,7 +44,8 @@ export const bridge = {
   checkPatchStatus: (
     gamePath: string,
     installMethod: InstallMethod,
-  ): Promise<void> => invoke("check_patch_status", { gamePath, installMethod }),
+    hideUid: boolean,
+  ): Promise<void> => invoke("check_patch_status", { gamePath, installMethod, hideUid }),
   switchMethod: (
     gamePath: string,
     newMethod: InstallMethod,
@@ -53,8 +54,9 @@ export const bridge = {
     gamePath: string,
     vhMode: string,
     installMethod: InstallMethod,
+    hideUid: boolean,
   ): Promise<void> =>
-    invoke("start_installation", { gamePath, vhMode, installMethod }),
+    invoke("start_installation", { gamePath, vhMode, installMethod, hideUid }),
   checkGameFolderWriteAccess: (
     gamePath: string,
     installMethod: InstallMethod,
@@ -72,8 +74,10 @@ export const bridge = {
   launchGame: (
     gamePath: string,
     dx11: boolean,
+    csharpEnvironment: boolean,
     installMethod: InstallMethod,
-  ): Promise<void> => invoke("launch_game", { gamePath, dx11, installMethod }),
+  ): Promise<void> =>
+    invoke("launch_game", { gamePath, dx11, csharpEnvironment, installMethod }),
   forceQuitGame: (): Promise<boolean> => invoke("force_quit_game"),
   restartAsAdmin: (): Promise<void> => invoke("restart_as_admin"),
   openSupport: (): Promise<void> => invoke("open_support"),
@@ -138,7 +142,9 @@ export async function setupEventBridge(
     handler?: (payload: T) => void,
   ) => {
     if (!handler) return;
-    const unlisten = await listen<T>(event, (e) => handler(e.payload));
+    const unlisten = await listen<T>(event, (eventPayload: Event<T>) =>
+      handler(eventPayload.payload),
+    );
     if (setupFailed) unlisten();
     else unlisteners.push(unlisten);
   };

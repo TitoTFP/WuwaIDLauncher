@@ -8,6 +8,7 @@ pub mod metadata;
 pub mod method;
 pub mod operations;
 pub mod pak;
+pub mod patch_asset;
 pub mod patch_status;
 pub mod path;
 pub mod runtime;

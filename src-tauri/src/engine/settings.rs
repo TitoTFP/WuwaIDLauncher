@@ -9,6 +9,8 @@ pub struct LauncherSettings {
     pub game_path: String,
     pub install_method: InstallMethod,
     pub dx11: bool,
+    pub csharp_environment: bool,
+    pub hide_uid: bool,
     pub bgm_volume: f64,
     pub bgm_enabled: bool,
 }
@@ -19,6 +21,8 @@ impl Default for LauncherSettings {
             game_path: String::new(),
             install_method: InstallMethod::ResourceMount,
             dx11: false,
+            csharp_environment: false,
+            hide_uid: false,
             bgm_volume: 0.35,
             bgm_enabled: true,
         }
@@ -166,6 +170,20 @@ pub fn normalize_settings_json(raw: &str) -> SettingsLoadResult {
     );
     read_bool(
         object,
+        "csharpEnvironment",
+        &mut settings.csharp_environment,
+        &mut diagnostics,
+        &mut repaired,
+    );
+    read_bool(
+        object,
+        "hideUid",
+        &mut settings.hide_uid,
+        &mut diagnostics,
+        &mut repaired,
+    );
+    read_bool(
+        object,
         "bgmEnabled",
         &mut settings.bgm_enabled,
         &mut diagnostics,
@@ -198,5 +216,26 @@ pub fn normalize_settings_json(raw: &str) -> SettingsLoadResult {
         settings,
         repaired,
         diagnostics,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn optional_launch_and_patch_flags_default_off_and_repair_invalid_values() {
+        let defaults = normalize_settings_json(r#"{}"#);
+        assert!(!defaults.settings.csharp_environment);
+        assert!(!defaults.settings.hide_uid);
+
+        let enabled = normalize_settings_json(r#"{"csharpEnvironment":true,"hideUid":true}"#);
+        assert!(enabled.settings.csharp_environment);
+        assert!(enabled.settings.hide_uid);
+
+        let invalid = normalize_settings_json(r#"{"csharpEnvironment":"yes","hideUid":1}"#);
+        assert!(invalid.repaired);
+        assert!(!invalid.settings.csharp_environment);
+        assert!(!invalid.settings.hide_uid);
     }
 }
