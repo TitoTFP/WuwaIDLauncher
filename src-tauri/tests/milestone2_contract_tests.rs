@@ -103,7 +103,7 @@ fn preflight_normalizes_game_path_and_selects_method_target() {
 
     let normalized =
         installer::validate_installation_preconditions(&nested, InstallMethod::Loader).unwrap();
-    assert_eq!(normalized, game);
+    assert_eq!(normalized, fs::canonicalize(&game).unwrap());
 
     let invalid_dir = tempfile::tempdir().unwrap();
     let invalid = installer::validate_installation_preconditions(

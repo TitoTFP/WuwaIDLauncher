@@ -1,3 +1,4 @@
+use std::fs;
 use std::io::{Cursor, Write};
 use std::path::Path;
 
@@ -95,7 +96,8 @@ fn update_archive_extraction_does_not_escape_staging_directory() {
     let staging = tempfile::tempdir().unwrap();
     let payload = zip_with(&[("WuwaIDLauncher.exe", b"exe")]);
     let extracted = updater::extract_zip_update(&payload, staging.path()).unwrap();
-    assert!(extracted.starts_with(Path::new(staging.path())));
+    let staging_root = fs::canonicalize(staging.path()).unwrap();
+    assert!(extracted.starts_with(Path::new(&staging_root)));
 }
 
 #[test]

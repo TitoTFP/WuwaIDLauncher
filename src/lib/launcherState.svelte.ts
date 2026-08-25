@@ -5,6 +5,7 @@ import {
   gameExitToast,
 } from "./gameExitNotice.js";
 import { createPatchStatusWaiter } from "./patchStatusWait.js";
+import { samePath } from "./pathIdentity.js";
 import {
   DEFAULT_LAUNCHER_CONFIG,
   launcherReleaseNotesSeenStorageKey,
@@ -76,22 +77,6 @@ function operationsConflict(
   }
 
   return true;
-}
-
-function samePath(left: string, right: string): boolean {
-  const normalize = (value: string) => {
-    const segments: string[] = [];
-    for (const segment of value.trim().replaceAll("\\", "/").split("/")) {
-      if (!segment || segment === ".") continue;
-      if (segment === ".." && segments.length > 1) {
-        segments.pop();
-        continue;
-      }
-      segments.push(segment);
-    }
-    return segments.join("/").replace(/\/+$/, "").toLowerCase();
-  };
-  return normalize(left) === normalize(right);
 }
 
 function errorMessage(error: unknown): string {

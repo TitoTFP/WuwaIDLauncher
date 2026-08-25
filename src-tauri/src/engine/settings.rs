@@ -93,6 +93,10 @@ pub fn normalize_settings_json(raw: &str) -> SettingsLoadResult {
             Some(path) if path.trim().is_empty() => settings.game_path.clear(),
             Some(path) => match normalize_game_path(path) {
                 Some(normalized) => {
+                    // Release builds before the canonical-path migration persisted the
+                    // picker result verbatim. Canonicalize it while loading so status
+                    // events and metadata use the same identity after an upgrade.
+                    let normalized = std::fs::canonicalize(&normalized).unwrap_or(normalized);
                     let normalized = normalized.to_string_lossy().to_string();
                     if normalized != path {
                         repaired = true;
@@ -237,5 +241,74 @@ mod tests {
         assert!(invalid.repaired);
         assert!(!invalid.settings.csharp_environment);
         assert!(!invalid.settings.hide_uid);
+    }
+
+    #[cfg(windows)]
+    fn is_supported_windows_canonical_path(path: &str) -> bool {
+        let bytes = path.as_bytes();
+        let drive_path = bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'\\' | b'/');
+        let extended_drive_path = bytes.len() >= 7
+            && path.starts_with("\\\\?\\")
+            && bytes[4].is_ascii_alphabetic()
+            && bytes[5] == b':'
+            && matches!(bytes[6], b'\\' | b'/');
+        let legacy_unc_path = path.starts_with("\\\\") && !path.starts_with("\\\\?\\");
+        let extended_unc_path = path.starts_with("\\\\?\\UNC\\");
+        drive_path || extended_drive_path || legacy_unc_path || extended_unc_path
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn supported_windows_canonical_path_forms_include_drive_and_unc() {
+        for path in [
+            "C:\\Games\\Wuwa",
+            "\\\\?\\C:\\Games\\Wuwa",
+            "\\\\server\\share\\Wuwa",
+            "\\\\?\\UNC\\server\\share\\Wuwa",
+        ] {
+            assert!(
+                is_supported_windows_canonical_path(path),
+                "unsupported Windows path identity: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_game_path_is_canonicalized_when_settings_loads() {
+        let temp = tempfile::tempdir().unwrap();
+        let game = temp.path().join("game");
+        let alias_parent = temp.path().join("alias");
+        let executable = game.join(crate::engine::path::GAME_EXE_RELATIVE);
+        std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&alias_parent).unwrap();
+        std::fs::write(&executable, b"mock game executable").unwrap();
+
+        let legacy_path = alias_parent.join("..").join("game");
+        let raw = serde_json::json!({
+            "gamePath": legacy_path.to_string_lossy(),
+            "installMethod": "loader"
+        })
+        .to_string();
+        let result = normalize_settings_json(&raw);
+        let canonical = std::fs::canonicalize(&game)
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+
+        assert_eq!(result.settings.game_path, canonical);
+        #[cfg(windows)]
+        assert!(
+            is_supported_windows_canonical_path(&canonical),
+            "unexpected canonical Windows path: {canonical}"
+        );
+        assert_eq!(result.settings.install_method, InstallMethod::Loader);
+        assert!(result.repaired);
+        assert!(result
+            .diagnostics
+            .iter()
+            .any(|message| message.contains("Path game")));
     }
 }

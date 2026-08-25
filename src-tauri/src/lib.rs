@@ -2410,6 +2410,251 @@ pub fn run<R: tauri::Runtime>(context: tauri::Context<R>) {
         });
 }
 
+#[cfg(feature = "frontend-fixture")]
+pub mod frontend_fixture {
+    use super::{
+        check_patch_status, get_app_version, get_vh_version, is_game_running, load_settings,
+        save_settings, switch_method,
+    };
+    use serde::Deserialize;
+    use serde_json::{json, Value};
+    use std::ffi::OsString;
+    use std::io::{self, BufRead, BufWriter, Write};
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use tauri::ipc::{CallbackFn, InvokeBody};
+    use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
+    use tauri::webview::InvokeRequest;
+    use tauri::{AppHandle, Emitter, Listener, Runtime};
+
+    #[derive(Debug, Deserialize)]
+    struct FixtureRequest {
+        id: u64,
+        command: String,
+        #[serde(default)]
+        args: Value,
+    }
+
+    struct EnvironmentGuard {
+        previous_appdata: Option<OsString>,
+    }
+
+    impl Drop for EnvironmentGuard {
+        fn drop(&mut self) {
+            match self.previous_appdata.take() {
+                Some(value) => std::env::set_var("WUWAID_E2E_APPDATA", value),
+                None => std::env::remove_var("WUWAID_E2E_APPDATA"),
+            }
+        }
+    }
+
+    struct FixturePaths {
+        root: PathBuf,
+        legacy_game_path: PathBuf,
+        canonical_game_path: PathBuf,
+    }
+
+    impl Drop for FixturePaths {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn write_frame(writer: &Arc<Mutex<BufWriter<io::Stdout>>>, frame: Value) {
+        if let Ok(mut writer) = writer.lock() {
+            let _ = serde_json::to_writer(&mut *writer, &frame);
+            let _ = writer.write_all(b"\n");
+            let _ = writer.flush();
+        }
+    }
+
+    fn invoke_request(command: &str, args: Value) -> InvokeRequest {
+        InvokeRequest {
+            cmd: command.to_string(),
+            callback: CallbackFn(0),
+            error: CallbackFn(1),
+            url: tauri::Url::parse(if cfg!(any(windows, target_os = "android")) {
+                "http://tauri.localhost"
+            } else {
+                "tauri://localhost"
+            })
+            .unwrap(),
+            body: InvokeBody::Json(args),
+            headers: Default::default(),
+            invoke_key: INVOKE_KEY.to_string(),
+        }
+    }
+
+    fn prepare_fixture() -> FixturePaths {
+        let root = std::env::temp_dir().join(format!(
+            "wuwaid-launcher-frontend-fixture-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let appdata = root.join("AppData");
+        let game = root.join("Wuthering Waves");
+        let alias_parent = root.join("legacy-alias");
+        std::fs::create_dir_all(&appdata).unwrap();
+        std::fs::create_dir_all(&alias_parent).unwrap();
+
+        let executable = game.join(super::engine::path::GAME_EXE_RELATIVE);
+        std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        std::fs::write(&executable, b"frontend IPC fixture game executable").unwrap();
+
+        let legacy_game_path = alias_parent.join("..").join("Wuthering Waves");
+        let canonical_game_path = std::fs::canonicalize(&game).unwrap();
+        std::fs::write(
+            appdata.join("settings.json"),
+            serde_json::json!({
+                "gamePath": legacy_game_path.to_string_lossy(),
+                "installMethod": "resource_mount",
+                "dx11": false,
+                "csharpEnvironment": false,
+                "hideUid": false,
+                "bgmVolume": 0.35,
+                "bgmEnabled": true
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            appdata.join("versions.json"),
+            br#"{"_vhVersion":"3.6.1-id.2","_installMethod":"resource_mount"}"#,
+        )
+        .unwrap();
+
+        std::env::set_var("WUWAID_E2E_APPDATA", &appdata);
+
+        FixturePaths {
+            root,
+            legacy_game_path,
+            canonical_game_path,
+        }
+    }
+
+    #[tauri::command(rename = "check_and_sync_media")]
+    fn fixture_check_and_sync_media<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+        app.emit(
+            "onMediaStatus",
+            json!({
+                "status": "ready",
+                "message": "frontend IPC fixture ready"
+            }),
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    #[tauri::command(rename = "notify_ui_interactive")]
+    fn fixture_notify_ui_interactive(_install_method: String) {}
+
+    #[tauri::command(rename = "get_vh_release_notes")]
+    fn fixture_get_vh_release_notes() {}
+
+    #[tauri::command(rename = "get_launcher_release_notes")]
+    fn fixture_get_launcher_release_notes() {}
+
+    #[tauri::command(rename = "check_launcher_update")]
+    fn fixture_check_launcher_update() {}
+
+    fn dispatch_request(
+        window: &tauri::WebviewWindow<tauri::test::MockRuntime>,
+        request: FixtureRequest,
+    ) -> Value {
+        let response = get_ipc_response(window, invoke_request(&request.command, request.args));
+        match response {
+            Ok(body) => json!({
+                "type": "response",
+                "id": request.id,
+                "result": body.deserialize::<Value>().unwrap_or(Value::Null),
+            }),
+            Err(error) => json!({
+                "type": "response",
+                "id": request.id,
+                "error": error,
+            }),
+        }
+    }
+
+    pub fn run() {
+        let previous_appdata = std::env::var_os("WUWAID_E2E_APPDATA");
+        let paths = prepare_fixture();
+        let environment_guard = EnvironmentGuard { previous_appdata };
+        let output = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
+        let app = mock_builder()
+            .invoke_handler(tauri::generate_handler![
+                get_app_version,
+                get_vh_version,
+                is_game_running,
+                load_settings,
+                save_settings,
+                check_patch_status,
+                switch_method,
+                fixture_check_and_sync_media,
+                fixture_notify_ui_interactive,
+                fixture_get_vh_release_notes,
+                fixture_get_launcher_release_notes,
+                fixture_check_launcher_update,
+            ])
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        let mut listeners = Vec::new();
+        for event_name in ["onPatchStatus", "onMediaStatus"] {
+            let event_name = event_name.to_string();
+            let listener_event_name = event_name.clone();
+            let event_output = Arc::clone(&output);
+            let listener = app.listen_any(&event_name, move |event| {
+                let payload = serde_json::from_str::<Value>(event.payload())
+                    .unwrap_or_else(|_| Value::String(event.payload().to_string()));
+                write_frame(
+                    &event_output,
+                    json!({
+                        "type": "event",
+                        "event": listener_event_name,
+                        "payload": payload
+                    }),
+                );
+            });
+            listeners.push(listener);
+        }
+
+        write_frame(
+            &output,
+            json!({
+                "type": "ready",
+                "legacyGamePath": paths.legacy_game_path,
+                "canonicalGamePath": paths.canonical_game_path
+            }),
+        );
+
+        let stdin = io::stdin();
+        for line in stdin.lock().lines().flatten() {
+            let Ok(request) = serde_json::from_str::<FixtureRequest>(&line) else {
+                continue;
+            };
+            if request.command == "__shutdown" {
+                write_frame(
+                    &output,
+                    json!({"type": "response", "id": request.id, "result": null}),
+                );
+                break;
+            }
+            let response = dispatch_request(&window, request);
+            write_frame(&output, response);
+        }
+
+        for listener in listeners {
+            app.unlisten(listener);
+        }
+        drop(window);
+        drop(app);
+        drop(environment_guard);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3240,6 +3485,212 @@ mod tests {
         );
 
         std::env::remove_var("WUWAID_E2E_APPDATA");
+    }
+
+    #[test]
+    fn legacy_v290_appdata_survives_method_switch_and_emits_status() {
+        let _env_lock = lock_test_environment();
+        let appdata = tempfile::tempdir().unwrap();
+        std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
+        tauri::async_runtime::block_on(run_legacy_v290_appdata_scenario(appdata.path()));
+        std::env::remove_var("WUWAID_E2E_APPDATA");
+    }
+
+    async fn run_legacy_v290_appdata_scenario(appdata: &Path) {
+        let workspace = tempfile::tempdir().unwrap();
+        let game = workspace.path().join("Wuthering Waves");
+        let alias_parent = workspace.path().join("legacy-alias");
+        let executable = game.join(engine::path::GAME_EXE_RELATIVE);
+        std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&alias_parent).unwrap();
+        std::fs::write(&executable, b"mock game executable").unwrap();
+
+        let legacy_game_path = alias_parent.join("..").join("Wuthering Waves");
+        let canonical_game_path = std::fs::canonicalize(&game).unwrap();
+        let settings_path = appdata.join("settings.json");
+        let versions_path = appdata.join("versions.json");
+        std::fs::write(
+            &settings_path,
+            serde_json::json!({
+                "gamePath": legacy_game_path.to_string_lossy(),
+                "installMethod": "resource_mount",
+                "dx11": false,
+                "csharpEnvironment": false,
+                "hideUid": false,
+                "bgmVolume": 0.35,
+                "bgmEnabled": true
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            &versions_path,
+            br#"{"_vhVersion":"3.6.1-id.2","_installMethod":"resource_mount"}"#,
+        )
+        .unwrap();
+        let loaded = load_settings().unwrap();
+        assert_eq!(
+            loaded.settings.game_path,
+            canonical_game_path.to_string_lossy()
+        );
+        assert_eq!(
+            loaded.settings.install_method,
+            engine::method::InstallMethod::ResourceMount
+        );
+        let repaired_settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert_eq!(
+            repaired_settings["gamePath"],
+            canonical_game_path.to_string_lossy().as_ref()
+        );
+
+        let resources = game
+            .join("Client")
+            .join("Saved")
+            .join("Resources")
+            .join("3.6.1");
+        let mount_dir = resources.join("Mount");
+        let official_dir = resources.join("Lang_en").join("Base");
+        std::fs::create_dir_all(&mount_dir).unwrap();
+        std::fs::create_dir_all(&official_dir).unwrap();
+        std::fs::write(resources.join("ResManifest"), b"manifest").unwrap();
+        let official_pak = official_dir.join("pakchunk10-WindowsNoEditor.pak");
+        let official_sig = official_dir.join("pakchunk10-WindowsNoEditor.sig");
+        std::fs::write(&official_pak, b"OFFICIAL_RESOURCE_PAK").unwrap();
+        std::fs::write(&official_sig, b"OFFICIAL_RESOURCE_SIG").unwrap();
+        std::fs::write(
+            mount_dir.join("MountLang_en.txt"),
+            format!(
+                "::Mount::\nLang_en/Base/pakchunk10-WindowsNoEditor,4,{},{},,\n::Del::\n",
+                engine::installer::compute_sha1(&official_pak).unwrap(),
+                engine::installer::compute_sha1(&official_sig).unwrap(),
+            ),
+        )
+        .unwrap();
+        let plan = engine::installer::probe_resource_mount(&game).unwrap();
+        let source_pak = workspace.path().join("legacy-patch.pak");
+        let pak_bytes = engine::pak::pack(
+            "../../../",
+            0,
+            &[(
+                "Content/Localization/id.txt".to_string(),
+                b"Bahasa Indonesia".to_vec(),
+            )],
+        )
+        .unwrap();
+        std::fs::write(&source_pak, pak_bytes).unwrap();
+        engine::installer::deploy_resource_mount(&plan, &source_pak, &game).unwrap();
+        assert!(engine::installer::validate_installed_resource_mount(&plan).unwrap());
+
+        // Mirror the frontend's persisted selection before invoking the backend switch.
+        save_settings(
+            serde_json::json!({
+                "gamePath": loaded.settings.game_path,
+                "installMethod": "loader",
+                "dx11": false,
+                "csharpEnvironment": false,
+                "hideUid": false,
+                "bgmVolume": 0.35,
+                "bgmEnabled": true
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            load_settings().unwrap().settings.install_method,
+            engine::method::InstallMethod::Loader
+        );
+
+        let report = switch_method(
+            legacy_game_path.to_string_lossy().to_string(),
+            "loader".to_string(),
+        )
+        .unwrap();
+        assert!(report.failures.is_empty());
+        assert!(report.preserved.is_empty());
+        assert!(!plan.pak_path.exists());
+        assert!(!plan.sig_path.exists());
+        assert!(!plan.mount_path.exists());
+        assert!(!plan.owner_marker_path.exists());
+
+        let metadata: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&versions_path).unwrap()).unwrap();
+        assert_eq!(metadata["_vhVersion"], "3.6.1-id.2");
+        assert_eq!(metadata["_installMethod"], "loader");
+        let game_key = engine::metadata::game_key(&game).unwrap();
+        let game_metadata = metadata["games"]
+            .as_object()
+            .unwrap()
+            .get(&game_key)
+            .unwrap();
+        assert_eq!(game_metadata["_vhVersion"], "3.6.1-id.2");
+        assert_eq!(game_metadata["_installMethod"], "loader");
+
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let (status_tx, status_rx) = sync_channel(1);
+        let status_listener = app.listen_any("onPatchStatus", move |event| {
+            let _ = status_tx.send(event.payload().to_string());
+        });
+
+        check_patch_status(
+            app.handle().clone(),
+            legacy_game_path.to_string_lossy().to_string(),
+            "loader".to_string(),
+            false,
+        )
+        .await
+        .unwrap();
+        let after_switch: serde_json::Value =
+            serde_json::from_str(&status_rx.recv_timeout(Duration::from_secs(1)).unwrap()).unwrap();
+        assert_eq!(after_switch["status"], "not_installed");
+        assert_eq!(
+            after_switch["gamePath"],
+            canonical_game_path.to_string_lossy().as_ref()
+        );
+        assert_eq!(after_switch["installMethod"], "loader");
+        assert_eq!(after_switch["currentVersion"], "3.6.1-id.2");
+
+        app.unlisten(status_listener);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_real_localappdata_upgrade_preserves_unrelated_state() {
+        let _env_lock = lock_test_environment();
+        let local_appdata = tempfile::tempdir().unwrap();
+        let previous_e2e = std::env::var_os("WUWAID_E2E_APPDATA");
+        let previous_local = std::env::var_os("LOCALAPPDATA");
+        std::env::remove_var("WUWAID_E2E_APPDATA");
+        std::env::set_var("LOCALAPPDATA", local_appdata.path());
+
+        let launcher_appdata = get_appdata_dir();
+        assert_eq!(
+            launcher_appdata,
+            local_appdata.path().join("WuwaIDLauncher")
+        );
+        std::fs::create_dir_all(&launcher_appdata).unwrap();
+        let unrelated_path = launcher_appdata.join("unrelated-appdata.json");
+        std::fs::write(&unrelated_path, br#"{"keep":true}"#).unwrap();
+
+        tauri::async_runtime::block_on(run_legacy_v290_appdata_scenario(&launcher_appdata));
+
+        assert_eq!(
+            std::fs::read_to_string(&unrelated_path).unwrap(),
+            r#"{"keep":true}"#
+        );
+        assert!(launcher_appdata.join("settings.json").is_file());
+        assert!(launcher_appdata.join("versions.json").is_file());
+
+        match previous_e2e {
+            Some(value) => std::env::set_var("WUWAID_E2E_APPDATA", value),
+            None => std::env::remove_var("WUWAID_E2E_APPDATA"),
+        }
+        match previous_local {
+            Some(value) => std::env::set_var("LOCALAPPDATA", value),
+            None => std::env::remove_var("LOCALAPPDATA"),
+        }
     }
 
     #[tokio::test]

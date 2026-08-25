@@ -259,7 +259,21 @@ pub struct CleanupReport {
 }
 
 fn path_string(path: &Path) -> String {
-    path.to_string_lossy().to_string()
+    let value = path.to_string_lossy();
+
+    // `fs::canonicalize` returns an extended-length path on Windows. Keep that
+    // representation for filesystem operations, but expose the conventional
+    // form in cleanup reports and error messages so it matches the path users
+    // selected and the frontend's path identity normalization.
+    #[cfg(windows)]
+    if let Some(rest) = value.strip_prefix("\\\\?\\") {
+        if rest.len() >= 4 && rest[..4].eq_ignore_ascii_case("UNC\\") {
+            return format!("\\\\{}", &rest[4..]);
+        }
+        return rest.to_owned();
+    }
+
+    value.into_owned()
 }
 
 fn existing_directory(path: &Path) -> Option<PathBuf> {
@@ -1070,6 +1084,19 @@ mod tests {
         )
         .unwrap();
         fs::write(path, bytes).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cleanup_report_paths_use_conventional_windows_form() {
+        assert_eq!(
+            path_string(Path::new(r"\\?\C:\Games\Client\Content\Paks\patch.pak")),
+            r"C:\Games\Client\Content\Paks\patch.pak"
+        );
+        assert_eq!(
+            path_string(Path::new(r"\\?\UNC\server\share\patch.pak")),
+            r"\\server\share\patch.pak"
+        );
     }
 
     #[test]

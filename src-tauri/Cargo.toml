@@ -21,8 +21,15 @@ name = "wut-game-lifecycle-fixture"
 path = "tests/support/wut-game-lifecycle-fixture.rs"
 test = false
 
+[[bin]]
+name = "launcher-state-fixture"
+path = "src/bin/launcher-state-fixture.rs"
+test = false
+required-features = ["frontend-fixture"]
+
 [features]
 app = []
+frontend-fixture = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
