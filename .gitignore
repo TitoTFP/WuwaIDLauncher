@@ -25,6 +25,7 @@ Desktop.ini
 .DS_Store
 
 # Agent workspace files
+.memory/
 CLAUDE.md
 AGENTS.md
 docs/agents/

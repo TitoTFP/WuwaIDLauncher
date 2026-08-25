@@ -202,8 +202,15 @@ npm run build
 # Test frontend async state contracts
 npm run test:patch-status
 
+# Verifikasi semua metadata rilis dan fallback frontend memakai versi yang sama
+npm run test:version
+
 # Menjalankan seluruh unit test, mock HTTP, command integration, dan installer safety tests
 cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1
+
+# Format dan lint Rust dengan warning diperlakukan sebagai error
+cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
 ### Kompilasi Rilis Distribusi (Windows MSVC)
@@ -237,17 +244,32 @@ Artifact release yang diharapkan:
 
 Checklist sebelum publish:
 
-- [ ] `npm run check` lulus.
+- [ ] `npm run check` lulus tanpa error atau warning.
 - [ ] `npm run build` lulus.
-- [ ] cargo test --locked --all-targets lulus dengan fixture deterministic.
+- [ ] `npm run test:patch-status` dan `npm run test:version` lulus.
+- [ ] `cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check` lulus.
+- [ ] `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` lulus.
+- [ ] `cargo test --locked --all-targets` lulus dengan fixture deterministic.
 - [ ] ZIP dan SHA256sums.txt ada serta menggunakan versi yang sama.
+- [ ] Jalankan Windows release gate dengan artifact dan fixture disposable:
+
+  ```powershell
+  pwsh -NoProfile -File scripts/acceptance/windows-release-gate.ps1 `
+    -Mode automated `
+    -ArtifactRoot .\release-artifacts `
+    -OutputRoot .\release-gate-evidence `
+    -FixtureRoot .\release-gate-fixture `
+    -RunCommandGate
+  ```
+
 - [ ] Jalankan acceptance manual pada Windows dengan fixture reversible.
 - [ ] Uji read-only/admin, tray, force quit, offline media, dan self-update restart pada mesin release.
 - [ ] Tinjau diagnostics lokal sebelum membagikannya secara manual.
 
-Gate otomatis mencakup test suite Rust dengan lockfile, format/lint, `npm run check`,
-`npm run build`, dan Windows release gate. Acceptance game nyata tetap memerlukan
-mesin Windows release.
+Workflow release memvalidasi checkout tepat pada tag `vX.Y.Z` dan hanya membuat
+rilis portable ZIP beserta `SHA256sums.txt`; installer MSI/NSIS tidak dibuat.
+Push tag atau `workflow_dispatch` menjalankan gate yang sama. Acceptance game nyata
+tetap memerlukan mesin Windows release.
 
 ---
 
