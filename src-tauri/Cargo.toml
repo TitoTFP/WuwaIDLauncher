@@ -42,6 +42,8 @@ hex = "0.4"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 log = "0.4"
 quick-xml = "0.41.0"
+repak = { git = "https://git.xeondev.com/ReversedRoomsMisc/repak.git", rev = "76cf7c4173340686acd6f6764578a8ffa273d04b", default-features = false, features = ["wuthering-waves", "compression"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = "3"

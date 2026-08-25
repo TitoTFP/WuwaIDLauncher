@@ -1,28 +1,20 @@
-use crate::engine::{downloader, installer};
-use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use crate::engine::{downloader, installer, repak};
+use rusqlite::{params, Connection};
 use std::fs;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use zip::ZipArchive;
 
-pub const ARCHIVE_FILE_NAME: &str = "WuwaID.zip";
 pub const NORMAL_PAK_FILE_NAME: &str = "pakchunk0-ID-WindowsNoEditor_1000_P.pak";
-pub const HIDE_UID_PAK_FILE_NAME: &str = "pakchunk0-ID-WindowsNoEditor-HideUID_1000_P.pak";
-const MAX_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
+pub const HIDE_UID_PATCH_VERSION: &str = "hide_uid_v1";
+const UID_DATABASE_RELATIVE_PATH: &str = "Client/Content/Aki/ConfigDB/en/lang_multi_text.db";
+const UID_TABLE_NAME: &str = "MultiText";
+const UID_TARGET_IDS: [&str; 2] = ["Text_FriendMyUid_Text", "Text_UserId_Text"];
 const MAX_PAK_BYTES: u64 = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PatchVariant {
     Normal,
     HideUid,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReleaseAsset {
-    Archive,
-    LegacyPak,
 }
 
 impl PatchVariant {
@@ -40,277 +32,412 @@ impl PatchVariant {
             Self::HideUid => "hide_uid",
         }
     }
-
-    pub const fn pak_file_name(self) -> &'static str {
-        match self {
-            Self::Normal => NORMAL_PAK_FILE_NAME,
-            Self::HideUid => HIDE_UID_PAK_FILE_NAME,
-        }
-    }
 }
 
 pub fn installed_variant_matches(installed: Option<&str>, desired: PatchVariant) -> bool {
     installed.unwrap_or("normal") == desired.as_str()
 }
 
-pub fn select_release_asset(
-    checksums: &HashMap<String, String>,
-    variant: PatchVariant,
-) -> Result<ReleaseAsset, String> {
-    if checksums.contains_key(ARCHIVE_FILE_NAME) {
-        if !checksums.contains_key(variant.pak_file_name()) {
-            return Err(format!(
-                "checksum_missing: {} tidak ada dalam SHA256sums.txt",
-                variant.pak_file_name()
-            ));
-        }
-        return Ok(ReleaseAsset::Archive);
-    }
-    if variant == PatchVariant::HideUid {
-        return Err(
-            "hide_uid_unsupported: rilis lama belum menyediakan varian Hide UID".to_string(),
-        );
-    }
-    if checksums.contains_key(NORMAL_PAK_FILE_NAME) {
-        Ok(ReleaseAsset::LegacyPak)
-    } else {
-        Err("checksum_missing: asset patch tidak ada dalam SHA256sums.txt".to_string())
-    }
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn unique_temp_path(path: &Path) -> PathBuf {
+fn unique_path(path: &Path, suffix: &str) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
-    path.with_extension(format!("tmp-{}-{stamp}", std::process::id()))
+    path.with_file_name(format!(
+        ".{}.{}-{}-{}",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("asset"),
+        suffix,
+        std::process::id(),
+        stamp
+    ))
 }
 
-pub fn extract_selected_patch(
-    archive_path: &Path,
-    variant: PatchVariant,
-    expected_hash: &str,
-    destination: &Path,
-) -> Result<(), String> {
-    let archive_size = fs::metadata(archive_path)
-        .map_err(|error| format!("archive_metadata_failed: {error}"))?
-        .len();
-    if archive_size == 0 || archive_size > MAX_ARCHIVE_BYTES {
-        return Err(format!(
-            "archive_size_invalid: WuwaID.zip harus berukuran 1..{MAX_ARCHIVE_BYTES} bytes"
-        ));
+fn unique_work_directory(cache_dir: &Path) -> Result<PathBuf, String> {
+    fs::create_dir_all(cache_dir)
+        .map_err(|error| format!("hide_uid_cache_parent_failed: {error}"))?;
+    let work = unique_path(cache_dir, "work");
+    fs::create_dir(&work).map_err(|error| format!("hide_uid_work_create_failed: {error}"))?;
+    Ok(work)
+}
+
+fn valid_patch_version(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn derived_pak_path_with_version(
+    cache_dir: &Path,
+    source_hash: &str,
+    patch_version: &str,
+) -> PathBuf {
+    cache_dir.join(format!(
+        "{NORMAL_PAK_FILE_NAME}.{patch_version}.{source_hash}.pak"
+    ))
+}
+
+pub fn derived_pak_path(cache_dir: &Path, source_hash: &str) -> PathBuf {
+    derived_pak_path_with_version(cache_dir, source_hash, HIDE_UID_PATCH_VERSION)
+}
+
+fn derived_hash_path(pak_path: &Path) -> PathBuf {
+    pak_path.with_extension("sha256")
+}
+
+fn cached_derived_pak_is_valid(pak_path: &Path) -> bool {
+    let hash_path = derived_hash_path(pak_path);
+    let Ok(expected) = fs::read_to_string(hash_path) else {
+        return false;
+    };
+    let expected = expected.trim();
+    valid_sha256(expected)
+        && pak_path.is_file()
+        && downloader::verify_sha256(pak_path, expected).unwrap_or(false)
+        && installer::validate_pak_file(pak_path).unwrap_or(false)
+}
+
+fn write_derived_hash(pak_path: &Path, hash: &str) -> Result<(), String> {
+    let marker = derived_hash_path(pak_path);
+    let temporary = unique_path(&marker, "tmp");
+    fs::write(&temporary, format!("{hash}\n"))
+        .map_err(|error| format!("hide_uid_hash_write_failed: {error}"))?;
+    if marker.exists() {
+        fs::remove_file(&marker)
+            .map_err(|error| format!("hide_uid_hash_replace_failed: {error}"))?;
     }
-    if expected_hash.len() != 64 || !expected_hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    fs::rename(&temporary, &marker)
+        .map_err(|error| format!("hide_uid_hash_activate_failed: {error}"))
+}
+
+fn patch_uid_database(database: &Path) -> Result<(), String> {
+    if !database.is_file() {
+        return Err(format!("hide_uid_database_missing: {}", database.display()));
+    }
+
+    let mut connection = Connection::open(database)
+        .map_err(|error| format!("hide_uid_database_open_failed: {error}"))?;
+    connection
+        .execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;")
+        .map_err(|error| format!("hide_uid_database_pragmas_failed: {error}"))?;
+
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("hide_uid_database_transaction_failed: {error}"))?;
+    for id in UID_TARGET_IDS {
+        let count: i64 = transaction
+            .query_row(
+                &format!("SELECT COUNT(*) FROM {UID_TABLE_NAME} WHERE Id = ?1"),
+                params![id],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("hide_uid_database_query_failed:{id}: {error}"))?;
+        if count != 1 {
+            return Err(format!(
+                "hide_uid_target_count_invalid: {id} ditemukan {count} kali, diharapkan tepat 1"
+            ));
+        }
+
+        let changed = transaction
+            .execute(
+                &format!("UPDATE {UID_TABLE_NAME} SET Content = '' WHERE Id = ?1"),
+                params![id],
+            )
+            .map_err(|error| format!("hide_uid_database_update_failed:{id}: {error}"))?;
+        if changed != 1 {
+            return Err(format!(
+                "hide_uid_target_update_invalid: {id} mengubah {changed} baris"
+            ));
+        }
+    }
+    transaction
+        .commit()
+        .map_err(|error| format!("hide_uid_database_commit_failed: {error}"))?;
+    drop(connection);
+
+    for suffix in ["-wal", "-shm"] {
+        let sidecar = PathBuf::from(format!("{}{}", database.to_string_lossy(), suffix));
+        if sidecar.exists() {
+            fs::remove_file(&sidecar)
+                .map_err(|error| format!("hide_uid_database_sidecar_failed: {error}"))?;
+        }
+    }
+
+    let verification = Connection::open(database)
+        .map_err(|error| format!("hide_uid_database_verify_open_failed: {error}"))?;
+    for id in UID_TARGET_IDS {
+        let content: String = verification
+            .query_row(
+                &format!("SELECT Content FROM {UID_TABLE_NAME} WHERE Id = ?1"),
+                params![id],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("hide_uid_database_verify_query_failed:{id}: {error}"))?;
+        if !content.is_empty() {
+            return Err(format!(
+                "hide_uid_database_verify_failed: {id} tidak kosong"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+pub fn prepare_hide_uid_pak(
+    source_pak: &Path,
+    source_hash: &str,
+    cache_dir: &Path,
+) -> Result<PathBuf, String> {
+    prepare_hide_uid_pak_with_version(source_pak, source_hash, cache_dir, HIDE_UID_PATCH_VERSION)
+}
+
+pub(crate) fn prepare_hide_uid_pak_with_version(
+    source_pak: &Path,
+    source_hash: &str,
+    cache_dir: &Path,
+    patch_version: &str,
+) -> Result<PathBuf, String> {
+    if !valid_patch_version(patch_version) {
+        return Err("hide_uid_patch_version_invalid: versi patch tidak valid".to_string());
+    }
+    if !valid_sha256(source_hash) {
         return Err(
-            "archive_member_checksum_missing: checksum PAK pilihan tidak valid".to_string(),
+            "hide_uid_source_checksum_invalid: checksum PAK normal tidak valid".to_string(),
+        );
+    }
+    if !source_pak.is_file() || !downloader::verify_sha256(source_pak, source_hash).unwrap_or(false)
+    {
+        return Err(
+            "hide_uid_source_checksum_mismatch: PAK normal tidak cocok dengan manifest".to_string(),
         );
     }
 
-    if destination.is_file()
-        && downloader::verify_sha256(destination, expected_hash).unwrap_or(false)
-        && installer::validate_pak_file(destination).unwrap_or(false)
-    {
-        return Ok(());
+    let destination = derived_pak_path_with_version(cache_dir, source_hash, patch_version);
+    if cached_derived_pak_is_valid(&destination) {
+        return Ok(destination);
     }
 
-    let file =
-        fs::File::open(archive_path).map_err(|error| format!("archive_open_failed: {error}"))?;
-    let mut archive =
-        ZipArchive::new(file).map_err(|error| format!("archive_parse_failed: {error}"))?;
-    if archive.len() != 2 {
-        return Err("archive_members_invalid: WuwaID.zip wajib berisi tepat dua PAK".to_string());
-    }
+    let work = unique_work_directory(cache_dir)?;
+    let result = (|| -> Result<PathBuf, String> {
+        let unpacked = work.join("unpacked");
+        let temporary = work.join("hide_uid.pak");
+        repak::unpack_v12(source_pak, &unpacked)?;
+        patch_uid_database(&unpacked.join(UID_DATABASE_RELATIVE_PATH))?;
+        repak::pack_v12(&unpacked, &temporary)?;
 
-    let allowed = [NORMAL_PAK_FILE_NAME, HIDE_UID_PAK_FILE_NAME];
-    let mut names = HashSet::with_capacity(2);
-    for index in 0..archive.len() {
-        let member = archive
-            .by_index(index)
-            .map_err(|error| format!("archive_member_failed: {error}"))?;
-        let name = member.name();
-        if member.is_dir()
-            || member.enclosed_name().as_deref() != Some(Path::new(name))
-            || !allowed.contains(&name)
-        {
-            return Err(format!("archive_member_invalid: {name}"));
+        let size = fs::metadata(&temporary)
+            .map_err(|error| format!("hide_uid_output_metadata_failed: {error}"))?
+            .len();
+        if size == 0 || size > MAX_PAK_BYTES {
+            return Err("hide_uid_output_size_invalid: hasil PAK di luar batas".to_string());
         }
-        if !names.insert(name.to_string()) {
-            return Err(format!("archive_member_duplicate: {name}"));
+        if !installer::validate_pak_file(&temporary)? {
+            return Err("hide_uid_output_pak_invalid: struktur PAK hasil tidak valid".to_string());
         }
-        if member.size() == 0 || member.size() > MAX_PAK_BYTES {
-            return Err(format!("archive_member_size_invalid: {name}"));
+        let derived_hash = downloader::compute_sha256(&temporary)
+            .map_err(|error| format!("hide_uid_output_hash_failed: {error}"))?;
+        if !valid_sha256(&derived_hash) {
+            return Err("hide_uid_output_hash_invalid: hash hasil PAK tidak valid".to_string());
         }
-    }
-    if !allowed.iter().all(|name| names.contains(*name)) {
-        return Err("archive_members_invalid: varian PAK tidak lengkap".to_string());
-    }
 
-    let selected_name = variant.pak_file_name();
-    let mut member = archive
-        .by_name(selected_name)
-        .map_err(|error| format!("archive_selected_member_missing: {error}"))?;
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("archive_cache_parent_failed: {error}"))?;
-    }
-    let temp = unique_temp_path(destination);
-    let result = (|| -> Result<(), String> {
-        let mut output = fs::File::create(&temp)
-            .map_err(|error| format!("archive_extract_create_failed: {error}"))?;
-        let mut hasher = Sha256::new();
-        let mut written = 0u64;
-        let mut buffer = [0u8; 64 * 1024];
-        loop {
-            let count = member
-                .read(&mut buffer)
-                .map_err(|error| format!("archive_extract_read_failed: {error}"))?;
-            if count == 0 {
-                break;
-            }
-            written = written.saturating_add(count as u64);
-            if written > MAX_PAK_BYTES || written > member.size() {
-                return Err("archive_extract_size_invalid: PAK melebihi batas".to_string());
-            }
-            output
-                .write_all(&buffer[..count])
-                .map_err(|error| format!("archive_extract_write_failed: {error}"))?;
-            hasher.update(&buffer[..count]);
-        }
-        output
-            .sync_all()
-            .map_err(|error| format!("archive_extract_sync_failed: {error}"))?;
-        if written != member.size() {
-            return Err("archive_extract_size_mismatch: ukuran PAK tidak cocok".to_string());
-        }
-        let actual_hash = hex::encode(hasher.finalize());
-        if !actual_hash.eq_ignore_ascii_case(expected_hash) {
-            return Err("archive_member_checksum_mismatch: integritas PAK gagal".to_string());
-        }
-        if !installer::validate_pak_file(&temp)? {
-            return Err("archive_member_pak_invalid: struktur PAK tidak valid".to_string());
-        }
         if destination.exists() {
-            fs::remove_file(destination)
-                .map_err(|error| format!("archive_cache_replace_failed: {error}"))?;
+            fs::remove_file(&destination)
+                .map_err(|error| format!("hide_uid_output_replace_failed: {error}"))?;
         }
-        fs::rename(&temp, destination)
-            .map_err(|error| format!("archive_cache_activate_failed: {error}"))?;
-        Ok(())
+        fs::create_dir_all(cache_dir)
+            .map_err(|error| format!("hide_uid_cache_create_failed: {error}"))?;
+        fs::rename(&temporary, &destination)
+            .map_err(|error| format!("hide_uid_output_activate_failed: {error}"))?;
+        write_derived_hash(&destination, &derived_hash)?;
+        Ok(destination)
     })();
-    if result.is_err() {
-        let _ = fs::remove_file(temp);
-    }
+    let _ = fs::remove_dir_all(&work);
     result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::pak;
-    use std::io::Cursor;
-    use zip::write::SimpleFileOptions;
+    use crate::engine::repak as repak_tools;
+    use rusqlite::Connection;
 
-    fn valid_pak(label: &str) -> Vec<u8> {
-        pak::pack(
-            "../../../",
-            0,
-            &[(format!("{label}.db"), label.as_bytes().to_vec())],
-        )
-        .unwrap()
+    fn create_database(path: &Path, duplicate_friend_id: bool) {
+        create_database_with_unrelated(path, duplicate_friend_id, "keep me");
     }
 
-    fn write_archive(path: &Path, entries: &[(&str, Vec<u8>)]) {
-        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        for (name, bytes) in entries {
-            writer
-                .start_file(*name, SimpleFileOptions::default())
+    fn create_database_with_unrelated(
+        path: &Path,
+        duplicate_friend_id: bool,
+        unrelated_content: &str,
+    ) {
+        let connection = Connection::open(path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE MultiText (Id TEXT, Content TEXT, RedirectDbIndex INTEGER);
+                 INSERT INTO MultiText VALUES ('Text_FriendMyUid_Text', 'ID Pengguna: {0}', 0);
+                 INSERT INTO MultiText VALUES ('Text_UserId_Text', 'ID Pengguna: {0}', 0);",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO MultiText VALUES ('Unrelated_Text', ?1, 0)",
+                params![unrelated_content],
+            )
+            .unwrap();
+        if duplicate_friend_id {
+            connection
+                .execute(
+                    "INSERT INTO MultiText VALUES (?1, 'duplicate', 0)",
+                    params![UID_TARGET_IDS[0]],
+                )
                 .unwrap();
-            writer.write_all(bytes).unwrap();
         }
-        let bytes = writer.finish().unwrap().into_inner();
-        fs::write(path, bytes).unwrap();
+    }
+
+    fn create_source_pak(path: &Path) {
+        create_source_pak_with_unrelated(path, "keep me");
+    }
+
+    fn create_source_pak_with_unrelated(path: &Path, unrelated_content: &str) {
+        let temp = tempfile::tempdir().unwrap();
+        let database = temp.path().join(UID_DATABASE_RELATIVE_PATH);
+        fs::create_dir_all(database.parent().unwrap()).unwrap();
+        create_database_with_unrelated(&database, false, unrelated_content);
+        repak_tools::pack_v12(temp.path(), path).unwrap();
     }
 
     #[test]
-    fn release_selection_prefers_archive_and_never_downgrades_hide_uid() {
+    fn defaults_and_variant_matching_are_local_only() {
         assert!(installed_variant_matches(None, PatchVariant::Normal));
         assert!(!installed_variant_matches(None, PatchVariant::HideUid));
         assert!(installed_variant_matches(
             Some("hide_uid"),
             PatchVariant::HideUid
         ));
+        assert_eq!(PatchVariant::HideUid.as_str(), "hide_uid");
+    }
 
-        let mut checksums = HashMap::new();
-        checksums.insert(NORMAL_PAK_FILE_NAME.to_string(), "a".repeat(64));
-        assert_eq!(
-            select_release_asset(&checksums, PatchVariant::Normal).unwrap(),
-            ReleaseAsset::LegacyPak
-        );
-        assert!(select_release_asset(&checksums, PatchVariant::HideUid)
+    #[test]
+    fn patches_only_the_two_uid_records() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = temp.path().join("lang_multi_text.db");
+        create_database(&database, false);
+
+        patch_uid_database(&database).unwrap();
+        let connection = Connection::open(database).unwrap();
+        for id in UID_TARGET_IDS {
+            let content: String = connection
+                .query_row(
+                    "SELECT Content FROM MultiText WHERE Id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(content.is_empty());
+        }
+        let unrelated: String = connection
+            .query_row(
+                "SELECT Content FROM MultiText WHERE Id = 'Unrelated_Text'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(unrelated, "keep me");
+    }
+
+    #[test]
+    fn rejects_missing_and_ambiguous_uid_records() {
+        let temp = tempfile::tempdir().unwrap();
+        let missing = temp.path().join("missing.db");
+        let connection = Connection::open(&missing).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE MultiText (Id TEXT, Content TEXT, RedirectDbIndex INTEGER);
+                 INSERT INTO MultiText VALUES ('Text_FriendMyUid_Text', 'x', 0);",
+            )
+            .unwrap();
+        drop(connection);
+        assert!(patch_uid_database(&missing)
             .unwrap_err()
-            .contains("hide_uid_unsupported"));
+            .contains("hide_uid_target_count_invalid"));
 
-        checksums.insert(ARCHIVE_FILE_NAME.to_string(), "b".repeat(64));
-        checksums.insert(HIDE_UID_PAK_FILE_NAME.to_string(), "c".repeat(64));
-        assert_eq!(
-            select_release_asset(&checksums, PatchVariant::HideUid).unwrap(),
-            ReleaseAsset::Archive
-        );
+        let duplicate = temp.path().join("duplicate.db");
+        create_database(&duplicate, true);
+        assert!(patch_uid_database(&duplicate)
+            .unwrap_err()
+            .contains("hide_uid_target_count_invalid"));
     }
 
     #[test]
-    fn extracts_only_selected_exact_member_and_checks_hash() {
+    fn rejects_checksum_mismatch_and_invalid_source_pak() {
         let temp = tempfile::tempdir().unwrap();
-        let normal = valid_pak("normal");
-        let hidden = valid_pak("hidden");
-        let archive = temp.path().join(ARCHIVE_FILE_NAME);
-        write_archive(
-            &archive,
-            &[
-                (NORMAL_PAK_FILE_NAME, normal),
-                (HIDE_UID_PAK_FILE_NAME, hidden.clone()),
-            ],
-        );
-        let expected = hex::encode(Sha256::digest(&hidden));
-        let output = temp.path().join("selected.pak");
+        let source = temp.path().join(NORMAL_PAK_FILE_NAME);
+        fs::write(&source, b"not a pak").unwrap();
+        let cache = temp.path().join("cache");
+        let actual_hash = downloader::compute_sha256(&source).unwrap();
 
-        extract_selected_patch(&archive, PatchVariant::HideUid, &expected, &output).unwrap();
-        assert_eq!(fs::read(output).unwrap(), hidden);
+        assert!(prepare_hide_uid_pak(&source, &"0".repeat(64), &cache)
+            .unwrap_err()
+            .contains("hide_uid_source_checksum_mismatch"));
+        assert!(prepare_hide_uid_pak(&source, &actual_hash, &cache)
+            .unwrap_err()
+            .contains("repak_read_v12"));
     }
 
     #[test]
-    fn rejects_unexpected_members_and_checksum_mismatch() {
+    fn cache_path_changes_with_source_hash_and_patch_version() {
+        let cache = Path::new("cache");
+        let first = derived_pak_path(cache, &"a".repeat(64));
+        let second = derived_pak_path(cache, &"b".repeat(64));
+        assert_ne!(first, second);
+        assert!(first.to_string_lossy().contains(HIDE_UID_PATCH_VERSION));
+    }
+
+    #[test]
+    fn builds_and_reuses_a_verified_hide_uid_pak() {
         let temp = tempfile::tempdir().unwrap();
-        let pak = valid_pak("normal");
-        let output = temp.path().join("selected.pak");
-        let expected = hex::encode(Sha256::digest(&pak));
+        let source = temp.path().join(NORMAL_PAK_FILE_NAME);
+        let cache = temp.path().join("cache");
+        create_source_pak(&source);
+        let source_hash = downloader::compute_sha256(&source).unwrap();
 
-        let unexpected = temp.path().join("unexpected.zip");
-        write_archive(
-            &unexpected,
-            &[
-                (NORMAL_PAK_FILE_NAME, pak.clone()),
-                ("../evil.pak", pak.clone()),
-            ],
-        );
-        assert!(
-            extract_selected_patch(&unexpected, PatchVariant::Normal, &expected, &output)
-                .unwrap_err()
-                .contains("archive_member_invalid")
-        );
+        let generated = prepare_hide_uid_pak(&source, &source_hash, &cache).unwrap();
+        assert!(installer::validate_pak_file(&generated).unwrap());
+        let unpacked = temp.path().join("verified");
+        repak_tools::unpack_v12(&generated, &unpacked).unwrap();
+        let connection = Connection::open(unpacked.join(UID_DATABASE_RELATIVE_PATH)).unwrap();
+        for id in UID_TARGET_IDS {
+            let content: String = connection
+                .query_row(
+                    "SELECT Content FROM MultiText WHERE Id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(content.is_empty());
+        }
 
-        let valid = temp.path().join("valid.zip");
-        write_archive(
-            &valid,
-            &[
-                (NORMAL_PAK_FILE_NAME, pak.clone()),
-                (HIDE_UID_PAK_FILE_NAME, pak),
-            ],
-        );
-        assert!(
-            extract_selected_patch(&valid, PatchVariant::Normal, &"0".repeat(64), &output)
-                .unwrap_err()
-                .contains("checksum_mismatch")
-        );
+        let second = prepare_hide_uid_pak(&source, &source_hash, &cache).unwrap();
+        assert_eq!(generated, second);
+        assert!(cached_derived_pak_is_valid(&second));
+
+        create_source_pak_with_unrelated(&source, "changed source bytes");
+        let changed_hash = downloader::compute_sha256(&source).unwrap();
+        assert_ne!(source_hash, changed_hash);
+        let regenerated = prepare_hide_uid_pak(&source, &changed_hash, &cache).unwrap();
+        assert_ne!(generated, regenerated);
+        assert!(cached_derived_pak_is_valid(&regenerated));
+
+        let new_algorithm =
+            prepare_hide_uid_pak_with_version(&source, &changed_hash, &cache, "hide_uid_v2")
+                .unwrap();
+        assert_ne!(regenerated, new_algorithm);
+        assert!(installer::validate_pak_file(&new_algorithm).unwrap());
     }
 }

@@ -1650,6 +1650,29 @@ async fn ensure_cached_patch_asset<R: Runtime>(
     Ok(())
 }
 
+fn prepare_cached_patch_asset(
+    pak_path: &Path,
+    expected_hash: &str,
+    cache_dir: &Path,
+    variant: engine::patch_asset::PatchVariant,
+) -> Result<PathBuf, String> {
+    if expected_hash.len() != 64
+        || !expected_hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !engine::downloader::verify_sha256(pak_path, expected_hash).unwrap_or(false)
+    {
+        return Err("Integritas PAK normal gagal diverifikasi.".to_string());
+    }
+    if !engine::installer::validate_pak_file(pak_path)? {
+        return Err("Struktur PAK rilis tidak valid.".to_string());
+    }
+    match variant {
+        engine::patch_asset::PatchVariant::Normal => Ok(pak_path.to_path_buf()),
+        engine::patch_asset::PatchVariant::HideUid => {
+            engine::patch_asset::prepare_hide_uid_pak(pak_path, expected_hash, cache_dir)
+        }
+    }
+}
+
 async fn prepare_patch_asset<R: Runtime>(
     app: &AppHandle<R>,
     checksums: &std::collections::HashMap<String, String>,
@@ -1658,44 +1681,31 @@ async fn prepare_patch_asset<R: Runtime>(
     let cache_dir = get_appdata_dir().join("Cache");
     std::fs::create_dir_all(&cache_dir)
         .map_err(|error| format!("Gagal membuat cache patch: {error}"))?;
-    match engine::patch_asset::select_release_asset(checksums, variant)? {
-        engine::patch_asset::ReleaseAsset::Archive => {
-            let archive_hash = checksums
-                .get(engine::patch_asset::ARCHIVE_FILE_NAME)
-                .ok_or_else(|| "Checksum WuwaID.zip tidak ditemukan.".to_string())?;
-            let archive_path = cache_dir.join(engine::patch_asset::ARCHIVE_FILE_NAME);
-            ensure_cached_patch_asset(
-                app,
-                engine::patch_asset::ARCHIVE_FILE_NAME,
-                &archive_path,
-                archive_hash,
-            )
-            .await?;
-            let pak_hash = checksums
-                .get(variant.pak_file_name())
-                .ok_or_else(|| format!("Checksum {} tidak ditemukan.", variant.pak_file_name()))?;
-            let pak_path = cache_dir.join(variant.pak_file_name());
-            engine::patch_asset::extract_selected_patch(
-                &archive_path,
-                variant,
-                pak_hash,
-                &pak_path,
-            )?;
-            Ok(pak_path)
-        }
-        engine::patch_asset::ReleaseAsset::LegacyPak => {
-            let asset_name = engine::patch_asset::NORMAL_PAK_FILE_NAME;
-            let expected_hash = checksums
-                .get(asset_name)
-                .ok_or_else(|| format!("Checksum {asset_name} tidak ditemukan."))?;
-            let pak_path = cache_dir.join(asset_name);
-            ensure_cached_patch_asset(app, asset_name, &pak_path, expected_hash).await?;
-            if !engine::installer::validate_pak_file(&pak_path)? {
-                return Err("Struktur PAK rilis lama tidak valid.".to_string());
-            }
-            Ok(pak_path)
-        }
+
+    let asset_name = engine::patch_asset::NORMAL_PAK_FILE_NAME;
+    let expected_hash = checksums
+        .get(asset_name)
+        .cloned()
+        .ok_or_else(|| format!("Checksum {asset_name} tidak ditemukan."))?;
+    let pak_path = cache_dir.join(asset_name);
+    ensure_cached_patch_asset(app, asset_name, &pak_path, &expected_hash).await?;
+
+    if variant == engine::patch_asset::PatchVariant::HideUid {
+        let _ = app.emit(
+            "onProgressUpdate",
+            serde_json::json!({
+                "percent": 88,
+                "status": "Membuat PAK Hide UID..."
+            }),
+        );
     }
+
+    let cache_dir_for_worker = cache_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        prepare_cached_patch_asset(&pak_path, &expected_hash, &cache_dir_for_worker, variant)
+    })
+    .await
+    .map_err(|error| format!("Pembuatan PAK patch dibatalkan: {error}"))?
 }
 
 #[tauri::command]
@@ -2440,6 +2450,100 @@ mod tests {
             headers: Default::default(),
             invoke_key: INVOKE_KEY.to_string(),
         }
+    }
+
+    fn create_local_patch_source(
+        root: &Path,
+        include_database: bool,
+        unrelated_content: &str,
+    ) -> (PathBuf, String) {
+        let tree = root.join("source-tree");
+        let database = tree.join("Client/Content/Aki/ConfigDB/en/lang_multi_text.db");
+        if include_database {
+            std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+            let connection = rusqlite::Connection::open(&database).unwrap();
+            connection
+                .execute_batch(&format!(
+                    "CREATE TABLE MultiText (Id TEXT, Content TEXT, RedirectDbIndex INTEGER);
+                     INSERT INTO MultiText VALUES ('Text_FriendMyUid_Text', 'ID Pengguna: {{0}}', 0);
+                     INSERT INTO MultiText VALUES ('Text_UserId_Text', 'ID Pengguna: {{0}}', 0);
+                     INSERT INTO MultiText VALUES ('Unrelated_Text', '{unrelated_content}', 0);"
+                ))
+                .unwrap();
+        } else {
+            let unrelated = tree.join("Client/Content/unrelated.txt");
+            std::fs::create_dir_all(unrelated.parent().unwrap()).unwrap();
+            std::fs::write(unrelated, unrelated_content).unwrap();
+        }
+        let source = root.join(engine::patch_asset::NORMAL_PAK_FILE_NAME);
+        engine::repak::pack_v12(&tree, &source).unwrap();
+        let hash = engine::downloader::compute_sha256(&source).unwrap();
+        (source, hash)
+    }
+
+    #[test]
+    fn normal_patch_preparation_returns_the_verified_source_pak() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source, hash) = create_local_patch_source(temp.path(), true, "keep");
+        let cache = temp.path().join("cache");
+
+        let prepared = prepare_cached_patch_asset(
+            &source,
+            &hash,
+            &cache,
+            engine::patch_asset::PatchVariant::Normal,
+        )
+        .unwrap();
+
+        assert_eq!(prepared, source);
+        assert!(!engine::patch_asset::derived_pak_path(&cache, &hash).exists());
+    }
+
+    fn assert_hide_failure_does_not_fallback(
+        source: &Path,
+        expected_hash: &str,
+        cache: &Path,
+    ) -> String {
+        let source_before = std::fs::read(source).unwrap();
+        let error = prepare_cached_patch_asset(
+            source,
+            expected_hash,
+            cache,
+            engine::patch_asset::PatchVariant::HideUid,
+        )
+        .unwrap_err();
+        assert_eq!(std::fs::read(source).unwrap(), source_before);
+        assert!(!engine::patch_asset::derived_pak_path(cache, expected_hash).exists());
+        error
+    }
+
+    #[test]
+    fn failed_hide_uid_preparation_never_falls_back_to_normal_pak() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source, hash) = create_local_patch_source(temp.path(), false, "normal-only");
+        let missing_database_error = assert_hide_failure_does_not_fallback(
+            &source,
+            &hash,
+            &temp.path().join("missing-database-cache"),
+        );
+        assert!(missing_database_error.contains("hide_uid_database_missing"));
+
+        let checksum_error = assert_hide_failure_does_not_fallback(
+            &source,
+            &"0".repeat(64),
+            &temp.path().join("checksum-cache"),
+        );
+        assert!(checksum_error.contains("Integritas PAK normal gagal"));
+
+        let invalid_source = temp.path().join("invalid-source.pak");
+        std::fs::write(&invalid_source, b"not a valid V12 pak").unwrap();
+        let invalid_hash = engine::downloader::compute_sha256(&invalid_source).unwrap();
+        let invalid_pak_error = assert_hide_failure_does_not_fallback(
+            &invalid_source,
+            &invalid_hash,
+            &temp.path().join("invalid-source-cache"),
+        );
+        assert!(invalid_pak_error.contains("Struktur PAK rilis tidak valid"));
     }
 
     #[test]

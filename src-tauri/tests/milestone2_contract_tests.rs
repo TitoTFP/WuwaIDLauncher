@@ -2,19 +2,39 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;
-use wuwaid_launcher_lib::engine::{installer, method::InstallMethod, pak, path, signature};
+use wuwaid_launcher_lib::engine::{
+    downloader, installer, method::InstallMethod, pak, patch_asset, path, repak, signature,
+};
 
 fn release_like_pak(path: &Path) {
+    release_like_pak_with_content(path, b"Bahasa Indonesia");
+}
+
+fn release_like_pak_with_content(path: &Path, content: &[u8]) {
     let bytes = pak::pack(
         "../../../",
         0,
-        &[(
-            "Content/Localization/id.txt".to_string(),
-            b"Bahasa Indonesia".to_vec(),
-        )],
+        &[("Content/Localization/id.txt".to_string(), content.to_vec())],
     )
     .unwrap();
     fs::write(path, bytes).unwrap();
+}
+
+fn create_hide_uid_source_pak(path: &Path) {
+    let temp = tempfile::tempdir().unwrap();
+    let database = temp
+        .path()
+        .join("Client/Content/Aki/ConfigDB/en/lang_multi_text.db");
+    fs::create_dir_all(database.parent().unwrap()).unwrap();
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE MultiText (Id TEXT, Content TEXT, RedirectDbIndex INTEGER);
+             INSERT INTO MultiText VALUES ('Text_FriendMyUid_Text', 'ID Pengguna: {0}', 0);
+             INSERT INTO MultiText VALUES ('Text_UserId_Text', 'ID Pengguna: {0}', 0);",
+        )
+        .unwrap();
+    repak::pack_v12(temp.path(), path).unwrap();
 }
 
 fn setup_game() -> (TempDir, PathBuf) {
@@ -53,6 +73,21 @@ fn setup_game() -> (TempDir, PathBuf) {
     .unwrap();
 
     (temp, game)
+}
+
+fn snapshot_files(paths: &[PathBuf]) -> Vec<Option<Vec<u8>>> {
+    paths
+        .iter()
+        .map(|path| path.is_file().then(|| fs::read(path).unwrap()))
+        .collect()
+}
+
+fn assert_snapshot_unchanged(paths: &[PathBuf], before: &[Option<Vec<u8>>]) {
+    assert_eq!(
+        snapshot_files(paths),
+        before,
+        "deployment changed an artifact after a failed transaction"
+    );
 }
 
 #[test]
@@ -228,6 +263,81 @@ fn non_file_canonical_target_blocks_install_and_rolls_back() {
     assert!(error.contains("cleanup_partial_failure"));
     assert!(error.contains("preserved"));
     assert!(loader_dll.is_dir());
+}
+
+#[test]
+fn invalid_generated_hide_uid_pak_leaves_existing_installation_byte_for_byte_unchanged() {
+    let (_temp, game) = setup_game();
+    let valid_source = game.join("valid-source.pak");
+    let hide_source = game.join("hide-source.pak");
+    release_like_pak(&valid_source);
+    create_hide_uid_source_pak(&hide_source);
+    let source_hash = downloader::compute_sha256(&hide_source).unwrap();
+    let derived_cache = game.join("derived-cache");
+    let invalid_derived =
+        patch_asset::prepare_hide_uid_pak(&hide_source, &source_hash, &derived_cache).unwrap();
+    fs::write(&invalid_derived, b"not a valid V12 pak").unwrap();
+
+    installer::install_patch_transaction(&game, InstallMethod::ResourceMount, &valid_source, None)
+        .unwrap();
+    let plan = installer::probe_resource_mount(&game).unwrap();
+    let tracked = vec![
+        signature::get_sig_path(&game),
+        plan.pak_path.clone(),
+        plan.sig_path.clone(),
+        plan.mount_path.clone(),
+        plan.owner_marker_path.clone(),
+    ];
+    let before = snapshot_files(&tracked);
+
+    let error = installer::install_patch_transaction(
+        &game,
+        InstallMethod::ResourceMount,
+        &invalid_derived,
+        None,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("footer/index"));
+    assert_snapshot_unchanged(&tracked, &before);
+}
+
+#[test]
+fn metadata_commit_failure_restores_every_deployed_artifact_byte_for_byte() {
+    let (_temp, game) = setup_game();
+    let original_source = game.join("original-source.pak");
+    let replacement_source = game.join("replacement-source.pak");
+    release_like_pak_with_content(&original_source, b"original patch");
+    release_like_pak_with_content(&replacement_source, b"replacement patch");
+
+    installer::install_patch_transaction(
+        &game,
+        InstallMethod::ResourceMount,
+        &original_source,
+        None,
+    )
+    .unwrap();
+    let plan = installer::probe_resource_mount(&game).unwrap();
+    let tracked = vec![
+        signature::get_sig_path(&game),
+        plan.pak_path.clone(),
+        plan.sig_path.clone(),
+        plan.mount_path.clone(),
+        plan.owner_marker_path.clone(),
+    ];
+    let before = snapshot_files(&tracked);
+
+    let error = installer::install_patch_transaction_with_commit(
+        &game,
+        InstallMethod::ResourceMount,
+        &replacement_source,
+        None,
+        || Err("forced metadata failure".to_string()),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("metadata_commit_failed"));
+    assert_snapshot_unchanged(&tracked, &before);
 }
 
 #[test]

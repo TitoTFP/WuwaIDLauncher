@@ -107,12 +107,19 @@ Acceptance manual Windows tetap diperlukan untuk memvalidasi game nyata, mode ad
 
 ### Kontrak Asset Patch
 
-Rilis baru menyediakan `WuwaID.zip`, `winhttp.dll`, dan `SHA256sums.txt`. ZIP wajib berisi tepat dua member di root:
+Rilis WuwaID menyediakan PAK normal mentah, `winhttp.dll`, dan `SHA256sums.txt`.
+Launcher memverifikasi SHA-256 serta struktur PAK normal sebelum menggunakannya.
 
-- `pakchunk0-ID-WindowsNoEditor_1000_P.pak`
-- `pakchunk0-ID-WindowsNoEditor-HideUID_1000_P.pak`
+Jika **Sembunyikan UID** aktif, launcher membuat salinan lokal melalui crate repak V12,
+mengubah tepat dua ID berikut di database terjemahan, lalu mengemasnya kembali:
 
-Manifest checksum memuat hash ZIP, kedua PAK internal, dan `winhttp.dll`. Launcher memverifikasi ZIP sebelum ekstraksi, hanya mengekstrak nama member yang dipilih, lalu memverifikasi hash serta struktur PAK. Rilis lama yang hanya menyediakan PAK normal mentah tetap didukung untuk instalasi normal. Hide UID pada rilis lama ditolak dengan pesan jelas dan tidak pernah diturunkan diam-diam ke PAK normal.
+- `Text_FriendMyUid_Text`
+- `Text_UserId_Text`
+
+PAK hasil Hide UID hanya disimpan di cache launcher dan dipasang dengan nama PAK
+normal. Launcher gagal dengan pesan jelas bila database atau salah satu ID target tidak
+ada/ambigu; launcher tidak pernah diam-diam mengganti permintaan Hide UID dengan PAK
+normal. Release WuwaID tidak perlu menyediakan `WuwaID.zip` atau PAK Hide UID kedua.
 
 ### Mapping Metode dan Recovery
 

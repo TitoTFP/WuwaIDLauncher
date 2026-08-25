@@ -11,6 +11,7 @@ pub mod pak;
 pub mod patch_asset;
 pub mod patch_status;
 pub mod path;
+pub mod repak;
 pub mod runtime;
 pub mod settings;
 pub mod signature;
