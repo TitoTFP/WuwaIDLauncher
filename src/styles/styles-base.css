@@ -8,27 +8,27 @@
         3 3,
         var(--cursor-custom);
 
-    --bg-deep: #080b28;
-    --bg-panel: rgba(14, 18, 52, 0.82);
-    --bg-panel-solid: #0e1234;
-    --bg-hover: rgba(212, 176, 108, 0.1);
+    --bg-deep: #07191d;
+    --bg-panel: rgba(7, 26, 30, 0.84);
+    --bg-panel-solid: #0b252a;
+    --bg-hover: rgba(170, 214, 217, 0.1);
 
-    --glass-border: rgba(212, 176, 108, 0.3);
+    --glass-border: rgba(184, 231, 230, 0.28);
 
-    --accent-gold: #f4d48a;
-    --accent-peach: #d8564a;
-    --accent-orange: #d8564a;
+    --accent-gold: #e7d394;
+    --accent-peach: #d9a69c;
+    --accent-orange: #79cbd0;
 
-    --text-1: #ffffff;
-    --text-2: rgba(255, 255, 255, 0.7);
-    --text-3: rgba(212, 176, 108, 0.5);
+    --text-1: #e0f0ef;
+    --text-2: rgba(240, 252, 250, 0.72);
+    --text-3: rgba(120, 147, 152, 0.78);
 
-    --green: #7acaa0;
-    --red: #d8564a;
-    --blue: #d4b06c;
+    --green: #a7cbb5;
+    --red: #e89588;
+    --blue: #aad6d9;
 
-    --cream: #f4d48a;
-    --cyan-accent: #d4b06c;
+    --cream: #e0f0ef;
+    --cyan-accent: #79cbd0;
 
     --font-ui: "JetBrains Mono", "Segoe UI", monospace;
 
@@ -86,11 +86,11 @@ input {
     background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-    background: rgba(212, 176, 108, 0.25);
+    background: rgba(121, 203, 208, 0.32);
     border-radius: 0px;
 }
 ::-webkit-scrollbar-thumb:hover {
-    background: rgba(212, 176, 108, 0.45);
+    background: rgba(167, 203, 181, 0.62);
 }
 
 .bg-layer {
@@ -132,18 +132,19 @@ body.game-runtime-readonly a {
     inset: 0;
     background:
         radial-gradient(
-            ellipse 120% 80% at 90% 85%,
-            rgba(5, 5, 5, 0.78) 0%,
-            transparent 55%
+            ellipse 54% 48% at 52% 51%,
+            rgba(220, 250, 244, 0.1) 0%,
+            transparent 72%
         ),
         linear-gradient(
-            270deg,
-            rgba(5, 5, 5, 0.72) 0%,
-            rgba(5, 5, 5, 0.22) 22%,
-            transparent 42%
+            90deg,
+            rgba(4, 24, 27, 0.62) 0%,
+            transparent 30%,
+            transparent 70%,
+            rgba(4, 24, 27, 0.7) 100%
         ),
-        linear-gradient(0deg, rgba(5, 5, 5, 0.6) 0%, transparent 20%),
-        linear-gradient(180deg, rgba(5, 5, 5, 0.55) 0%, transparent 14%);
+        linear-gradient(0deg, rgba(3, 18, 21, 0.72) 0%, transparent 26%),
+        linear-gradient(180deg, rgba(4, 20, 23, 0.58) 0%, transparent 25%);
     pointer-events: none;
 }
 
@@ -153,13 +154,13 @@ body.game-runtime-readonly a {
     background: linear-gradient(
         to bottom,
         transparent 50%,
-        rgba(0, 0, 0, 0.15) 51%,
+        rgba(230, 255, 250, 0.06) 51%,
         transparent 51%
     );
     background-size: 100% 4px;
     pointer-events: none;
     z-index: 2;
-    opacity: 0.6;
+    opacity: 0.24;
 }
 
 .scanlines::after {

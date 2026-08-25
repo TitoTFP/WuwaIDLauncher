@@ -1,0 +1,1484 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#07191d" />
+    <link rel="icon" href="/images/app.ico" />
+    <title>WuwaID Launcher · Mist Jade Prototype</title>
+    <style>
+      :root {
+        --bg-deep: #07191d;
+        --bg-panel: rgba(7, 26, 30, 0.84);
+        --bg-panel-soft: rgba(12, 42, 46, 0.66);
+        --mist: #e0f0ef;
+        --aqua: #aad6d9;
+        --cyan: #79cbd0;
+        --jade: #a7cbb5;
+        --slate: #789398;
+        --lantern: #e7d394;
+        --danger: #e89588;
+        --line: rgba(184, 231, 230, 0.28);
+        --line-strong: rgba(184, 231, 230, 0.54);
+        --text-soft: rgba(240, 252, 250, 0.72);
+        --ease: cubic-bezier(0.32, 0.72, 0, 1);
+        --edge-gap: 20px;
+        --top-h: 70px;
+        --rp-w: 400px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+
+      body {
+        display: grid;
+        overflow: hidden;
+        place-items: center;
+        color: var(--mist);
+        background: #041114;
+        font-family: "Segoe UI", "Noto Sans", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      button {
+        border: 0;
+        color: inherit;
+        cursor: pointer;
+      }
+
+      .launcher {
+        position: relative;
+        width: min(1280px, 100vw);
+        height: min(720px, 100vh);
+        aspect-ratio: 16 / 9;
+        overflow: hidden;
+        isolation: isolate;
+        background: url("/images/bg-default.jpg") center / cover no-repeat;
+        box-shadow:
+          0 0 0 1px rgba(184, 231, 230, 0.18),
+          0 24px 60px rgba(1, 11, 13, 0.5);
+      }
+
+      .bg-layer,
+      .bg-vignette,
+      .scanlines,
+      .stage-lights,
+      .stage-light {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+
+      .bg-layer {
+        z-index: -2;
+        background: url("/images/bg-default.jpg") center / cover no-repeat;
+      }
+
+      .bg-vignette {
+        z-index: -1;
+        background:
+          radial-gradient(
+            ellipse 54% 48% at 52% 51%,
+            rgba(220, 250, 244, 0.1),
+            transparent 72%
+          ),
+          linear-gradient(
+            90deg,
+            rgba(4, 24, 27, 0.62),
+            transparent 30%,
+            transparent 70%,
+            rgba(4, 24, 27, 0.7)
+          ),
+          linear-gradient(
+            180deg,
+            rgba(4, 20, 23, 0.58),
+            transparent 25%,
+            transparent 66%,
+            rgba(3, 18, 21, 0.72)
+          );
+      }
+
+      .scanlines {
+        z-index: 2;
+        opacity: 0.2;
+        background: repeating-linear-gradient(
+          0deg,
+          transparent 0 3px,
+          rgba(230, 255, 250, 0.06) 4px,
+          transparent 5px
+        );
+        mix-blend-mode: screen;
+      }
+
+      .stage-lights {
+        z-index: 1;
+        opacity: 0.32;
+      }
+
+      .stage-light {
+        inset: -50px auto auto;
+        width: 300px;
+        height: 800px;
+        background: conic-gradient(
+          from 165deg at 50% 0%,
+          transparent,
+          rgba(121, 203, 208, 0.06) 25%,
+          rgba(167, 203, 181, 0.12) 50%,
+          transparent 78%
+        );
+        transform-origin: top center;
+        animation: lightSway 9s ease-in-out infinite alternate;
+      }
+
+      .stage-light:nth-child(1) {
+        left: 20%;
+      }
+
+      .stage-light:nth-child(2) {
+        left: 50%;
+        animation-direction: alternate-reverse;
+        animation-duration: 12s;
+      }
+
+      .stage-light:nth-child(3) {
+        left: 80%;
+        animation-duration: 15s;
+      }
+
+      .top-bar {
+        position: absolute;
+        top: 0;
+        right: 0;
+        left: 0;
+        z-index: 100;
+        display: flex;
+        height: var(--top-h);
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 var(--edge-gap);
+        background: linear-gradient(
+          180deg,
+          rgba(4, 22, 25, 0.86),
+          rgba(4, 22, 25, 0.24) 90%,
+          transparent
+        );
+        -webkit-app-region: drag;
+      }
+
+      .top-bar__left,
+      .top-bar__right,
+      .top-nav {
+        display: flex;
+        align-items: center;
+      }
+
+      .top-bar__left,
+      .top-bar__right,
+      .top-nav,
+      .top-bar__btn {
+        -webkit-app-region: no-drag;
+      }
+
+      .top-bar__left {
+        padding-left: 6px;
+      }
+
+      .top-bar__logo {
+        display: block;
+        height: 46px;
+        width: auto;
+        opacity: 0.96;
+      }
+
+      .top-bar__right {
+        height: 100%;
+        gap: 4px;
+      }
+
+      .top-nav {
+        position: relative;
+        height: 100%;
+        gap: 6px;
+      }
+
+      .top-nav__item,
+      .top-bar__btn,
+      .method-menu__item,
+      .rp-menu__btn,
+      .rp-dropdown__item,
+      .rn-toggle,
+      .audio-player button,
+      .dx11-label {
+        transition:
+          color 180ms var(--ease),
+          background 180ms var(--ease),
+          border-color 180ms var(--ease),
+          box-shadow 180ms var(--ease),
+          transform 180ms var(--ease);
+      }
+
+      .top-nav__item {
+        position: relative;
+        height: 38px;
+        padding: 0 22px;
+        border: 1px solid transparent;
+        border-radius: 2px;
+        color: rgba(224, 240, 239, 0.58);
+        background: transparent;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+      }
+
+      .top-nav__item:hover,
+      .top-nav__item.open {
+        color: var(--mist);
+        border-color: var(--line);
+        background: rgba(170, 214, 217, 0.1);
+        box-shadow: 0 0 18px rgba(121, 203, 208, 0.1);
+      }
+
+      .top-bar__sep {
+        width: 1px;
+        height: 16px;
+        margin: 0 4px;
+        background: linear-gradient(
+          180deg,
+          transparent,
+          var(--line),
+          transparent
+        );
+      }
+
+      .top-bar__btn {
+        display: flex;
+        width: 32px;
+        height: 28px;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid transparent;
+        border-radius: 2px;
+        color: rgba(224, 240, 239, 0.55);
+        background: transparent;
+        font-size: 16px;
+      }
+
+      .top-bar__btn:hover {
+        color: var(--mist);
+        border-color: var(--line);
+        background: rgba(170, 214, 217, 0.12);
+        transform: scale(1.05);
+      }
+
+      .top-bar__btn--close:hover {
+        color: #fff5f1;
+        border-color: rgba(255, 174, 163, 0.44);
+        background: rgba(157, 54, 55, 0.26);
+      }
+
+      .method-menu {
+        position: absolute;
+        top: 58px;
+        right: 62px;
+        z-index: 300;
+        display: none;
+        width: 270px;
+        padding: 7px;
+        border: 1px solid var(--line-strong);
+        background: rgba(7, 26, 30, 0.96);
+        box-shadow: 0 14px 34px rgba(1, 11, 13, 0.52);
+        backdrop-filter: blur(14px);
+      }
+
+      .method-menu.open {
+        display: grid;
+        gap: 4px;
+        animation: reveal 180ms var(--ease) both;
+      }
+
+      .method-menu__item {
+        display: grid;
+        gap: 3px;
+        padding: 10px 11px;
+        border: 1px solid transparent;
+        text-align: left;
+        color: var(--text-soft);
+        background: transparent;
+      }
+
+      .method-menu__item:hover,
+      .method-menu__item.active {
+        border-color: var(--line);
+        color: var(--mist);
+        background: rgba(170, 214, 217, 0.1);
+      }
+
+      .method-menu__title {
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      .method-menu__desc {
+        color: var(--slate);
+        font-size: 10px;
+      }
+
+      .side-panel {
+        position: absolute;
+        left: 0;
+        bottom: 130px;
+        z-index: 100;
+        display: flex;
+        width: 288px;
+        height: 310px;
+        align-items: stretch;
+        transform: translateX(var(--edge-gap));
+        transition: transform 280ms var(--ease);
+      }
+
+      .side-panel.collapsed {
+        transform: translateX(-272px);
+      }
+
+      .rn-content {
+        display: flex;
+        width: 272px;
+        height: 310px;
+        flex-shrink: 0;
+        flex-direction: column;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        background: var(--bg-panel);
+        box-shadow:
+          0 8px 32px rgba(0, 0, 0, 0.48),
+          inset 0 1px 0 rgba(236, 255, 249, 0.1);
+        backdrop-filter: blur(10px) saturate(120%);
+        clip-path: polygon(
+          0 0,
+          100% 0,
+          100% calc(100% - 20px),
+          calc(100% - 20px) 100%,
+          0 100%
+        );
+      }
+
+      .rn-head {
+        display: flex;
+        flex-shrink: 0;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+        padding: 10px 14px 8px;
+        border-bottom: 1px solid rgba(184, 231, 230, 0.16);
+      }
+
+      .rn-head__left {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .rn-tag {
+        flex-shrink: 0;
+        padding: 3px 10px;
+        border: 1px solid rgba(231, 211, 148, 0.58);
+        color: #102623;
+        background: linear-gradient(135deg, var(--aqua), var(--jade));
+        font-size: 9px;
+        font-weight: 900;
+        letter-spacing: 0.08em;
+      }
+
+      .rn-head__title,
+      .rn-date,
+      .rn-tag,
+      .rn-text,
+      .rn-body {
+        font-size: 10px;
+      }
+
+      .rn-head__title {
+        overflow: hidden;
+        color: var(--cyan);
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-overflow: ellipsis;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+
+      .rn-date {
+        flex-shrink: 0;
+        color: var(--lantern);
+        font-weight: 700;
+        letter-spacing: 0.06em;
+      }
+
+      .rn-body {
+        flex: 1;
+        overflow: auto;
+        padding: 13px 14px;
+        color: var(--text-soft);
+        line-height: 1.65;
+      }
+
+      .rn-body p {
+        margin: 0 0 10px;
+      }
+
+      .rn-body strong {
+        color: var(--mist);
+        font-weight: 700;
+      }
+
+      .rn-body ul {
+        display: grid;
+        gap: 7px;
+        margin: 16px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .rn-body li {
+        position: relative;
+        padding-left: 15px;
+      }
+
+      .rn-body li::before {
+        position: absolute;
+        top: 7px;
+        left: 1px;
+        width: 5px;
+        height: 5px;
+        border: 1px solid var(--lantern);
+        content: "";
+        transform: rotate(45deg);
+      }
+
+      .rn-text {
+        color: var(--text-soft);
+      }
+
+      .rn-text p {
+        margin: 0 0 9px;
+      }
+
+      .rn-sep {
+        height: 1px;
+        margin: 0 14px;
+        background: linear-gradient(
+          90deg,
+          transparent,
+          var(--line-strong),
+          transparent
+        );
+      }
+
+      .rn-toggle {
+        align-self: flex-start;
+        width: 18px;
+        height: 60px;
+        flex-shrink: 0;
+        margin: 20px 0 0 -1px;
+        border: 1px solid var(--line);
+        border-left: 0;
+        color: var(--ink);
+        background: linear-gradient(180deg, var(--aqua), var(--jade));
+        font-size: 18px;
+        line-height: 1;
+      }
+
+      .rn-toggle:hover {
+        width: 22px;
+        filter: brightness(1.1);
+      }
+
+      .side-panel.collapsed .rn-toggle {
+        transform: rotate(180deg);
+      }
+
+      .audio-player {
+        position: absolute;
+        left: var(--edge-gap);
+        bottom: var(--edge-gap);
+        z-index: 100;
+        display: flex;
+        width: 272px;
+        align-items: center;
+        gap: 10px;
+        padding: 6px 12px 6px 8px;
+        border: 1px solid rgba(184, 231, 230, 0.22);
+        background: rgba(7, 26, 30, 0.84);
+        box-shadow:
+          0 8px 24px rgba(0, 0, 0, 0.32),
+          inset 0 1px 0 rgba(236, 255, 249, 0.08);
+        backdrop-filter: blur(10px);
+      }
+
+      .audio-player audio {
+        display: none;
+      }
+
+      .ap-btn {
+        display: flex;
+        width: 28px;
+        height: 28px;
+        flex-shrink: 0;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid transparent;
+        color: rgba(224, 240, 239, 0.58);
+        background: transparent;
+      }
+
+      .ap-btn:hover {
+        color: var(--mist);
+        border-color: var(--line);
+        background: rgba(170, 214, 217, 0.12);
+      }
+
+      .ap-btn--play {
+        width: 32px;
+        height: 32px;
+        border-color: rgba(231, 211, 148, 0.66);
+        color: #102623;
+        background: linear-gradient(135deg, var(--aqua), var(--lantern));
+        box-shadow: 0 0 14px rgba(121, 203, 208, 0.2);
+      }
+
+      .ap-btn--play:hover {
+        filter: brightness(1.08);
+        box-shadow: 0 0 20px rgba(170, 214, 217, 0.36);
+        transform: translateY(-1px);
+      }
+
+      .ap-vol {
+        display: flex;
+        flex: 1;
+        min-width: 0;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .ap-vol__track {
+        position: relative;
+        flex: 1;
+        height: 3px;
+        background: rgba(224, 240, 239, 0.12);
+      }
+
+      .ap-vol__fill {
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 35%;
+        background: linear-gradient(90deg, var(--cyan), var(--jade));
+        box-shadow: 0 0 8px rgba(121, 203, 208, 0.55);
+        pointer-events: none;
+      }
+
+      .ap-vol__slider {
+        position: absolute;
+        inset: -7px 0;
+        width: 100%;
+        margin: 0;
+        opacity: 0;
+        cursor: pointer;
+      }
+
+      .ap-vol__label {
+        min-width: 18px;
+        color: var(--slate);
+        font-size: 9px;
+        text-align: right;
+      }
+
+      .right-panel {
+        position: absolute;
+        right: var(--edge-gap);
+        bottom: var(--edge-gap);
+        z-index: 100;
+        display: flex;
+        width: var(--rp-w);
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .dx11-row {
+        display: flex;
+        width: 306px;
+        align-self: flex-end;
+        padding-bottom: 5px;
+      }
+
+      .dx11-label {
+        display: flex;
+        width: 100%;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 14px;
+        border: 1px solid rgba(184, 231, 230, 0.22);
+        color: var(--text-soft);
+        background: rgba(7, 26, 30, 0.62);
+        cursor: pointer;
+        user-select: none;
+        backdrop-filter: blur(7px);
+        clip-path: polygon(
+          6px 0,
+          100% 0,
+          100% calc(100% - 6px),
+          calc(100% - 6px) 100%,
+          0 100%,
+          0 6px
+        );
+      }
+
+      .dx11-label:hover {
+        border-color: var(--line-strong);
+        color: var(--mist);
+        background: rgba(170, 214, 217, 0.12);
+      }
+
+      .dx11-input {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        opacity: 0;
+      }
+
+      .dx11-checkmark {
+        position: relative;
+        width: 32px;
+        height: 16px;
+        flex-shrink: 0;
+        border: 1px solid rgba(184, 231, 230, 0.4);
+        background: rgba(170, 214, 217, 0.1);
+      }
+
+      .dx11-checkmark::after {
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 10px;
+        height: 10px;
+        content: "";
+        background: var(--slate);
+        transition:
+          transform 180ms var(--ease),
+          background 180ms var(--ease),
+          box-shadow 180ms var(--ease);
+      }
+
+      .dx11-input:checked + .dx11-checkmark {
+        border-color: var(--cyan);
+        background: rgba(121, 203, 208, 0.18);
+      }
+
+      .dx11-input:checked + .dx11-checkmark::after {
+        background: var(--jade);
+        box-shadow: 0 0 10px rgba(167, 203, 181, 0.68);
+        transform: translateX(16px);
+      }
+
+      .dx11-text {
+        flex: 1;
+        color: var(--text-soft);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      .rp-actions {
+        position: relative;
+        display: flex;
+        align-items: stretch;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-bottom: 12px;
+        overflow: visible;
+      }
+
+      .rp-actions .start-btn {
+        flex: 0 0 250px;
+        width: 250px;
+      }
+
+      .rp-menu__btn {
+        position: relative;
+        z-index: 202;
+        display: flex;
+        width: 48px;
+        flex-shrink: 0;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--line);
+        color: var(--aqua);
+        background: rgba(7, 26, 30, 0.84);
+        clip-path: polygon(
+          8px 0,
+          100% 0,
+          100% calc(100% - 8px),
+          calc(100% - 8px) 100%,
+          0 100%,
+          0 8px
+        );
+      }
+
+      .rp-menu__btn:hover,
+      .rp-menu__btn.active {
+        border-color: var(--line-strong);
+        color: var(--mist);
+        background: rgba(170, 214, 217, 0.15);
+      }
+
+      .start-btn {
+        position: relative;
+        display: flex;
+        min-height: 52px;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        border: 1px solid rgba(231, 211, 148, 0.78);
+        color: #102623;
+        background: linear-gradient(
+          135deg,
+          #d6f0e7 0%,
+          #a6d7d0 44%,
+          #d9cc91 100%
+        );
+        box-shadow:
+          0 8px 22px rgba(1, 16, 17, 0.38),
+          inset 0 1px 0 rgba(255, 255, 255, 0.72);
+        font-size: 12px;
+        font-weight: 900;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+      }
+
+      .start-btn::before {
+        position: absolute;
+        inset: 5px;
+        border: 1px solid rgba(35, 75, 69, 0.34);
+        content: "";
+        pointer-events: none;
+      }
+
+      .start-btn::after {
+        position: absolute;
+        inset: 0;
+        content: "";
+        background: linear-gradient(
+          105deg,
+          transparent 25%,
+          rgba(255, 255, 255, 0.42) 49%,
+          transparent 67%
+        );
+        transform: translateX(-130%);
+        transition: transform 600ms var(--ease);
+      }
+
+      .start-btn:hover {
+        filter: brightness(1.07);
+        box-shadow:
+          0 10px 28px rgba(1, 16, 17, 0.46),
+          0 0 22px rgba(170, 214, 217, 0.32);
+        transform: translateY(-1px);
+      }
+
+      .start-btn:hover::after {
+        transform: translateX(130%);
+      }
+
+      .start-btn:active {
+        transform: translateY(1px);
+      }
+
+      .start-btn__label {
+        position: relative;
+        z-index: 1;
+      }
+
+      .rp-version {
+        display: flex;
+        justify-content: space-between;
+        padding: 5px 0 0 94px;
+        color: var(--text-soft);
+        font-size: 10px;
+        font-style: italic;
+        letter-spacing: 0.03em;
+        opacity: 0.58;
+        pointer-events: none;
+        user-select: none;
+      }
+
+      .rp-dropdown-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 199;
+        display: none;
+      }
+
+      .rp-dropdown-overlay.open {
+        display: block;
+      }
+
+      .rp-dropdown {
+        position: absolute;
+        bottom: 104px;
+        left: 0;
+        z-index: 201;
+        display: none;
+        width: 230px;
+        padding: 8px 0;
+        border: 1px solid var(--line-strong);
+        background: rgba(7, 26, 30, 0.97);
+        box-shadow: 0 -8px 36px rgba(0, 0, 0, 0.54);
+        backdrop-filter: blur(14px);
+        clip-path: polygon(
+          0 0,
+          100% 0,
+          100% calc(100% - 15px),
+          calc(100% - 15px) 100%,
+          0 100%
+        );
+      }
+
+      .rp-dropdown.open {
+        display: block;
+        animation: reveal 180ms var(--ease) both;
+      }
+
+      .rp-dropdown__item {
+        display: flex;
+        width: 100%;
+        min-height: 34px;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 14px;
+        color: var(--text-soft);
+        background: transparent;
+        font-size: 11px;
+        text-align: left;
+      }
+
+      .rp-dropdown__item:hover:not(:disabled) {
+        color: var(--mist);
+        background: rgba(170, 214, 217, 0.12);
+      }
+
+      .rp-dropdown__item--trakteer {
+        color: var(--lantern);
+      }
+
+      .rp-dropdown__item--danger {
+        color: var(--danger);
+      }
+
+      .rp-dropdown__item:disabled {
+        cursor: not-allowed;
+        opacity: 0.42;
+      }
+
+      .rp-dropdown__sep {
+        height: 1px;
+        margin: 6px 14px;
+        background: var(--line);
+      }
+
+      .modal-backdrop {
+        position: absolute;
+        inset: 0;
+        z-index: 500;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(3, 18, 21, 0.76);
+        backdrop-filter: blur(5px);
+      }
+
+      .modal-backdrop.open {
+        display: flex;
+      }
+
+      .modal-box {
+        width: 370px;
+        padding: 22px;
+        border: 1px solid var(--line-strong);
+        background: var(--bg-panel);
+        box-shadow:
+          0 20px 54px rgba(0, 0, 0, 0.55),
+          inset 0 1px 0 rgba(236, 255, 249, 0.1);
+        animation: reveal 180ms var(--ease) both;
+        backdrop-filter: blur(14px);
+      }
+
+      .modal-title {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        color: var(--lantern);
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 20px;
+      }
+
+      .modal-sep {
+        height: 1px;
+        margin: 14px 0;
+        background: var(--line);
+      }
+
+      .modal-msg {
+        margin: 0;
+        color: var(--text-soft);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .modal-actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 20px;
+      }
+
+      .modal-btn {
+        flex: 1;
+        min-height: 38px;
+        border: 1px solid var(--line);
+        color: var(--text-soft);
+        background: rgba(170, 214, 217, 0.08);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .modal-btn:hover {
+        border-color: var(--line-strong);
+        color: var(--mist);
+        background: rgba(170, 214, 217, 0.15);
+      }
+
+      .modal-btn--ok {
+        border-color: rgba(231, 149, 136, 0.54);
+        color: #ffe8e1;
+        background: rgba(157, 54, 55, 0.2);
+      }
+
+      #toasts {
+        position: absolute;
+        top: 56px;
+        right: 16px;
+        z-index: 600;
+        display: grid;
+        gap: 8px;
+      }
+
+      .toast {
+        max-width: 300px;
+        padding: 10px 14px;
+        border: 1px solid var(--line-strong);
+        color: var(--mist);
+        background: rgba(7, 26, 30, 0.95);
+        box-shadow: 0 12px 28px rgba(0, 0, 0, 0.42);
+        font-size: 11px;
+        line-height: 1.5;
+        opacity: 0;
+        transform: translateY(-5px);
+        transition:
+          opacity 180ms var(--ease),
+          transform 180ms var(--ease);
+        pointer-events: none;
+      }
+
+      .toast.visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      @keyframes lightSway {
+        from {
+          transform: rotate(-2deg);
+        }
+        to {
+          transform: rotate(3deg);
+        }
+      }
+
+      @keyframes reveal {
+        from {
+          opacity: 0;
+          transform: translateY(6px) scale(0.98);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0) scale(1);
+        }
+      }
+
+      @media (max-width: 900px) {
+        body {
+          overflow: auto;
+          padding: 12px;
+        }
+
+        .launcher {
+          width: 1280px;
+          height: 720px;
+          transform: scale(min(1, calc((100vw - 24px) / 1280)));
+          transform-origin: top center;
+          margin-bottom: calc(-720px + min(720px, (100vw - 24px) * 0.5625));
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="launcher" aria-label="WuwaID Launcher Mist Jade prototype">
+      <div class="bg-layer"></div>
+      <div class="bg-vignette"></div>
+      <div class="scanlines"></div>
+      <div class="stage-lights" aria-hidden="true">
+        <div class="stage-light"></div>
+        <div class="stage-light"></div>
+        <div class="stage-light"></div>
+      </div>
+
+      <header class="top-bar" id="topBar">
+        <div class="top-bar__left">
+          <img
+            class="top-bar__logo"
+            src="/assets/logo.png"
+            alt="Wuthering Waves"
+            draggable="false"
+          />
+        </div>
+        <div class="top-bar__right">
+          <nav class="top-nav" id="topNav" aria-label="Metode instalasi">
+            <button
+              class="top-nav__item"
+              id="methodNavBtn"
+              type="button"
+              aria-expanded="false"
+            >
+              Metode
+            </button>
+          </nav>
+          <div class="top-bar__sep"></div>
+          <button
+            class="top-bar__btn"
+            id="btnMinimize"
+            title="Minimalkan"
+            type="button"
+          >
+            −
+          </button>
+          <button
+            class="top-bar__btn top-bar__btn--close"
+            id="btnClose"
+            title="Tutup"
+            type="button"
+          >
+            ×
+          </button>
+        </div>
+      </header>
+
+      <div
+        class="method-menu"
+        id="methodMenu"
+        aria-label="Pilihan metode instalasi"
+      >
+        <button
+          class="method-menu__item active"
+          type="button"
+          data-method="Metode 1"
+        >
+          <span class="method-menu__title">Metode 1</span>
+          <span class="method-menu__desc"
+            >Resource Mount · instalasi terisolasi</span
+          >
+        </button>
+        <button class="method-menu__item" type="button" data-method="Metode 2">
+          <span class="method-menu__title">Metode 2</span>
+          <span class="method-menu__desc">winhttp.dll loader</span>
+        </button>
+      </div>
+
+      <aside class="side-panel" id="sidePanel">
+        <div class="rn-content">
+          <div class="rn-head">
+            <div class="rn-head__left">
+              <span class="rn-tag">ID</span>
+              <span class="rn-head__title">Patch ID - Pengumuman</span>
+            </div>
+            <span class="rn-date">v2.9.0</span>
+          </div>
+          <div class="rn-sep"></div>
+          <div class="rn-body" id="rnBody">
+            <div class="rn-text">
+              <p><strong>Selamat datang di WuwaID Launcher!</strong></p>
+              <p>
+                Nikmati petualangan di Sol3 dengan patch terjemahan Bahasa
+                Indonesia untuk Wuthering Waves.
+              </p>
+              <p>• Versi Launcher: v2.9.0</p>
+              <p>• Metode: <span id="methodLabel">Metode 1</span></p>
+              <p>• Status Patch: Belum diperiksa</p>
+            </div>
+          </div>
+        </div>
+        <button
+          class="rn-toggle"
+          id="rnToggle"
+          title="Tutup / Buka"
+          type="button"
+          aria-label="Tutup atau buka pengumuman"
+        >
+          ‹
+        </button>
+      </aside>
+
+      <div class="audio-player" id="audioPlayer">
+        <audio id="bgMusic" loop preload="metadata"></audio>
+        <button
+          class="ap-btn ap-btn--play"
+          id="apPlay"
+          title="Putar Musik"
+          type="button"
+          aria-label="Putar musik"
+        >
+          ▶
+        </button>
+        <div class="ap-vol">
+          <button
+            class="ap-btn"
+            id="apVolBtn"
+            title="Bisukan"
+            type="button"
+            aria-label="Bisukan"
+          >
+            ◖
+          </button>
+          <div class="ap-vol__track">
+            <input
+              class="ap-vol__slider"
+              id="apVolSlider"
+              type="range"
+              min="0"
+              max="100"
+              value="35"
+              step="1"
+              aria-label="Volume"
+            />
+            <div class="ap-vol__fill" id="apVolFill"></div>
+          </div>
+          <span class="ap-vol__label" id="apVolLabel">35</span>
+        </div>
+      </div>
+
+      <aside class="right-panel" id="rightPanel">
+        <div class="dx11-row">
+          <label class="dx11-label" for="chkDx11">
+            <input class="dx11-input" id="chkDx11" type="checkbox" />
+            <span class="dx11-checkmark"></span>
+            <span class="dx11-text">Jalankan game dengan DirectX 11</span>
+          </label>
+        </div>
+        <div class="dx11-row">
+          <label class="dx11-label" for="chkCSharpEnvironment">
+            <input
+              class="dx11-input"
+              id="chkCSharpEnvironment"
+              type="checkbox"
+            />
+            <span class="dx11-checkmark"></span>
+            <span class="dx11-text">Aktifkan optimisasi C#</span>
+          </label>
+        </div>
+        <div class="dx11-row">
+          <label class="dx11-label" for="chkHideUid">
+            <input class="dx11-input" id="chkHideUid" type="checkbox" />
+            <span class="dx11-checkmark"></span>
+            <span class="dx11-text">Sembunyikan UID</span>
+          </label>
+        </div>
+
+        <div class="rp-actions">
+          <button
+            class="rp-menu__btn"
+            id="btnMenu"
+            title="Menu"
+            type="button"
+            aria-expanded="false"
+          >
+            ☰
+          </button>
+          <button class="start-btn" id="btnStart" type="button">
+            <span class="start-btn__label" id="startBtnText"
+              >Instal Patch ID</span
+            >
+          </button>
+          <div class="rp-dropdown" id="rpDropdown" aria-label="Menu launcher">
+            <button
+              class="rp-dropdown__item"
+              data-action="folder"
+              type="button"
+            >
+              ▣ <span>Folder game</span>
+            </button>
+            <button class="rp-dropdown__item" data-action="patch" type="button">
+              ◌ <span>Perbarui Patch ID</span>
+            </button>
+            <button
+              class="rp-dropdown__item"
+              data-action="launcher"
+              type="button"
+            >
+              ↓ <span>Perbarui Launcher</span>
+            </button>
+            <button
+              class="rp-dropdown__item"
+              data-action="force-quit"
+              type="button"
+            >
+              × <span>Paksa tutup game</span>
+            </button>
+            <button class="rp-dropdown__item" data-action="admin" type="button">
+              ♢ <span>Jalankan sebagai Admin</span>
+            </button>
+            <button class="rp-dropdown__item" data-action="cache" type="button">
+              ↻ <span>Reset cache tampilan</span>
+            </button>
+            <button
+              class="rp-dropdown__item rp-dropdown__item--trakteer"
+              data-action="support"
+              type="button"
+            >
+              ♡ <span>Dukung Kami</span>
+            </button>
+            <div class="rp-dropdown__sep"></div>
+            <button
+              class="rp-dropdown__item rp-dropdown__item--danger"
+              id="menuUninstall"
+              data-action="uninstall"
+              type="button"
+            >
+              ⌫ <span>Hapus Patch ID</span>
+            </button>
+          </div>
+          <div class="rp-dropdown-overlay" id="rpDropdownOverlay"></div>
+        </div>
+
+        <div class="rp-version">
+          <span>Launcher v2.9.0</span>
+          <span id="verVH">ID —</span>
+        </div>
+      </aside>
+
+      <div
+        class="modal-backdrop"
+        id="confirmModal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="modalTitle"
+      >
+        <div class="modal-box">
+          <div class="modal-title" id="modalTitle">
+            ⚠ <span>Konfirmasi Hapus Patch</span>
+          </div>
+          <div class="modal-sep"></div>
+          <p class="modal-msg">
+            Apakah Anda yakin ingin menghapus Patch ID Bahasa Indonesia dari
+            folder game?
+          </p>
+          <div class="modal-actions">
+            <button class="modal-btn" id="modalCancel" type="button">
+              Batal
+            </button>
+            <button class="modal-btn modal-btn--ok" id="modalOk" type="button">
+              Hapus Patch
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div id="toasts" aria-live="polite">
+        <div class="toast" id="toast"></div>
+      </div>
+    </main>
+
+    <script>
+      const sidePanel = document.querySelector("#sidePanel");
+      const methodMenu = document.querySelector("#methodMenu");
+      const methodNavBtn = document.querySelector("#methodNavBtn");
+      const methodLabel = document.querySelector("#methodLabel");
+      const rpDropdown = document.querySelector("#rpDropdown");
+      const rpDropdownOverlay = document.querySelector("#rpDropdownOverlay");
+      const menuButton = document.querySelector("#btnMenu");
+      const confirmModal = document.querySelector("#confirmModal");
+      const toast = document.querySelector("#toast");
+      const audioPlay = document.querySelector("#apPlay");
+      const volumeButton = document.querySelector("#apVolBtn");
+      const volumeSlider = document.querySelector("#apVolSlider");
+      const volumeFill = document.querySelector("#apVolFill");
+      const volumeLabel = document.querySelector("#apVolLabel");
+      let toastTimer;
+      let audioPlaying = false;
+      let muted = false;
+
+      function showToast(message) {
+        toast.textContent = message;
+        toast.classList.add("visible");
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => toast.classList.remove("visible"), 2200);
+      }
+
+      function closeMenus() {
+        methodMenu.classList.remove("open");
+        methodNavBtn.classList.remove("open");
+        methodNavBtn.setAttribute("aria-expanded", "false");
+        rpDropdown.classList.remove("open");
+        rpDropdownOverlay.classList.remove("open");
+        menuButton.classList.remove("active");
+        menuButton.setAttribute("aria-expanded", "false");
+      }
+
+      methodNavBtn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const open = !methodMenu.classList.contains("open");
+        closeMenus();
+        if (open) {
+          methodMenu.classList.add("open");
+          methodNavBtn.classList.add("open");
+          methodNavBtn.setAttribute("aria-expanded", "true");
+        }
+      });
+
+      document.querySelectorAll("[data-method]").forEach((item) => {
+        item.addEventListener("click", () => {
+          document
+            .querySelectorAll("[data-method]")
+            .forEach((option) => option.classList.remove("active"));
+          item.classList.add("active");
+          methodLabel.textContent = item.dataset.method;
+          closeMenus();
+          showToast(`${item.dataset.method} dipilih.`);
+        });
+      });
+
+      document.querySelector("#rnToggle").addEventListener("click", () => {
+        sidePanel.classList.toggle("collapsed");
+      });
+
+      menuButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const open = !rpDropdown.classList.contains("open");
+        closeMenus();
+        if (open) {
+          rpDropdown.classList.add("open");
+          rpDropdownOverlay.classList.add("open");
+          menuButton.classList.add("active");
+          menuButton.setAttribute("aria-expanded", "true");
+        }
+      });
+
+      rpDropdownOverlay.addEventListener("click", closeMenus);
+
+      document.querySelectorAll(".rp-dropdown__item").forEach((item) => {
+        item.addEventListener("click", () => {
+          const action = item.dataset.action;
+          closeMenus();
+          if (action === "uninstall") {
+            confirmModal.classList.add("open");
+            return;
+          }
+          showToast(`${item.textContent.trim()} · prototype action`);
+        });
+      });
+
+      document.querySelector("#btnStart").addEventListener("click", () => {
+        showToast("Folder game akan dipilih melalui dialog launcher.");
+      });
+
+      document.querySelectorAll(".dx11-input").forEach((input) => {
+        input.addEventListener("change", () => {
+          showToast(
+            `${input.parentElement.querySelector(".dx11-text").textContent} diperbarui.`,
+          );
+        });
+      });
+
+      audioPlay.addEventListener("click", () => {
+        audioPlaying = !audioPlaying;
+        audioPlay.textContent = audioPlaying ? "Ⅱ" : "▶";
+        audioPlay.setAttribute(
+          "aria-label",
+          audioPlaying ? "Jeda musik" : "Putar musik",
+        );
+        showToast(
+          audioPlaying ? "Musik ambient diaktifkan." : "Musik ambient dijeda.",
+        );
+      });
+
+      volumeButton.addEventListener("click", () => {
+        muted = !muted;
+        volumeButton.textContent = muted ? "×" : "◖";
+        volumeFill.style.width = muted ? "0%" : `${volumeSlider.value}%`;
+        volumeLabel.textContent = muted ? "0" : volumeSlider.value;
+      });
+
+      volumeSlider.addEventListener("input", () => {
+        muted = false;
+        volumeButton.textContent = "◖";
+        volumeFill.style.width = `${volumeSlider.value}%`;
+        volumeLabel.textContent = volumeSlider.value;
+      });
+
+      document
+        .querySelector("#btnMinimize")
+        .addEventListener("click", () =>
+          showToast("Prototype: jendela akan diminimalkan di launcher asli."),
+        );
+      document
+        .querySelector("#btnClose")
+        .addEventListener("click", () =>
+          showToast("Prototype: tombol tutup dinonaktifkan untuk demo."),
+        );
+      document
+        .querySelector("#modalCancel")
+        .addEventListener("click", () => confirmModal.classList.remove("open"));
+      document.querySelector("#modalOk").addEventListener("click", () => {
+        confirmModal.classList.remove("open");
+        showToast("Prototype: penghapusan Patch ID disimulasikan.");
+      });
+      confirmModal.addEventListener("click", (event) => {
+        if (event.target === confirmModal)
+          confirmModal.classList.remove("open");
+      });
+      document.addEventListener("click", (event) => {
+        if (
+          !event.target.closest(".top-nav") &&
+          !event.target.closest(".method-menu") &&
+          !event.target.closest(".rp-actions")
+        )
+          closeMenus();
+      });
+    </script>
+  </body>
+</html>
