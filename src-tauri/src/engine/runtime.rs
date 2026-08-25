@@ -4,6 +4,8 @@ use crate::engine::{
     path::{self, get_binary_dir, GAME_EXE_RELATIVE},
 };
 use serde::{Deserialize, Serialize};
+#[cfg(windows)]
+use std::collections::HashMap;
 use std::fmt;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -790,32 +792,6 @@ pub fn process_tree_contains(
     false
 }
 
-#[cfg(windows)]
-fn process_tree_depth(
-    root_pid: u32,
-    candidate_pid: u32,
-    parent_pids: &[(u32, u32)],
-) -> Option<usize> {
-    if root_pid == candidate_pid {
-        return Some(0);
-    }
-
-    let mut current = candidate_pid;
-    for depth in 1..=parent_pids.len() {
-        let (_, parent_pid) = parent_pids
-            .iter()
-            .find(|(process_pid, _)| *process_pid == current)?;
-        if *parent_pid == root_pid {
-            return Some(depth);
-        }
-        if *parent_pid == 0 || *parent_pid == current {
-            return None;
-        }
-        current = *parent_pid;
-    }
-    None
-}
-
 pub fn process_identity(pid: u32) -> Option<ProcessIdentity> {
     #[cfg(windows)]
     {
@@ -871,14 +847,86 @@ fn process_identity_from_termination_handle(raw_handle: usize) -> Option<Process
 }
 
 #[cfg(windows)]
-#[derive(Clone, Copy)]
-struct ProcessSnapshotEntry {
-    pid: u32,
-    parent_pid: u32,
+const MAX_CACHED_PROCESS_PATHS: usize = 256;
+
+#[derive(Debug, Default)]
+pub struct ProcessSnapshotCache {
+    #[cfg(windows)]
+    executable_paths: HashMap<(u32, u64), Option<String>>,
 }
 
 #[cfg(windows)]
-fn process_snapshot() -> Option<Vec<ProcessSnapshotEntry>> {
+struct ProcessSnapshotEntry {
+    pid: u32,
+    parent_pid: u32,
+    executable_name: String,
+    executable_path: Option<String>,
+}
+
+#[cfg(windows)]
+struct ProcessSnapshot {
+    entries: Vec<ProcessSnapshotEntry>,
+    parent_pids: HashMap<u32, u32>,
+}
+
+#[cfg(windows)]
+impl ProcessSnapshot {
+    fn contains(&self, root_pid: u32, candidate_pid: u32) -> bool {
+        if root_pid == candidate_pid {
+            return true;
+        }
+
+        let mut current = candidate_pid;
+        for _ in 0..=self.entries.len() {
+            let Some(parent_pid) = self.parent_pids.get(&current).copied() else {
+                return false;
+            };
+            if parent_pid == root_pid {
+                return true;
+            }
+            if parent_pid == 0 || parent_pid == current {
+                return false;
+            }
+            current = parent_pid;
+        }
+        false
+    }
+
+    fn depth(&self, root_pid: u32, candidate_pid: u32) -> Option<usize> {
+        if root_pid == candidate_pid {
+            return Some(0);
+        }
+
+        let mut current = candidate_pid;
+        for depth in 1..=self.entries.len() {
+            let parent_pid = self.parent_pids.get(&current).copied()?;
+            if parent_pid == root_pid {
+                return Some(depth);
+            }
+            if parent_pid == 0 || parent_pid == current {
+                return None;
+            }
+            current = parent_pid;
+        }
+        None
+    }
+
+    fn has_descendant(&self, root_pid: u32) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.pid != root_pid && self.contains(root_pid, entry.pid))
+    }
+}
+
+#[cfg(windows)]
+fn process_snapshot() -> Option<ProcessSnapshot> {
+    process_snapshot_with_cache(None)
+}
+
+#[cfg(windows)]
+fn process_snapshot_with_cache(
+    mut cache: Option<&mut ProcessSnapshotCache>,
+) -> Option<ProcessSnapshot> {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
@@ -893,9 +941,16 @@ fn process_snapshot() -> Option<Vec<ProcessSnapshotEntry>> {
     unsafe {
         if Process32FirstW(snapshot, &mut entry).is_ok() {
             loop {
+                let name_len = entry
+                    .szExeFile
+                    .iter()
+                    .position(|value| *value == 0)
+                    .unwrap_or(entry.szExeFile.len());
                 entries.push(ProcessSnapshotEntry {
                     pid: entry.th32ProcessID,
                     parent_pid: entry.th32ParentProcessID,
+                    executable_name: String::from_utf16_lossy(&entry.szExeFile[..name_len]),
+                    executable_path: None,
                 });
                 if Process32NextW(snapshot, &mut entry).is_err() {
                     break;
@@ -905,31 +960,106 @@ fn process_snapshot() -> Option<Vec<ProcessSnapshotEntry>> {
         let _ = CloseHandle(snapshot);
     }
 
-    Some(entries)
+    for entry in &mut entries {
+        if !is_game_process_name(&entry.executable_name) {
+            continue;
+        }
+
+        // Cache by PID plus creation time, never by PID alone. This removes
+        // repeated path probes during the short handoff window without
+        // weakening PID-reuse protection.
+        let cache_key = cache.as_ref().and_then(|_| {
+            process_identity(entry.pid).map(|identity| (identity.pid, identity.creation_time))
+        });
+        let cached_path = cache_key.and_then(|key| {
+            cache
+                .as_mut()
+                .and_then(|cache| cache.executable_paths.get(&key).cloned())
+        });
+        let path = cached_path.unwrap_or_else(|| process_executable_path(entry.pid));
+        if let (Some(key), Some(cache)) = (cache_key, cache.as_mut()) {
+            if !cache.executable_paths.contains_key(&key)
+                && cache.executable_paths.len() >= MAX_CACHED_PROCESS_PATHS
+            {
+                cache.executable_paths.clear();
+            }
+            cache.executable_paths.insert(key, path.clone());
+        }
+        entry.executable_path = path;
+    }
+
+    let parent_pids = entries
+        .iter()
+        .map(|entry| (entry.pid, entry.parent_pid))
+        .collect();
+    Some(ProcessSnapshot {
+        entries,
+        parent_pids,
+    })
 }
 
 #[cfg(windows)]
 fn launcher_identity_matches_snapshot(pid: u32, identity: ProcessIdentity) -> bool {
-    let Some(entries) = process_snapshot() else {
+    let Some(snapshot) = process_snapshot() else {
         return false;
     };
-    if !entries.iter().any(|entry| entry.pid == pid) {
+    if !snapshot.entries.iter().any(|entry| entry.pid == pid) {
         return true;
     }
     process_identity(pid) == Some(identity)
 }
 
+#[cfg(windows)]
+fn find_game_process_id_in_snapshot(
+    snapshot: &ProcessSnapshot,
+    expected_executable: Option<&Path>,
+) -> Option<u32> {
+    snapshot
+        .entries
+        .iter()
+        .filter(|entry| is_verified_game_snapshot_entry(entry, expected_executable))
+        .map(|entry| entry.pid)
+        .next()
+}
+
+#[cfg(windows)]
+fn find_launcher_game_process_id_in_snapshot(
+    snapshot: &ProcessSnapshot,
+    launcher_pid: u32,
+    launcher_identity: ProcessIdentity,
+    expected_executable: Option<&Path>,
+) -> Option<u32> {
+    if launcher_identity.pid != launcher_pid {
+        return None;
+    }
+    if snapshot
+        .entries
+        .iter()
+        .any(|entry| entry.pid == launcher_pid)
+        && process_identity(launcher_pid) != Some(launcher_identity)
+    {
+        return None;
+    }
+
+    let mut candidates: Vec<_> = snapshot
+        .entries
+        .iter()
+        .filter(|entry| snapshot.contains(launcher_pid, entry.pid))
+        .filter(|entry| is_verified_game_snapshot_entry(entry, expected_executable))
+        .filter_map(|entry| {
+            snapshot
+                .depth(launcher_pid, entry.pid)
+                .map(|depth| (depth, entry.pid))
+        })
+        .collect();
+    candidates.sort_unstable();
+    candidates.first().map(|(_, pid)| *pid)
+}
+
 pub fn has_process_tree_descendant(root_pid: u32) -> Option<bool> {
     #[cfg(windows)]
     {
-        let entries = process_snapshot()?;
-        let parent_pids: Vec<_> = entries
-            .iter()
-            .map(|entry| (entry.pid, entry.parent_pid))
-            .collect();
-        return Some(entries.iter().any(|entry| {
-            entry.pid != root_pid && process_tree_contains(root_pid, entry.pid, &parent_pids)
-        }));
+        return Some(process_snapshot()?.has_descendant(root_pid));
     }
 
     #[cfg(not(windows))]
@@ -954,36 +1084,126 @@ pub fn find_launcher_game_process_id_with_identity(
     #[cfg(windows)]
     {
         let launcher_identity = launcher_identity?;
-        if launcher_identity.pid != launcher_pid {
-            return None;
-        }
-        let entries = process_snapshot()?;
-        if entries.iter().any(|entry| entry.pid == launcher_pid)
-            && process_identity(launcher_pid) != Some(launcher_identity)
-        {
-            return None;
-        }
-        let parent_pids: Vec<_> = entries
-            .iter()
-            .map(|entry| (entry.pid, entry.parent_pid))
-            .collect();
-        let mut candidates: Vec<_> = entries
-            .into_iter()
-            .filter(|entry| process_tree_contains(launcher_pid, entry.pid, &parent_pids))
-            .filter(|entry| is_verified_game_pid(entry.pid, expected_executable))
-            .filter_map(|entry| {
-                process_tree_depth(launcher_pid, entry.pid, &parent_pids)
-                    .map(|depth| (depth, entry.pid))
-            })
-            .collect();
-        candidates.sort_unstable();
-        return candidates.first().map(|(_, pid)| *pid);
+        return find_launcher_game_process_id_in_snapshot(
+            &process_snapshot()?,
+            launcher_pid,
+            launcher_identity,
+            expected_executable,
+        );
     }
 
     #[cfg(not(windows))]
     {
         let _ = (launcher_pid, launcher_identity, expected_executable);
         None
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RuntimeProcessInspection {
+    pub detected_pid: Option<u32>,
+    pub owned_pid: Option<u32>,
+    pub has_descendant: Option<bool>,
+}
+
+pub fn inspect_runtime_processes(
+    launcher_pid: Option<u32>,
+    launcher_identity: Option<ProcessIdentity>,
+    current_pid: Option<u32>,
+    current_identity: Option<ProcessIdentity>,
+    expected_executable: Option<&Path>,
+    include_descendant: bool,
+) -> RuntimeProcessInspection {
+    inspect_runtime_processes_inner(
+        launcher_pid,
+        launcher_identity,
+        current_pid,
+        current_identity,
+        expected_executable,
+        include_descendant,
+        None,
+    )
+}
+
+pub fn inspect_runtime_processes_with_cache(
+    launcher_pid: Option<u32>,
+    launcher_identity: Option<ProcessIdentity>,
+    current_pid: Option<u32>,
+    current_identity: Option<ProcessIdentity>,
+    expected_executable: Option<&Path>,
+    include_descendant: bool,
+    cache: &mut ProcessSnapshotCache,
+) -> RuntimeProcessInspection {
+    inspect_runtime_processes_inner(
+        launcher_pid,
+        launcher_identity,
+        current_pid,
+        current_identity,
+        expected_executable,
+        include_descendant,
+        Some(cache),
+    )
+}
+
+fn inspect_runtime_processes_inner(
+    launcher_pid: Option<u32>,
+    launcher_identity: Option<ProcessIdentity>,
+    current_pid: Option<u32>,
+    current_identity: Option<ProcessIdentity>,
+    expected_executable: Option<&Path>,
+    include_descendant: bool,
+    cache: Option<&mut ProcessSnapshotCache>,
+) -> RuntimeProcessInspection {
+    #[cfg(windows)]
+    {
+        let Some(snapshot) = process_snapshot_with_cache(cache) else {
+            return RuntimeProcessInspection::default();
+        };
+        let detected_pid = find_game_process_id_in_snapshot(&snapshot, expected_executable);
+        let owned_pid = launcher_pid.and_then(|root_pid| {
+            launcher_identity.and_then(|identity| {
+                find_launcher_game_process_id_in_snapshot(
+                    &snapshot,
+                    root_pid,
+                    identity,
+                    expected_executable,
+                )
+                .or_else(|| {
+                    current_pid.filter(|pid| {
+                        is_launcher_owned_game_process_in_snapshot(
+                            &snapshot,
+                            root_pid,
+                            Some(identity),
+                            *pid,
+                            current_identity,
+                            expected_executable,
+                        )
+                    })
+                })
+            })
+        });
+        let has_descendant = include_descendant
+            .then(|| launcher_pid.map(|root_pid| snapshot.has_descendant(root_pid)))
+            .flatten();
+        return RuntimeProcessInspection {
+            detected_pid,
+            owned_pid,
+            has_descendant,
+        };
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (
+            launcher_pid,
+            launcher_identity,
+            current_pid,
+            current_identity,
+            expected_executable,
+            include_descendant,
+            cache,
+        );
+        RuntimeProcessInspection::default()
     }
 }
 
@@ -1011,11 +1231,7 @@ pub fn validate_launch_preconditions(
 pub fn find_game_process_id_for_path(expected_executable: Option<&Path>) -> Option<u32> {
     #[cfg(windows)]
     {
-        return process_snapshot()?
-            .into_iter()
-            .filter(|entry| is_verified_game_pid(entry.pid, expected_executable))
-            .map(|entry| entry.pid)
-            .next();
+        return find_game_process_id_in_snapshot(&process_snapshot()?, expected_executable);
     }
 
     #[cfg(not(windows))]
@@ -1042,11 +1258,76 @@ pub fn select_force_quit_pid(tracked_pid: Option<u32>, detected_pid: Option<u32>
 }
 
 #[cfg(windows)]
-fn is_verified_game_pid(pid: u32, expected_executable: Option<&Path>) -> bool {
+fn is_game_process_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("Client-Win64-Shipping.exe")
+        || name.eq_ignore_ascii_case("WutheringWaves.exe")
+}
+
+#[cfg(windows)]
+fn process_executable_path_from_handle(
+    handle: windows::Win32::Foundation::HANDLE,
+) -> Option<String> {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
+    use windows::Win32::System::ProcessStatus::GetModuleFileNameExW;
+
+    let mut path_buf = [0u16; 32_768];
+    let path_len = unsafe { GetModuleFileNameExW(handle, None, &mut path_buf) };
+    if path_len == 0 {
+        return None;
+    }
+    let actual = OsString::from_wide(&path_buf[..path_len as usize]);
+    Some(normalize_process_path(&actual))
+}
+
+#[cfg(windows)]
+fn process_executable_path(pid: u32) -> Option<String> {
     use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::ProcessStatus::{GetModuleBaseNameW, GetModuleFileNameExW};
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
+    };
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid).ok()?;
+        let path = process_executable_path_from_handle(handle);
+        let _ = CloseHandle(handle);
+        path
+    }
+}
+
+#[cfg(windows)]
+fn process_path_matches_handle(
+    handle: windows::Win32::Foundation::HANDLE,
+    expected_executable: Option<&Path>,
+) -> bool {
+    let Some(expected) = expected_executable else {
+        return true;
+    };
+    let Some(actual) = process_executable_path_from_handle(handle) else {
+        return false;
+    };
+    actual == normalize_process_path(expected.as_os_str())
+}
+
+#[cfg(windows)]
+fn is_verified_game_snapshot_entry(
+    entry: &ProcessSnapshotEntry,
+    expected_executable: Option<&Path>,
+) -> bool {
+    if !is_game_process_name(&entry.executable_name) {
+        return false;
+    }
+    let Some(expected_executable) = expected_executable else {
+        return true;
+    };
+    let expected = normalize_process_path(expected_executable.as_os_str());
+    entry.executable_path.as_deref() == Some(expected.as_str())
+}
+
+#[cfg(windows)]
+fn is_verified_game_pid(pid: u32, expected_executable: Option<&Path>) -> bool {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::ProcessStatus::GetModuleBaseNameW;
     use windows::Win32::System::Threading::{
         OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
     };
@@ -1063,19 +1344,10 @@ fn is_verified_game_pid(pid: u32, expected_executable: Option<&Path>) -> bool {
             return false;
         }
         let name = String::from_utf16_lossy(&name_buf[..name_len as usize]);
-        let is_game_name = name.eq_ignore_ascii_case("Client-Win64-Shipping.exe")
-            || name.eq_ignore_ascii_case("WutheringWaves.exe");
-        let path_matches = expected_executable.is_none_or(|expected| {
-            let mut path_buf = [0u16; 32_768];
-            let path_len = GetModuleFileNameExW(handle, None, &mut path_buf);
-            if path_len == 0 {
-                return false;
-            }
-            let actual = OsString::from_wide(&path_buf[..path_len as usize]);
-            normalize_process_path(&actual) == normalize_process_path(expected.as_os_str())
-        });
+        let is_game_name = is_game_process_name(&name);
+        let path_matches = is_game_name && process_path_matches_handle(handle, expected_executable);
         let _ = CloseHandle(handle);
-        is_game_name && path_matches
+        path_matches
     }
 }
 
@@ -1099,6 +1371,42 @@ pub fn is_verified_game_process(
     }
 }
 
+#[cfg(windows)]
+fn is_launcher_owned_game_process_in_snapshot(
+    snapshot: &ProcessSnapshot,
+    launcher_pid: u32,
+    launcher_identity: Option<ProcessIdentity>,
+    game_pid: u32,
+    game_identity: Option<ProcessIdentity>,
+    expected_executable: Option<&Path>,
+) -> bool {
+    let Some(launcher_identity) = launcher_identity else {
+        return false;
+    };
+    if launcher_identity.pid != launcher_pid {
+        return false;
+    }
+    if snapshot
+        .entries
+        .iter()
+        .any(|entry| entry.pid == launcher_pid)
+        && process_identity(launcher_pid) != Some(launcher_identity)
+    {
+        return false;
+    }
+    if game_identity.is_some_and(|expected| process_identity(game_pid) != Some(expected)) {
+        return false;
+    }
+    snapshot
+        .entries
+        .iter()
+        .find(|entry| entry.pid == game_pid)
+        .is_some_and(|entry| {
+            is_verified_game_snapshot_entry(entry, expected_executable)
+                && snapshot.contains(launcher_pid, game_pid)
+        })
+}
+
 /// Returns true only when a verified game process is still in the tracked
 /// launcher tree. The launcher identity is mandatory: a path/name match alone
 /// must never be allowed to claim or terminate an unrelated instance.
@@ -1111,27 +1419,17 @@ pub fn is_launcher_owned_game_process(
 ) -> bool {
     #[cfg(windows)]
     {
-        let Some(launcher_identity) = launcher_identity else {
+        let Some(snapshot) = process_snapshot() else {
             return false;
         };
-        if launcher_identity.pid != launcher_pid
-            || !is_verified_game_process(game_pid, game_identity, expected_executable)
-        {
-            return false;
-        }
-        let Some(entries) = process_snapshot() else {
-            return false;
-        };
-        if entries.iter().any(|entry| entry.pid == launcher_pid)
-            && process_identity(launcher_pid) != Some(launcher_identity)
-        {
-            return false;
-        }
-        let parent_pids: Vec<_> = entries
-            .iter()
-            .map(|entry| (entry.pid, entry.parent_pid))
-            .collect();
-        process_tree_contains(launcher_pid, game_pid, &parent_pids)
+        return is_launcher_owned_game_process_in_snapshot(
+            &snapshot,
+            launcher_pid,
+            launcher_identity,
+            game_pid,
+            game_identity,
+            expected_executable,
+        );
     }
 
     #[cfg(not(windows))]
@@ -1167,23 +1465,18 @@ fn verified_game_tree(
         ));
     }
 
-    let entries =
+    let snapshot =
         process_snapshot().ok_or_else(|| "force_quit_process_snapshot_failed".to_string())?;
-    let parent_pids: Vec<_> = entries
+    let mut pids: Vec<_> = snapshot
+        .entries
         .iter()
-        .map(|entry| (entry.pid, entry.parent_pid))
-        .collect();
-    let mut pids: Vec<_> = entries
-        .into_iter()
-        .filter(|entry| process_tree_contains(game_pid, entry.pid, &parent_pids))
+        .filter(|entry| snapshot.contains(game_pid, entry.pid))
         .map(|entry| entry.pid)
         .collect();
     if !pids.contains(&game_pid) {
         pids.push(game_pid);
     }
-    pids.sort_by_key(|pid| {
-        std::cmp::Reverse(process_tree_depth(game_pid, *pid, &parent_pids).unwrap_or(0))
-    });
+    pids.sort_by_key(|pid| std::cmp::Reverse(snapshot.depth(game_pid, *pid).unwrap_or(0)));
     pids.dedup();
     Ok(pids)
 }
@@ -1299,12 +1592,8 @@ fn terminate_verified_game_tree(
                 terminated |= terminate_process_handle(handle)?;
                 continue;
             }
-        } else if let Some(entries) = process_snapshot() {
-            let parent_pids: Vec<_> = entries
-                .iter()
-                .map(|entry| (entry.pid, entry.parent_pid))
-                .collect();
-            if !process_tree_contains(game_pid, pid, &parent_pids) {
+        } else if let Some(snapshot) = process_snapshot() {
+            if !snapshot.contains(game_pid, pid) {
                 continue;
             }
         } else {

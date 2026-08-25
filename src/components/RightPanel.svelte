@@ -1,6 +1,7 @@
 <script lang="ts">
   import { appState } from '../lib/launcherState.svelte.ts';
   import { bridge } from '../lib/bridge.ts';
+  import { countdownExpired, shouldRunCountdown } from '../lib/countdown';
   import type { LauncherOperation } from '../lib/types';
 
   let dropdownOpen = $state(false);
@@ -13,11 +14,15 @@
   });
 
   $effect(() => {
-    if (!targetDateMs || appState.launcherInTray) return;
-    now = Date.now();
-    const iv = setInterval(() => {
-      now = Date.now();
-    }, 1000);
+    if (!shouldRunCountdown(targetDateMs, appState.launcherInTray)) return;
+    let iv: ReturnType<typeof setInterval>;
+    const tick = () => {
+      const current = Date.now();
+      now = current;
+      if (countdownExpired(targetDateMs, current)) clearInterval(iv);
+    };
+    iv = setInterval(tick, 1000);
+    tick();
     return () => clearInterval(iv);
   });
 

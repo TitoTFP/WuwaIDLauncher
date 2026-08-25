@@ -12,9 +12,14 @@
  * @returns {(payload: GameExitPayload) => boolean}
  */
 export function createGameExitDeduper() {
+ const maxSeenIds = 256;
  const seenIds = new Set();
  return (payload) => {
   if (!payload.id || seenIds.has(payload.id)) return false;
+  if (seenIds.size >= maxSeenIds) {
+   const oldestId = seenIds.values().next().value;
+   if (oldestId !== undefined) seenIds.delete(oldestId);
+  }
   seenIds.add(payload.id);
   return true;
  };

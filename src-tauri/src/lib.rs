@@ -17,8 +17,10 @@ const WUWAID_LATEST_CHECKSUMS_URL: &str =
     "https://github.com/TitoTFP/WuwaID/releases/latest/download/SHA256sums.txt";
 const SUPPORT_URL: &str = "https://trakteer.id/TitoTFP";
 const LAUNCHER_UPDATE_RESTART_DELAY_SECONDS: u64 = 12;
-const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const PROCESS_HANDOFF_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const PROCESS_HANDOFF_GRACE: Duration = Duration::from_secs(3);
+const MAX_UNRANGED_MEDIA_RESPONSE_BYTES: u64 = 1024 * 1024;
 
 #[cfg(windows)]
 fn windows_directory() -> PathBuf {
@@ -241,7 +243,6 @@ fn should_hide_to_tray(tray_mode: bool, launcher_pid: Option<u32>) -> bool {
 #[derive(Default)]
 struct RuntimeCoordinator {
     launcher_pid: Mutex<Option<u32>>,
-    launcher_root_pid: Mutex<Option<u32>>,
     launcher_game_pid: Mutex<Option<u32>>,
     launcher_identity: Mutex<Option<engine::runtime::ProcessIdentity>>,
     launcher_game_identity: Mutex<Option<engine::runtime::ProcessIdentity>>,
@@ -254,11 +255,6 @@ struct RuntimeCoordinator {
 fn coordinator_launcher_pid<R: Runtime>(app: &AppHandle<R>) -> Option<u32> {
     app.try_state::<RuntimeCoordinator>()
         .and_then(|state| state.launcher_pid.lock().ok().and_then(|value| *value))
-}
-
-fn coordinator_launcher_root_pid<R: Runtime>(app: &AppHandle<R>) -> Option<u32> {
-    app.try_state::<RuntimeCoordinator>()
-        .and_then(|state| state.launcher_root_pid.lock().ok().and_then(|value| *value))
 }
 
 fn coordinator_launcher_identity<R: Runtime>(
@@ -305,9 +301,6 @@ fn take_launcher_termination_handle<R: Runtime>(app: &AppHandle<R>) -> Option<us
 fn set_launcher_process<R: Runtime>(app: &AppHandle<R>, pid: Option<u32>) {
     if let Some(state) = app.try_state::<RuntimeCoordinator>() {
         if let Ok(mut value) = state.launcher_pid.lock() {
-            *value = pid;
-        }
-        if let Ok(mut value) = state.launcher_root_pid.lock() {
             *value = pid;
         }
         if let Ok(mut value) = state.launcher_game_pid.lock() {
@@ -565,40 +558,35 @@ fn spawn_runtime_monitor<R: Runtime>(app: AppHandle<R>) {
     tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(2));
         let mut previous = None;
+        let mut external_snapshot_cache = engine::runtime::ProcessSnapshotCache::default();
         loop {
             interval.tick().await;
             if app.get_webview_window("main").is_none() {
                 break;
             }
             let expected_executable = configured_game_executable();
-            let detected_pid =
-                engine::runtime::find_game_process_id_for_path(expected_executable.as_deref());
-            let launcher_root_pid = coordinator_launcher_root_pid(&app);
-            let launcher_identity = coordinator_launcher_identity(&app);
-            let current_pid = coordinator_launcher_game_pid(&app);
-            let current_identity = coordinator_launcher_game_identity(&app);
-            let owned_pid = launcher_root_pid.and_then(|root_pid| {
-                engine::runtime::find_launcher_game_process_id_with_identity(
-                    root_pid,
-                    launcher_identity,
-                    expected_executable.as_deref(),
-                )
-                .or_else(|| {
-                    current_pid.filter(|pid| {
-                        engine::runtime::is_launcher_owned_game_process(
-                            root_pid,
-                            launcher_identity,
-                            *pid,
-                            current_identity,
-                            expected_executable.as_deref(),
-                        )
-                    })
-                })
-            });
-            if let Some(pid) = owned_pid {
-                set_launcher_game_process(&app, pid);
-            }
             let tracked_pid = coordinator_launcher_pid(&app);
+            let inspection = if tracked_pid.is_some() {
+                // The launch monitor already owns this lifecycle and handles
+                // root wait, handoff, and game exit. Avoid re-scanning the
+                // process tree while the launcher-owned PID is active.
+                engine::runtime::RuntimeProcessInspection::default()
+            } else {
+                // A full scan is needed only while idle to detect an external
+                // game. Reuse verified paths across those reconciliation
+                // snapshots, keyed by PID creation identity.
+                engine::runtime::inspect_runtime_processes_with_cache(
+                    None,
+                    None,
+                    None,
+                    None,
+                    expected_executable.as_deref(),
+                    false,
+                    &mut external_snapshot_cache,
+                )
+            };
+            let detected_pid = inspection.detected_pid;
+            let owned_pid = inspection.owned_pid;
             let state = if owned_pid.is_some() {
                 engine::runtime::reconcile_runtime_state_with_owned(
                     tracked_pid,
@@ -826,6 +814,24 @@ fn media_response_from_path(appdata: &Path, request: &Request<Vec<u8>>) -> Respo
             response = response.header("Content-Length", "0");
         }
         return response.body(vec![]).unwrap();
+    }
+
+    if total_len > MAX_UNRANGED_MEDIA_RESPONSE_BYTES {
+        // ponytail: the Tauri protocol body is Vec<u8>; cap an unsolicited response
+        // at 1 MiB and let the media element request subsequent ranges.
+        let end = MAX_UNRANGED_MEDIA_RESPONSE_BYTES - 1;
+        let Ok(data) = read_media_range(&file_path, 0, end) else {
+            return Response::builder().status(404).body(vec![]).unwrap();
+        };
+        return Response::builder()
+            .status(206)
+            .header("Content-Type", mime)
+            .header("Content-Range", format!("bytes 0-{end}/{total_len}"))
+            .header("Content-Length", data.len().to_string())
+            .header("Accept-Ranges", "bytes")
+            .header("Access-Control-Allow-Origin", "*")
+            .body(data)
+            .unwrap();
     }
 
     let full_data = if total_len == 0 {
@@ -1881,38 +1887,55 @@ fn wait_for_launcher_process_tree<R: Runtime>(
 ) -> Result<engine::runtime::ProcessResult, String> {
     let mut root_result = None;
     let mut handoff_started_at = None;
+    let mut handed_off_game = None;
+    let mut process_snapshot_cache = engine::runtime::ProcessSnapshotCache::default();
 
     loop {
         if root_result.is_none() {
             if let Some(result) = process.try_wait()? {
                 root_result = Some(result);
                 handoff_started_at = Some(Instant::now());
+            } else {
+                // The root process is still alive, so there is no handoff to
+                // reconcile yet. Avoid taking a full process snapshot and
+                // querying executable paths on every root poll.
+                std::thread::sleep(PROCESS_POLL_INTERVAL);
+                continue;
             }
         }
 
-        let current_pid = coordinator_launcher_game_pid(app);
-        let current_identity = coordinator_launcher_game_identity(app);
-        let owned_pid = engine::runtime::find_launcher_game_process_id_with_identity(
-            root_pid,
+        if let Some((game_pid, game_identity)) = handed_off_game {
+            if engine::runtime::process_identity(game_pid) == Some(game_identity) {
+                // The verified game root is alive. Its descendants are owned
+                // for force-quit, but do not require a full snapshot every
+                // 100 ms while the game is simply running.
+                std::thread::sleep(PROCESS_POLL_INTERVAL);
+                continue;
+            }
+            // The game root exited or changed identity. Take one fresh
+            // reconciliation snapshot to detect a verified replacement
+            // before completing the launcher lifecycle.
+            handed_off_game = None;
+        }
+
+        let inspection = engine::runtime::inspect_runtime_processes_with_cache(
+            Some(root_pid),
             launcher_identity,
+            coordinator_launcher_game_pid(app),
+            coordinator_launcher_game_identity(app),
             Some(expected_executable),
-        )
-        .or_else(|| {
-            current_pid.filter(|pid| {
-                engine::runtime::is_launcher_owned_game_process(
-                    root_pid,
-                    launcher_identity,
-                    *pid,
-                    current_identity,
-                    Some(expected_executable),
-                )
-            })
-        });
-        if let Some(pid) = owned_pid {
+            true,
+            &mut process_snapshot_cache,
+        );
+        if let Some(pid) = inspection.owned_pid {
             set_launcher_game_process(app, pid);
+            if let Some(identity) = coordinator_launcher_game_identity(app) {
+                handed_off_game = Some((pid, identity));
+            }
             handoff_started_at = Some(Instant::now());
         }
-        let has_descendant = engine::runtime::has_process_tree_descendant(root_pid);
+        let owned_pid = inspection.owned_pid;
+        let has_descendant = inspection.has_descendant;
 
         if root_result.is_some()
             && owned_pid.is_none()
@@ -1923,7 +1946,10 @@ fn wait_for_launcher_process_tree<R: Runtime>(
             return process.finalize();
         }
 
-        std::thread::sleep(PROCESS_POLL_INTERVAL);
+        // Full reconciliation is needed only during the short post-root
+        // handoff window and on a verified game-root transition. Before and
+        // after that window, root/identity checks use the cheaper poll above.
+        std::thread::sleep(PROCESS_HANDOFF_POLL_INTERVAL);
     }
 }
 
@@ -2948,6 +2974,40 @@ mod tests {
         assert_eq!(
             registered_media_protocol_response(appdata.path(), traversal).status(),
             404
+        );
+    }
+
+    #[test]
+    fn unranged_large_media_response_is_bounded() {
+        let appdata = tempfile::tempdir().unwrap();
+        let cache = appdata.path().join("Cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        let total_len = MAX_UNRANGED_MEDIA_RESPONSE_BYTES as usize + 1;
+        std::fs::write(cache.join("bg-video.mp4"), vec![b'x'; total_len]).unwrap();
+
+        let request = tauri::http::Request::builder()
+            .uri("media://localhost/bg-video.mp4")
+            .body(Vec::new())
+            .unwrap();
+        let response = registered_media_protocol_response(appdata.path(), request);
+
+        assert_eq!(response.status(), 206);
+        assert_eq!(
+            response.body().len(),
+            MAX_UNRANGED_MEDIA_RESPONSE_BYTES as usize
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("Content-Range")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            format!(
+                "bytes 0-{}/{}",
+                MAX_UNRANGED_MEDIA_RESPONSE_BYTES - 1,
+                total_len
+            )
         );
     }
 
