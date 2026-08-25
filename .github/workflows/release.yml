@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, for example v2.9.0"
+        description: "Release tag, for example v2.9.1"
         required: true
         type: string
 
@@ -101,6 +101,9 @@ jobs:
 
       - name: Build frontend
         run: npm run build
+
+      - name: Test patch status bridge
+        run: npm run test:patch-status
 
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check

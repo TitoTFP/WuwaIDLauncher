@@ -839,7 +839,7 @@ pub fn process_identity(pid: u32) -> Option<ProcessIdentity> {
             let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
             let identity = process_identity_from_handle_value(handle.0 as usize, pid);
             let _ = CloseHandle(handle);
-            return identity;
+            identity
         }
     }
 
@@ -971,8 +971,10 @@ fn process_snapshot_with_cache(
     };
 
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()? };
-    let mut entry = PROCESSENTRY32W::default();
-    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
     let mut entries = Vec::new();
 
     unsafe {
@@ -1096,7 +1098,7 @@ fn find_launcher_game_process_id_in_snapshot(
 pub fn has_process_tree_descendant(root_pid: u32) -> Option<bool> {
     #[cfg(windows)]
     {
-        return Some(process_snapshot()?.has_descendant(root_pid));
+        Some(process_snapshot()?.has_descendant(root_pid))
     }
 
     #[cfg(not(windows))]
@@ -1121,12 +1123,12 @@ pub fn find_launcher_game_process_id_with_identity(
     #[cfg(windows)]
     {
         let launcher_identity = launcher_identity?;
-        return find_launcher_game_process_id_in_snapshot(
+        find_launcher_game_process_id_in_snapshot(
             &process_snapshot()?,
             launcher_pid,
             launcher_identity,
             expected_executable,
-        );
+        )
     }
 
     #[cfg(not(windows))]
@@ -1222,11 +1224,11 @@ fn inspect_runtime_processes_inner(
         let has_descendant = include_descendant
             .then(|| launcher_pid.map(|root_pid| snapshot.has_descendant(root_pid)))
             .flatten();
-        return RuntimeProcessInspection {
+        RuntimeProcessInspection {
             detected_pid,
             owned_pid,
             has_descendant,
-        };
+        }
     }
 
     #[cfg(not(windows))]
@@ -1268,7 +1270,7 @@ pub fn validate_launch_preconditions(
 pub fn find_game_process_id_for_path(expected_executable: Option<&Path>) -> Option<u32> {
     #[cfg(windows)]
     {
-        return find_game_process_id_in_snapshot(&process_snapshot()?, expected_executable);
+        find_game_process_id_in_snapshot(&process_snapshot()?, expected_executable)
     }
 
     #[cfg(not(windows))]
@@ -1398,7 +1400,7 @@ pub fn is_verified_game_process(
         if identity.is_some_and(|expected| process_identity(pid) != Some(expected)) {
             return false;
         }
-        return is_verified_game_pid(pid, expected_executable);
+        is_verified_game_pid(pid, expected_executable)
     }
 
     #[cfg(not(windows))]
@@ -1459,14 +1461,14 @@ pub fn is_launcher_owned_game_process(
         let Some(snapshot) = process_snapshot() else {
             return false;
         };
-        return is_launcher_owned_game_process_in_snapshot(
+        is_launcher_owned_game_process_in_snapshot(
             &snapshot,
             launcher_pid,
             launcher_identity,
             game_pid,
             game_identity,
             expected_executable,
-        );
+        )
     }
 
     #[cfg(not(windows))]
@@ -1713,13 +1715,13 @@ pub fn force_quit_game_with_ownership(
         let root_handle = (resolved_game_pid == root_pid && retained_handle_matches_root)
             .then_some(termination_handle)
             .flatten();
-        return terminate_verified_game_tree(
+        terminate_verified_game_tree(
             resolved_game_pid,
             resolved_identity,
             expected_executable,
             root_handle.is_some(),
             root_handle,
-        );
+        )
     }
 
     #[cfg(not(windows))]

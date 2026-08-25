@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
-import { build } from "vite";
+import { build, normalizePath } from "vite";
 
 const repoRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -14,6 +14,7 @@ const tauriFixturePath = path.resolve(
   repoRoot,
   "scripts/tests/launcherStateTauriFixture.js",
 );
+const tauriFixtureId = normalizePath(tauriFixturePath);
 const scenarioPath = path.resolve(
   repoRoot,
   "scripts/tests/launcher-state.integration.ts",
@@ -38,12 +39,15 @@ test("real Tauri bridge routes backend status events during a legacy-path method
         {
           name: "tauri-ipc-fixture",
           enforce: "pre",
-          resolveId(source) {
+          resolveId(source, importer) {
             if (
               source === "@tauri-apps/api/core" ||
-              source === "@tauri-apps/api/event"
+              source === "@tauri-apps/api/event" ||
+              (source === "./launcherStateTauriFixture.js" &&
+                importer &&
+                normalizePath(importer) === normalizePath(scenarioPath))
             ) {
-              return tauriFixturePath;
+              return tauriFixtureId;
             }
             return null;
           },

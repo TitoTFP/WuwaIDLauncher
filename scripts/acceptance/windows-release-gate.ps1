@@ -397,6 +397,7 @@ function Invoke-CommandGate {
     $commands = @(
         [pscustomobject]@{ name = "command-npm-check"; executable = "npm"; arguments = @("run", "check") },
         [pscustomobject]@{ name = "command-npm-build"; executable = "npm"; arguments = @("run", "build") },
+        [pscustomobject]@{ name = "command-npm-patch-status"; executable = "npm"; arguments = @("run", "test:patch-status") },
         [pscustomobject]@{ name = "command-cargo-test"; executable = if ([string]::IsNullOrWhiteSpace($cargoExecutable)) { "cargo" } else { $cargoExecutable }; arguments = @("test", "--manifest-path", "src-tauri/Cargo.toml", "--all-targets", "--", "--test-threads=1") },
         [pscustomobject]@{ name = "command-tauri-build"; executable = "npm"; arguments = @("run", "tauri", "--", "build", "--no-bundle") }
     )

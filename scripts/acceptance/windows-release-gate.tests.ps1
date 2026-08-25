@@ -117,11 +117,14 @@ function Assert-WorkflowContract {
     $workflowRoot = Join-Path $PSScriptRoot "..\..\.github\workflows"
     $ciPath = Join-Path $workflowRoot "ci.yml"
     $releasePath = Join-Path $workflowRoot "release.yml"
+    $gatePath = Join-Path $PSScriptRoot "windows-release-gate.ps1"
     Assert-True (Test-Path -LiteralPath $ciPath -PathType Leaf) "Professional CI workflow is required."
     Assert-True (Test-Path -LiteralPath $releasePath -PathType Leaf) "Professional release workflow is required."
+    Assert-True (Test-Path -LiteralPath $gatePath -PathType Leaf) "Windows release gate runner is required."
 
     $ci = Get-Content -Raw -LiteralPath $ciPath
     $release = Get-Content -Raw -LiteralPath $releasePath
+    $gate = Get-Content -Raw -LiteralPath $gatePath
     $allWorkflows = @(Get-ChildItem -LiteralPath $workflowRoot -Filter "*.yml" -File | Get-Content -Raw) -join "`n"
 
     Assert-True ($ci -match "permissions:\s*\r?\n\s+contents:\s+read") "CI must use read-only contents permission."
@@ -133,6 +136,9 @@ function Assert-WorkflowContract {
     Assert-True ($allWorkflows -match "--locked") "Workflows must enforce the committed Cargo.lock."
     Assert-True ($allWorkflows -match "cargo fmt") "Workflows must check Rust formatting."
     Assert-True ($release -match "windows-release-gate") "Release workflow must run the Windows release gate."
+    Assert-True ($ci -match "test:patch-status") "CI must run the patch-status bridge regression."
+    Assert-True ($release -match "test:patch-status") "Release workflow must run the patch-status bridge regression."
+    Assert-True ($gate -match "test:patch-status") "Windows release gate must run the patch-status bridge regression."
     Assert-True ($release -match "ref:\s+\$\{\{.*inputs\.tag") "Manual releases must checkout the requested tag."
     Assert-True ($allWorkflows -notmatch "uses:\s*[^\r\n]+@(v[0-9]+|stable)\b") "Third-party workflow actions must be pinned to commit SHAs."
 }

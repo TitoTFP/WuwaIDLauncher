@@ -9,7 +9,7 @@
 [![Rust](https://img.shields.io/badge/Backend-Rust_1.97%2B-DEA584?logo=rust)](https://www.rust-lang.org/)
 [![Frontend](https://img.shields.io/badge/Frontend-Svelte_5_%2B_TS-FF3E00?logo=svelte)](https://svelte.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Windows_x64-0078D6?logo=windows)](https://microsoft.com)
-[![Launcher Version](https://img.shields.io/badge/Version-2.9.0-brightgreen)](#)
+[![Launcher Version](https://img.shields.io/badge/Version-2.9.1-brightgreen)](#)
 
 _Nikmati petualangan di Sol3 dengan teks Bahasa Indonesia yang presisi, launcher ultra-ringan berbasis Tauri v2 & Rust, serta konsumsi resource minimal tanpa mengganggu performa bermain game._
 
