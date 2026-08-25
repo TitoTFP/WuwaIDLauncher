@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "check": "node scripts/run-frontend-gate.mjs check",
     "test:patch-status": "node --test scripts/tests/patch-status-wait.test.mjs",
+    "test:tray": "cargo test --manifest-path src-tauri/Cargo.toml tray --lib",
     "test:lifecycle": "node --test scripts/tests/game-exit-notice.test.mjs scripts/tests/resource-lifecycle.test.mjs",
     "tauri": "node scripts/run-tauri.mjs"
   },

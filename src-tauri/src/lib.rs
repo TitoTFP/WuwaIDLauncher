@@ -21,6 +21,7 @@ const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const PROCESS_HANDOFF_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const PROCESS_HANDOFF_GRACE: Duration = Duration::from_secs(3);
 const MAX_UNRANGED_MEDIA_RESPONSE_BYTES: u64 = 1024 * 1024;
+const TRAY_ICON_ID: &str = "launcher-tray";
 
 #[cfg(windows)]
 fn windows_directory() -> PathBuf {
@@ -346,6 +347,11 @@ fn set_tray_mode<R: Runtime>(app: &AppHandle<R>, tray_mode: bool) {
             *value = tray_mode;
         }
     }
+    if let Some(tray) = app.tray_by_id(TRAY_ICON_ID) {
+        if let Err(error) = tray.set_visible(tray_mode) {
+            log::debug!("Visibilitas ikon tray tidak dapat diubah: {error}");
+        }
+    }
 }
 
 fn is_tray_mode<R: Runtime>(app: &AppHandle<R>) -> bool {
@@ -389,6 +395,16 @@ fn request_close<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     set_tray_mode(app, false);
     app.exit(0);
     Ok(())
+}
+
+fn request_tray_close<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    if coordinator_launcher_pid(app).is_some() {
+        engine::operations::global().request_close_for_tray()?;
+        set_tray_mode(app, false);
+        app.exit(0);
+        return Ok(());
+    }
+    request_close(app)
 }
 
 fn mark_force_quit_requested<R: Runtime>(app: &AppHandle<R>) {
@@ -2315,13 +2331,13 @@ pub fn run<R: tauri::Runtime>(context: tauri::Context<R>) {
             let show_i = MenuItem::with_id(app, "show", "Buka Launcher", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
 
-            let _tray = TrayIconBuilder::new()
+            let _tray = TrayIconBuilder::with_id(TRAY_ICON_ID)
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {
-                        if let Err(error) = request_close(app) {
+                        if let Err(error) = request_tray_close(app) {
                             log::debug!("Permintaan keluar dari tray ditolak: {error}");
                         }
                     }
@@ -2439,6 +2455,22 @@ mod tests {
         assert!(launcher_force_quit_pid(None)
             .unwrap_err()
             .contains("not_launcher_launched"));
+    }
+
+    #[test]
+    fn tray_mode_tracks_icon_visibility_contract() {
+        let app = tauri::test::mock_builder()
+            .manage(RuntimeCoordinator::default())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let handle = app.handle();
+
+        set_tray_mode(handle, false);
+        assert!(!is_tray_mode(handle));
+        set_tray_mode(handle, true);
+        assert!(is_tray_mode(handle));
+        set_tray_mode(handle, false);
+        assert!(!is_tray_mode(handle));
     }
 
     #[test]

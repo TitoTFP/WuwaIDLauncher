@@ -140,6 +140,29 @@ impl OperationCoordinator {
         Ok(())
     }
 
+    pub fn request_close_for_tray(&self) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.closing {
+            return Err("busy: launcher close is already in progress".to_string());
+        }
+        if let Some(active) = state
+            .active
+            .iter()
+            .copied()
+            .find(|active| *active != OperationKind::GameLaunch)
+        {
+            return Err(format!(
+                "busy: cannot close while {} is in progress",
+                active.label()
+            ));
+        }
+        state.closing = true;
+        Ok(())
+    }
+
     pub fn active_operation(&self) -> Option<OperationKind> {
         self.state
             .lock()
@@ -219,6 +242,24 @@ mod tests {
         assert!(error.contains("game launch"));
         drop(launch);
         assert!(coordinator.request_close().is_ok());
+    }
+
+    #[test]
+    fn tray_close_allows_game_launch_but_still_blocks_other_operations() -> Result<(), String> {
+        let coordinator = OperationCoordinator::default();
+        let launch = coordinator.try_acquire(OperationKind::GameLaunch)?;
+        assert!(coordinator.request_close_for_tray().is_ok());
+        drop(launch);
+
+        let coordinator = OperationCoordinator::default();
+        let media = coordinator.try_acquire(OperationKind::MediaSync)?;
+        let error = match coordinator.request_close_for_tray() {
+            Ok(()) => return Err("media sync should block tray close".to_string()),
+            Err(error) => error,
+        };
+        assert!(error.contains("media sync"));
+        drop(media);
+        Ok(())
     }
 
     #[test]
