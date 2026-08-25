@@ -2686,6 +2686,12 @@ mod tests {
         panic!("test operation did not become idle")
     }
 
+    fn conventional_canonical_path(path: &Path) -> String {
+        let canonical = std::fs::canonicalize(path).unwrap();
+        let text = canonical.to_string_lossy();
+        text.strip_prefix(r"\\?\").unwrap_or(&text).to_string()
+    }
+
     fn ipc_request(command: &str, args: serde_json::Value) -> InvokeRequest {
         InvokeRequest {
             cmd: command.to_string(),
@@ -3770,6 +3776,10 @@ mod tests {
         std::fs::write(&legacy_marker, b"legacy marker").unwrap();
         let versions = appdata.path().join("versions.json");
         std::fs::write(&versions, br#"{"_installMethod":"loader"}"#).unwrap();
+        let expected_removed = vec![
+            conventional_canonical_path(&foreign),
+            conventional_canonical_path(&legacy_marker),
+        ];
 
         let report = switch_method(
             game.path().to_string_lossy().to_string(),
@@ -3778,13 +3788,7 @@ mod tests {
         .unwrap();
         assert!(report.failures.is_empty());
         assert!(report.preserved.is_empty());
-        assert_eq!(
-            report.removed,
-            vec![
-                foreign.to_string_lossy().to_string(),
-                legacy_marker.to_string_lossy().to_string(),
-            ]
-        );
+        assert_eq!(report.removed, expected_removed);
         assert!(!foreign.exists());
         assert!(!legacy_marker.exists());
         assert_eq!(
@@ -4117,7 +4121,7 @@ mod tests {
                 }),
             ),
             Ok(serde_json::json!({
-                "removed": [foreign.to_string_lossy()],
+                "removed": [conventional_canonical_path(&foreign)],
                 "preserved": [],
                 "failures": [],
             })),
