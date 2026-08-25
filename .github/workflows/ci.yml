@@ -55,6 +55,9 @@ jobs:
       - name: Test patch status bridge
         run: npm run test:patch-status
 
+      - name: Check release version consistency
+        run: npm run test:version
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 

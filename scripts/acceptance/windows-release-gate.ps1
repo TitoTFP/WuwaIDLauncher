@@ -15,8 +15,9 @@ param(
 
     [string]$GamePath,
 
-    # Contract-test-only fault injection; normal release runs never pass this switch.
+    # Contract-test-only fault injection; normal release runs never pass these switches.
     [switch]$TestFailureAfterFixture,
+    [switch]$TestMutateProtectedFixture,
 
     # Full local check/build/package commands are opt-in because they are expensive and mutate build output.
     [switch]$RunCommandGate
@@ -97,6 +98,47 @@ function Get-FixtureSnapshot {
     })
 }
 
+function Get-ProtectedFixtureSnapshot {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $snapshot = Get-FixtureSnapshot -Root $Root
+    return @($snapshot | Where-Object {
+        $script:ProtectedFixtureRelativePaths -contains $_.path
+    })
+}
+
+function Compare-FixtureSnapshots {
+    param(
+        [Parameter(Mandatory = $true)][object[]]$Before,
+        [Parameter(Mandatory = $true)][object[]]$After
+    )
+
+    $beforeByPath = @{}
+    foreach ($entry in @($Before)) {
+        $beforeByPath[[string]$entry.path] = $entry
+    }
+    $afterByPath = @{}
+    foreach ($entry in @($After)) {
+        $afterByPath[[string]$entry.path] = $entry
+    }
+
+    $paths = @($beforeByPath.Keys + $afterByPath.Keys | Sort-Object -Unique)
+    return @($paths | ForEach-Object {
+        $path = [string]$_
+        $beforeEntry = if ($beforeByPath.ContainsKey($path)) { $beforeByPath[$path] } else { $null }
+        $afterEntry = if ($afterByPath.ContainsKey($path)) { $afterByPath[$path] } else { $null }
+        $beforeJson = if ($null -eq $beforeEntry) { "missing" } else { $beforeEntry | ConvertTo-Json -Compress }
+        $afterJson = if ($null -eq $afterEntry) { "missing" } else { $afterEntry | ConvertTo-Json -Compress }
+        if ($beforeJson -ne $afterJson) {
+            [pscustomobject][ordered]@{
+                path   = $path
+                before = $beforeEntry
+                after  = $afterEntry
+            }
+        }
+    })
+}
+
 function Write-JsonFile {
     param(
         [Parameter(Mandatory = $true)][object]$Value,
@@ -142,16 +184,19 @@ function Remove-RunFixtureSafely {
 
 function New-FixtureLayout {
     $directories = @(
-        "Client\Binaries\Win64",
-        "Client\Content\Paks",
-        "Client\Saved\Resources\3.0.0"
+        "AppData",
+        "Wuthering Waves\Client\Binaries\Win64",
+        "Wuthering Waves\Client\Content\Paks",
+        "Wuthering Waves\Client\Saved\Resources\3.0.0"
     )
     foreach ($directory in $directories) {
         New-Item -ItemType Directory -Force -Path (Join-Path $script:RunFixtureRoot $directory) | Out-Null
     }
 
-    Set-Content -LiteralPath (Join-Path $script:RunFixtureRoot "Client\Binaries\Win64\Client-Win64-Shipping.exe") -Value "fixture executable" -NoNewline
-    Set-Content -LiteralPath (Join-Path $script:RunFixtureRoot "Client\Saved\Resources\3.0.0\ResManifest") -Value "fixture manifest" -NoNewline
+    Set-Content -LiteralPath (Join-Path $script:RunFixtureRoot "Wuthering Waves\Client\Binaries\Win64\Client-Win64-Shipping.exe") -Value "frontend IPC fixture game executable" -NoNewline
+    Set-Content -LiteralPath (Join-Path $script:RunFixtureRoot "Wuthering Waves\Client\Saved\Resources\3.0.0\ResManifest") -Value "fixture manifest" -NoNewline
+    Set-Content -LiteralPath (Join-Path $script:RunFixtureRoot "AppData\unrelated-appdata.json") -Value '{"keep":true}' -NoNewline
+    Set-Content -LiteralPath (Join-Path $script:RunFixtureRoot "Wuthering Waves\Client\Content\Paks\unrelated-game.pak") -Value "unrelated game data" -NoNewline
 }
 
 function Find-ArtifactFile {
@@ -397,35 +442,64 @@ function Invoke-CommandGate {
     $commands = @(
         [pscustomobject]@{ name = "command-npm-check"; executable = "npm"; arguments = @("run", "check") },
         [pscustomobject]@{ name = "command-npm-build"; executable = "npm"; arguments = @("run", "build") },
-        [pscustomobject]@{ name = "command-npm-patch-status"; executable = "npm"; arguments = @("run", "test:patch-status") },
+        [pscustomobject]@{ name = "command-npm-version"; executable = "npm"; arguments = @("run", "test:version") },
         [pscustomobject]@{ name = "command-cargo-test"; executable = if ([string]::IsNullOrWhiteSpace($cargoExecutable)) { "cargo" } else { $cargoExecutable }; arguments = @("test", "--manifest-path", "src-tauri/Cargo.toml", "--all-targets", "--", "--test-threads=1") },
+        [pscustomobject]@{ name = "command-npm-patch-status"; executable = "npm"; arguments = @("run", "test:patch-status") },
         [pscustomobject]@{ name = "command-tauri-build"; executable = "npm"; arguments = @("run", "tauri", "--", "build", "--no-bundle") }
     )
+    $fixtureEnvironment = [ordered]@{
+        WUWAID_RELEASE_GATE_FIXTURE_ROOT = $script:RunFixtureRoot
+        WUWAID_E2E_FIXTURE_ROOT = $script:RunFixtureRoot
+    }
+    $environmentEvidencePath = Join-Path $script:EvidenceRoot "command-fixture.json"
+    Write-JsonFile -Value ([ordered]@{
+        root = $script:RunFixtureRoot
+        environment = $fixtureEnvironment
+        layout = @(
+            "AppData",
+            "Wuthering Waves/Client/Binaries/Win64",
+            "Wuthering Waves/Client/Content/Paks"
+        )
+    }) -Path $environmentEvidencePath
+    Add-Scenario -Name "command-fixture" -Status "PASS" -Message "Release commands receive the run-owned Steam-style AppData/game fixture." -Evidence @($environmentEvidencePath)
+
+    $previousEnvironment = @{}
     $allPassed = $true
-    foreach ($command in $commands) {
-        $logPath = Join-Path $script:EvidenceRoot ($command.name + ".log")
-        $output = @()
-        $exitCode = 1
-        $locationPushed = $false
-        try {
-            Push-Location -LiteralPath $script:WorkspaceRoot
-            $locationPushed = $true
-            $output = @(& $command.executable @($command.arguments) 2>&1)
-            $exitCode = $LASTEXITCODE
-        } catch {
-            $output = @($_.Exception.Message)
+    try {
+        foreach ($name in $fixtureEnvironment.Keys) {
+            $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+            [Environment]::SetEnvironmentVariable($name, [string]$fixtureEnvironment[$name], "Process")
+        }
+
+        foreach ($command in $commands) {
+            $logPath = Join-Path $script:EvidenceRoot ($command.name + ".log")
+            $output = @()
             $exitCode = 1
-        } finally {
-            if ($locationPushed) {
-                Pop-Location
+            $locationPushed = $false
+            try {
+                Push-Location -LiteralPath $script:WorkspaceRoot
+                $locationPushed = $true
+                $output = @(& $command.executable @($command.arguments) 2>&1)
+                $exitCode = $LASTEXITCODE
+            } catch {
+                $output = @($_.Exception.Message)
+                $exitCode = 1
+            } finally {
+                if ($locationPushed) {
+                    Pop-Location
+                }
+            }
+            $output | Out-File -LiteralPath $logPath -Encoding utf8
+            if ($exitCode -eq 0) {
+                Add-Scenario -Name $command.name -Status "PASS" -Message (("Command exit code 0: {0} {1}" -f $command.executable, ($command.arguments -join " ")).Trim()) -Evidence @($logPath, $environmentEvidencePath)
+            } else {
+                $allPassed = $false
+                Add-Scenario -Name $command.name -Status "FAIL" -Message (("Command exit code {0}: {1} {2}" -f $exitCode, $command.executable, ($command.arguments -join " ")).Trim()) -Evidence @($logPath, $environmentEvidencePath)
             }
         }
-        $output | Out-File -LiteralPath $logPath -Encoding utf8
-        if ($exitCode -eq 0) {
-            Add-Scenario -Name $command.name -Status "PASS" -Message (("Command exit code 0: {0} {1}" -f $command.executable, ($command.arguments -join " ")).Trim()) -Evidence @($logPath)
-        } else {
-            $allPassed = $false
-            Add-Scenario -Name $command.name -Status "FAIL" -Message (("Command exit code {0}: {1} {2}" -f $exitCode, $command.executable, ($command.arguments -join " ")).Trim()) -Evidence @($logPath)
+    } finally {
+        foreach ($name in $fixtureEnvironment.Keys) {
+            [Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name], "Process")
         }
     }
     return $allPassed
@@ -481,6 +555,10 @@ $script:RunFixtureRoot = $null
 $script:OwnerMarkerPath = $null
 $script:ReportPath = $null
 $script:EvidenceRoot = $null
+$script:ProtectedFixtureRelativePaths = @(
+    "AppData/unrelated-appdata.json",
+    "Wuthering Waves/Client/Content/Paks/unrelated-game.pak"
+)
 $script:Report = [ordered]@{
     schemaVersion = 1
     runId         = $script:RunId
@@ -494,6 +572,9 @@ $script:Report = [ordered]@{
     fixtureRoot   = $null
     ownerMarker   = $null
     baselineSnapshot = $null
+    protectedBaselineSnapshot = $null
+    postSnapshot = $null
+    baselineIntegrity = $null
     reportPath    = $null
     scenarios     = @()
     cleanup       = $null
@@ -528,11 +609,14 @@ try {
     $layout = [ordered]@{
         root = $script:RunFixtureRoot
         files = @(
-            "Client/Binaries/Win64/Client-Win64-Shipping.exe",
-            "Client/Saved/Resources/3.0.0/ResManifest"
+            "AppData/unrelated-appdata.json",
+            "Wuthering Waves/Client/Binaries/Win64/Client-Win64-Shipping.exe",
+            "Wuthering Waves/Client/Saved/Resources/3.0.0/ResManifest",
+            "Wuthering Waves/Client/Content/Paks/unrelated-game.pak"
         )
         directories = @(
-            "Client/Content/Paks"
+            "AppData",
+            "Wuthering Waves/Client/Content/Paks"
         )
     }
     Write-JsonFile -Value ([pscustomobject]$layout) -Path $layoutManifestPath
@@ -548,6 +632,17 @@ try {
     $script:Report.baselineSnapshot = $baselinePath
     Add-Scenario -Name "baseline-snapshot" -Status "PASS" -Message ("Baseline captured for {0} files." -f @($baseline).Count) -Evidence @($baselinePath)
 
+    $protectedBaseline = Get-ProtectedFixtureSnapshot -Root $script:RunFixtureRoot
+    $protectedBaselinePath = Join-Path $script:EvidenceRoot "protected-baseline-snapshot.json"
+    Write-JsonFile -Value ([pscustomobject][ordered]@{
+        runId = $script:RunId
+        root = $script:RunFixtureRoot
+        paths = $script:ProtectedFixtureRelativePaths
+        files = $protectedBaseline
+    }) -Path $protectedBaselinePath
+    $script:Report.protectedBaselineSnapshot = $protectedBaselinePath
+    Add-Scenario -Name "protected-baseline-snapshot" -Status "PASS" -Message ("Protected baseline captured for {0} files." -f @($protectedBaseline).Count) -Evidence @($protectedBaselinePath)
+
     $artifactGatePassed = Invoke-ArtifactGate
     if ($RunCommandGate) {
         if ($artifactGatePassed) {
@@ -555,10 +650,6 @@ try {
         } else {
             Add-Scenario -Name "command-gate" -Status "BLOCKED" -Message "Command gate dilewati karena artifact gate gagal." -Evidence @($script:EvidenceRoot)
         }
-    }
-
-    if ($TestFailureAfterFixture) {
-        throw "Injected failure after fixture and baseline creation for cleanup contract test."
     }
 
     if ($Mode -in @("manual", "all")) {
@@ -569,6 +660,39 @@ try {
         } else {
             Add-Scenario -Name "manual-prerequisites" -Status "PASS" -Message "GamePath tersedia untuk manual release-machine checks."
         }
+    }
+
+    if ($TestMutateProtectedFixture) {
+        Set-Content -LiteralPath (Join-Path $script:RunFixtureRoot "AppData\unrelated-appdata.json") -Value '{"keep":false}' -NoNewline
+    }
+
+    $protectedPost = Get-ProtectedFixtureSnapshot -Root $script:RunFixtureRoot
+    $postSnapshotPath = Join-Path $script:EvidenceRoot "post-operation-snapshot.json"
+    Write-JsonFile -Value ([pscustomobject][ordered]@{
+        runId = $script:RunId
+        root = $script:RunFixtureRoot
+        paths = $script:ProtectedFixtureRelativePaths
+        files = $protectedPost
+    }) -Path $postSnapshotPath
+    $integrityChanges = @(Compare-FixtureSnapshots -Before $protectedBaseline -After $protectedPost)
+    $integrityPath = Join-Path $script:EvidenceRoot "baseline-integrity.json"
+    Write-JsonFile -Value ([pscustomobject][ordered]@{
+        runId = $script:RunId
+        baselineSnapshot = $protectedBaselinePath
+        postSnapshot = $postSnapshotPath
+        changed = $integrityChanges.Count -gt 0
+        changes = $integrityChanges
+    }) -Path $integrityPath
+    $script:Report.postSnapshot = $postSnapshotPath
+    $script:Report.baselineIntegrity = $integrityPath
+    if ($integrityChanges.Count -gt 0) {
+        Add-Scenario -Name "baseline-integrity" -Status "FAIL" -Message "Protected AppData/game baseline berubah setelah operasi release gate." -Evidence @($protectedBaselinePath, $postSnapshotPath, $integrityPath)
+    } else {
+        Add-Scenario -Name "baseline-integrity" -Status "PASS" -Message "Protected AppData/game baseline tetap byte-for-byte sama setelah operasi release gate." -Evidence @($protectedBaselinePath, $postSnapshotPath, $integrityPath)
+    }
+
+    if ($TestFailureAfterFixture) {
+        throw "Injected failure after fixture and baseline creation for cleanup contract test."
     }
 
     $nonPass = @($script:Scenarios | Where-Object { $_.status -ne "PASS" })

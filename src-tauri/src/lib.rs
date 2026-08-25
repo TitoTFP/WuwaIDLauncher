@@ -2452,11 +2452,14 @@ pub mod frontend_fixture {
         root: PathBuf,
         legacy_game_path: PathBuf,
         canonical_game_path: PathBuf,
+        cleanup_root: bool,
     }
 
     impl Drop for FixturePaths {
         fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.root);
+            if self.cleanup_root {
+                let _ = std::fs::remove_dir_all(&self.root);
+            }
         }
     }
 
@@ -2486,11 +2489,17 @@ pub mod frontend_fixture {
     }
 
     fn prepare_fixture() -> FixturePaths {
-        let root = std::env::temp_dir().join(format!(
-            "wuwaid-launcher-frontend-fixture-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&root);
+        let external_root = std::env::var_os("WUWAID_E2E_FIXTURE_ROOT");
+        let cleanup_root = external_root.is_none();
+        let root = external_root.map(PathBuf::from).unwrap_or_else(|| {
+            std::env::temp_dir().join(format!(
+                "wuwaid-launcher-frontend-fixture-{}",
+                std::process::id()
+            ))
+        });
+        if cleanup_root {
+            let _ = std::fs::remove_dir_all(&root);
+        }
         let appdata = root.join("AppData");
         let game = root.join("Wuthering Waves");
         std::fs::create_dir_all(&appdata).unwrap();
@@ -2535,6 +2544,7 @@ pub mod frontend_fixture {
             root,
             legacy_game_path,
             canonical_game_path,
+            cleanup_root,
         }
     }
 
@@ -3506,6 +3516,41 @@ mod tests {
         std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
         tauri::async_runtime::block_on(run_legacy_v290_appdata_scenario(appdata.path()));
         std::env::remove_var("WUWAID_E2E_APPDATA");
+    }
+
+    #[test]
+    fn release_gate_fixture_round_trip_uses_run_owned_state() {
+        let Some(root) = std::env::var_os("WUWAID_RELEASE_GATE_FIXTURE_ROOT") else {
+            return;
+        };
+        let _env_lock = lock_test_environment();
+        let root = PathBuf::from(root);
+        let appdata = root.join("AppData");
+        let game = root.join("Wuthering Waves");
+        assert!(appdata.is_dir(), "release gate AppData fixture is missing");
+        assert!(
+            game.join(engine::path::GAME_EXE_RELATIVE).is_file(),
+            "release gate game fixture is missing"
+        );
+
+        let previous_appdata = std::env::var_os("WUWAID_E2E_APPDATA");
+        std::env::set_var("WUWAID_E2E_APPDATA", &appdata);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let loaded = load_settings().unwrap();
+            assert_eq!(
+                loaded.settings.install_method,
+                engine::method::InstallMethod::ResourceMount
+            );
+            save_settings(serde_json::to_string(&loaded.settings).unwrap()).unwrap();
+            std::fs::write(appdata.join(".release-gate-cargo-test-ran"), b"ok").unwrap();
+        }));
+        match previous_appdata {
+            Some(value) => std::env::set_var("WUWAID_E2E_APPDATA", value),
+            None => std::env::remove_var("WUWAID_E2E_APPDATA"),
+        }
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
     }
 
     async fn run_legacy_v290_appdata_scenario(appdata: &Path) {

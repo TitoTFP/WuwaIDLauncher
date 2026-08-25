@@ -18,7 +18,8 @@ function Invoke-Runner {
         [Parameter(Mandatory = $true)][string]$OutputRoot,
         [Parameter(Mandatory = $true)][string]$FixtureRoot,
         [string]$GamePath,
-        [switch]$TestFailureAfterFixture
+        [switch]$TestFailureAfterFixture,
+        [switch]$TestMutateProtectedFixture
     )
 
     $arguments = @(
@@ -32,6 +33,9 @@ function Invoke-Runner {
     }
     if ($TestFailureAfterFixture) {
         $arguments += "-TestFailureAfterFixture"
+    }
+    if ($TestMutateProtectedFixture) {
+        $arguments += "-TestMutateProtectedFixture"
     }
 
     $output = @(& $script:Pwsh -NoProfile -File $script:Runner @arguments 2>&1)
@@ -131,15 +135,20 @@ function Assert-WorkflowContract {
     Assert-True ($release -match "permissions:\s*\r?\n\s+contents:\s+write") "Release workflow must use contents write permission."
     Assert-True ($release -match "tags:" -and $release -match "v\*\.\*\.\*") "Release workflow must trigger on semantic version tags."
     Assert-True ($release -match "workflow_dispatch:") "Release workflow must support manual dispatch."
-    Assert-True ($allWorkflows -notmatch "tauri-action|MSI|NSIS|\\.msi|nsis") "Workflows must not build installer bundles."
+    Assert-True ($allWorkflows -notmatch "tauri-action|\bMSI\b|\bNSIS\b|\\.msi") "Workflows must not build installer bundles."
     Assert-True ($allWorkflows -match "npm ci") "Workflows must use reproducible npm ci installs."
     Assert-True ($allWorkflows -match "--locked") "Workflows must enforce the committed Cargo.lock."
     Assert-True ($allWorkflows -match "cargo fmt") "Workflows must check Rust formatting."
     Assert-True ($release -match "windows-release-gate") "Release workflow must run the Windows release gate."
     Assert-True ($release -notmatch '\$hash  \*\$zipName') "Release checksum manifest must use sha256sum-compatible spacing."
     Assert-True ($ci -match "test:patch-status") "CI must run the patch-status bridge regression."
+    Assert-True ($ci -match "test:version") "CI must run the release version consistency regression."
     Assert-True ($release -match "test:patch-status") "Release workflow must run the patch-status bridge regression."
+    Assert-True ($release -match "test:version") "Release workflow must run the release version consistency regression."
     Assert-True ($gate -match "test:patch-status") "Windows release gate must run the patch-status bridge regression."
+    Assert-True ($gate -match "test:version") "Windows release gate must run the release version consistency regression."
+    Assert-True ($gate -match "WUWAID_RELEASE_GATE_FIXTURE_ROOT") "Release commands must receive the run-owned fixture root."
+    Assert-True ($gate -match "post-operation-snapshot\.json" -and $gate -match "baseline-integrity") "Release gate must compare post-operation protected fixture state."
     Assert-True ($release -match "ref:\s+\$\{\{.*inputs\.tag") "Manual releases must checkout the requested tag."
     Assert-True ($allWorkflows -notmatch "uses:\s*[^\r\n]+@(v[0-9]+|stable)\b") "Third-party workflow actions must be pinned to commit SHAs."
 }
@@ -207,6 +216,15 @@ try {
     Assert-True (Test-Path -LiteralPath $failureReport.ownerMarker -PathType Leaf) "Failed owner marker must remain available."
     Assert-True (@($failureReport.scenarios | Where-Object { $_.name -eq "runner-error" -and $_.status -eq "FAIL" }).Count -eq 1) "Failure evidence scenario is required."
     Assert-True (Test-Path -LiteralPath (Join-Path $failureCase.fixture "foreign-file.txt") -PathType Leaf) "Foreign file must survive failed cleanup."
+
+    $mutationCase = New-CaseDirectory -Name "mutated-protected-fixture"
+    Initialize-Artifact -Path $mutationCase.artifact
+    $mutationResult = Invoke-Runner -Mode automated -ArtifactRoot $mutationCase.artifact -OutputRoot $mutationCase.output -FixtureRoot $mutationCase.fixture -TestMutateProtectedFixture
+    Assert-True ($mutationResult.exitCode -eq 1) "Protected fixture mutation must fail the automated gate."
+    $mutationReport = Read-Report -Path $mutationResult.reportPath
+    Assert-True (@($mutationReport.scenarios | Where-Object { $_.name -eq "baseline-integrity" -and $_.status -eq "FAIL" }).Count -eq 1) "Protected baseline changes must fail the gate."
+    Assert-True (Test-Path -LiteralPath $mutationReport.postSnapshot -PathType Leaf) "Post-operation snapshot evidence is required."
+    Assert-True ($mutationReport.cleanup.status -eq "PRESERVED") "A baseline mutation must preserve the fixture."
 
     $tamperedCase = New-CaseDirectory -Name "tampered-checksum"
     Initialize-Artifact -Path $tamperedCase.artifact
