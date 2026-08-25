@@ -58,6 +58,7 @@ Acceptance manual Windows tetap diperlukan untuk memvalidasi game nyata, mode ad
   - **Metode 1 — `resource_mount` (Resource Mount):** Deploy file PAK + signature + berkas mount ke folder resource game aktif (`Client/Saved/Resources/<ver>/Mount/`) tanpa menyentuh signature utama game. Dilengkapi proteksi rollback transaksional dan verifikasi integritas struktur Unreal PAK.
   - **Metode 2 — `loader` (Loader):** Menempatkan loader `winhttp.dll` dan folder `wuwaIndonesia/` pada direktori binaries game (`Client/Binaries/Win64/`).
 - **Dynamic Method Switcher:** Berpindah metode instalasi secara instan dengan pembersihan artefak pada path kanonis metode sebelumnya. Path kanonis diperlakukan sebagai target launcher, termasuk saat artefak berasal dari launcher lama.
+- **Settings Overlay:** Ikon gear accessible membuka pengaturan ringkas untuk metode instalasi, Sembunyikan UID, Optimasi C#, dan DirectX 11. Overlay dapat ditutup melalui tombol tutup, **SELESAI**, klik luar, atau `Esc`.
 - **Pemilihan Folder Game:** Membuka dialog folder interaktif untuk memilih lokasi instalasi Wuthering Waves dan memvalidasi folder yang dipilih.
 - **Engine PAK Packer & FNV64:** Modul Rust murni untuk pembuatan paket PAK Unreal Engine kompatibel dengan hashing FNV64 & index SHA-1.
 - **Opsi Peluncuran:** Toggle opt-in DirectX 11 dan optimisasi environment C# (`-ForceEnableCSharpEnvironment`); keduanya diteruskan sebagai argumen proses tanpa memodifikasi shortcut Steam maupun executable game.
@@ -100,9 +101,9 @@ Acceptance manual Windows tetap diperlukan untuk memvalidasi game nyata, mode ad
 
 ### 3️⃣ Pilih Metode & Instal Patch
 
-1. Pilih metode instalasi yang diinginkan dari menu **METODE** di launcher.
-2. Klik tombol **Instal Patch ID** (atau **Perbarui Patch**).
-3. Aktifkan **Sembunyikan UID** sebelum instalasi bila menginginkan varian tersebut. Aktifkan **Optimisasi C#** bila ingin meluncurkan game dengan flag environment C#.
+1. Klik ikon gear **Pengaturan**, lalu pilih kartu metode instalasi yang diinginkan.
+2. Aktifkan **Sembunyikan UID**, **Optimisasi C#**, atau **DirectX 11** sesuai kebutuhan. Perubahan pengaturan tersimpan otomatis.
+3. Klik tombol **Instal Patch ID** (atau **Perbarui Patch**).
 4. Setelah selesai, klik **Mainkan** untuk langsung masuk ke Sol3 dalam Bahasa Indonesia!
 
 ### Kontrak Asset Patch
@@ -251,7 +252,7 @@ Perilaku runtime yang diterapkan mencakup target memori rendah WebView2, launche
 ```text
 WuwaIDLauncher/
 ├── 📁 src/                       # Frontend Svelte 5 + TypeScript
-│   ├── 📁 components/            # Komponen UI (TopBar, SidePanel, RightPanel, AudioPlayer, dll.)
+│   ├── 📁 components/            # Komponen UI (TopBar, SettingsOverlay, SidePanel, RightPanel, AudioPlayer, dll.)
 │   ├── 📁 lib/                   # Bridge RPC Tauri, State Management (Svelte 5 runes), Types
 │   ├── 📁 styles/                # CSS Modular (base, panel, effects)
 │   ├── 📄 App.svelte             # Root UI Layout

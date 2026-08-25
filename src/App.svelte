@@ -3,6 +3,7 @@
   import { appState } from './lib/launcherState.svelte';
   import BackgroundFx from './components/BackgroundFx.svelte';
   import TopBar from './components/TopBar.svelte';
+  import SettingsOverlay from './components/SettingsOverlay.svelte';
   import SidePanel from './components/SidePanel.svelte';
   import AudioPlayer from './components/AudioPlayer.svelte';
   import RightPanel from './components/RightPanel.svelte';
@@ -10,6 +11,8 @@
   import PatchNotesModal from './components/PatchNotesModal.svelte';
   import ToastHost from './components/ToastHost.svelte';
   import AdminModal from './components/AdminModal.svelte';
+
+  let settingsOpen = $state(false);
 
   onMount(() => {
     let mounted = true;
@@ -43,7 +46,8 @@
   class:runtime-paused={appState.launcherInTray}
 >
   <BackgroundFx />
-  <TopBar />
+  <TopBar settingsopen={settingsOpen} onsettings={() => (settingsOpen = true)} />
+  <SettingsOverlay open={settingsOpen} onclose={() => (settingsOpen = false)} />
   <SidePanel />
   <AudioPlayer />
   <RightPanel />
