@@ -2493,16 +2493,22 @@ pub mod frontend_fixture {
         let _ = std::fs::remove_dir_all(&root);
         let appdata = root.join("AppData");
         let game = root.join("Wuthering Waves");
-        let alias_parent = root.join("legacy-alias");
         std::fs::create_dir_all(&appdata).unwrap();
-        std::fs::create_dir_all(&alias_parent).unwrap();
 
         let executable = game.join(super::engine::path::GAME_EXE_RELATIVE);
         std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
         std::fs::write(&executable, b"frontend IPC fixture game executable").unwrap();
 
-        let legacy_game_path = alias_parent.join("..").join("Wuthering Waves");
         let canonical_game_path = std::fs::canonicalize(&game).unwrap();
+        // Derive the legacy lexical alias from the canonical spelling so an
+        // account-specific 8.3 alias such as RUNNER~1 cannot change identity.
+        let canonical_text = canonical_game_path.to_string_lossy();
+        let canonical_text = canonical_text
+            .strip_prefix(r"\\?\")
+            .unwrap_or(&canonical_text);
+        let legacy_game_path = PathBuf::from(canonical_text)
+            .join("..")
+            .join("Wuthering Waves");
         std::fs::write(
             appdata.join("settings.json"),
             serde_json::json!({
