@@ -121,39 +121,6 @@
     }
   }
 
-  async function handleDx11Change(event: Event) {
-    appState.config.dx11 = (event.currentTarget as HTMLInputElement).checked;
-    try {
-      await appState.saveConfig();
-      appState.setStatus('Mode DX11 diperbarui.');
-    } catch (error) {
-      appState.setStatus('Mode DX11 tidak dapat disimpan.', errorMessage(error));
-    }
-  }
-
-  async function handleCSharpEnvironmentChange(event: Event) {
-    appState.config.csharpEnvironment = (event.currentTarget as HTMLInputElement).checked;
-    try {
-      await appState.saveConfig();
-      appState.setStatus('Optimisasi C# diperbarui.');
-    } catch (error) {
-      appState.setStatus('Optimisasi C# tidak dapat disimpan.', errorMessage(error));
-    }
-  }
-
-  async function handleHideUidChange(event: Event) {
-    appState.config.hideUid = (event.currentTarget as HTMLInputElement).checked;
-    try {
-      await appState.saveConfig();
-      if (appState.gamePath) {
-        await appState.requestPatchStatus(appState.gamePath, appState.config.installMethod);
-      }
-      appState.setStatus('Pilihan sembunyikan UID diperbarui.');
-    } catch (error) {
-      appState.setStatus('Pilihan sembunyikan UID tidak dapat diterapkan.', errorMessage(error));
-    }
-  }
-
   let showUninstallConfirm = $state(false);
 
   function promptUninstall() {
@@ -451,52 +418,6 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="rp-dropdown-overlay" onclick={closeDropdown}></div>
   {/if}
-
-  <!-- DirectX 11 Toggle -->
-  <div class="dx11-row" id="dx11Row">
-    <label class="dx11-label" for="chkDx11">
-      <input
-        type="checkbox"
-        id="chkDx11"
-        class="dx11-input"
-        checked={!!appState.config.dx11}
-        disabled={appState.isOperationBlocked('folder') || appState.isOperationBlocked('method-switch') || appState.isOperationBlocked('install')}
-        onchange={handleDx11Change}
-      />
-      <span class="dx11-checkmark"></span>
-      <span class="dx11-text">Jalankan game dengan DirectX 11</span>
-    </label>
-  </div>
-
-  <div class="dx11-row" id="csharpEnvironmentRow">
-    <label class="dx11-label" for="chkCSharpEnvironment">
-      <input
-        type="checkbox"
-        id="chkCSharpEnvironment"
-        class="dx11-input"
-        checked={!!appState.config.csharpEnvironment}
-        disabled={appState.launching || appState.gameRunning}
-        onchange={handleCSharpEnvironmentChange}
-      />
-      <span class="dx11-checkmark"></span>
-      <span class="dx11-text">Aktifkan optimisasi C#</span>
-    </label>
-  </div>
-
-  <div class="dx11-row" id="hideUidRow">
-    <label class="dx11-label" for="chkHideUid">
-      <input
-        type="checkbox"
-        id="chkHideUid"
-        class="dx11-input"
-        checked={!!appState.config.hideUid}
-        disabled={appState.isOperationBlocked('folder') || appState.isOperationBlocked('method-switch') || appState.isOperationBlocked('install')}
-        onchange={handleHideUidChange}
-      />
-      <span class="dx11-checkmark"></span>
-      <span class="dx11-text">Sembunyikan UID</span>
-    </label>
-  </div>
 
   <!-- Actions: Hamburger Menu + Start Button -->
   <div class="rp-actions">

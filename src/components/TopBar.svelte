@@ -1,35 +1,13 @@
 <script lang="ts">
   import { appState } from '../lib/launcherState.svelte';
   import { bridge } from '../lib/bridge';
-  import { INSTALL_METHOD_OPTIONS } from '../lib/types';
-  import type { InstallMethod } from '../lib/types';
 
-  let methodMenuOpen = $state(false);
-
-  async function selectMethod(method: InstallMethod) {
-    if (appState.isOperationBlocked('method-switch')) {
-      appState.showToast(appState.getOperationBusyMessage('method-switch'), 'info');
-      return;
-    }
-    if (appState.gameRunning || appState.installing || appState.launching) return;
-    if (appState.config.installMethod === method) {
-      methodMenuOpen = false;
-      return;
-    }
-    methodMenuOpen = false;
-    try {
-      await appState.switchInstallMethod(method);
-      appState.clearStatus();
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      appState.showToast(`Gagal mengganti metode instalasi.\n${detail}`, 'err');
-    }
+  interface Props {
+    onsettings?: () => void;
+    settingsopen?: boolean;
   }
 
-  function toggleMethodMenu(e: MouseEvent) {
-    e.stopPropagation();
-    methodMenuOpen = !methodMenuOpen;
-  }
+  let { onsettings, settingsopen = false }: Props = $props();
 
   async function handleMinimize() {
     try { await bridge.minimizeWindow(); }
@@ -52,15 +30,7 @@
   }
 
   let closeDisabled = $derived(appState.isOperationBlocked('close'));
-  let methodDisabled = $derived(
-    appState.gameRunning ||
-      appState.installing ||
-      appState.launching ||
-      appState.isOperationBlocked('method-switch'),
-  );
 </script>
-
-<svelte:window onclick={() => (methodMenuOpen = false)} />
 
 <header class="top-bar" id="topBar" data-tauri-drag-region>
   <div class="top-bar__left" data-tauri-drag-region>
@@ -68,38 +38,20 @@
   </div>
 
   <div class="top-bar__right">
-    <nav class="top-nav" id="topNav">
-      <button
-        class="top-nav__item top-nav__item--menu"
-        class:open={methodMenuOpen}
-        id="methodNavBtn"
-        disabled={methodDisabled}
-        aria-expanded={methodMenuOpen}
-        onclick={toggleMethodMenu}
-        type="button"
-      >
-        METODE
-      </button>
-
-    </nav>
-
-    {#if methodMenuOpen}
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="method-menu open" id="methodMenu" onclick={(e) => e.stopPropagation()}>
-        {#each INSTALL_METHOD_OPTIONS as option}
-          <button
-            class="method-menu__item"
-            class:active={appState.config.installMethod === option.value}
-            onclick={() => selectMethod(option.value)}
-            type="button"
-          >
-            <span class="method-menu__title">{option.title}</span>
-            <span class="method-menu__desc">{option.description}</span>
-          </button>
-        {/each}
-      </div>
-    {/if}
+    <button
+      class="top-bar__btn"
+      id="settingsTrigger"
+      title="Pengaturan"
+      aria-label="Pengaturan"
+      aria-haspopup="dialog"
+      aria-expanded={settingsopen}
+      onclick={() => onsettings?.()}
+      type="button"
+    >
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+        <path fill="currentColor" d="M19.43 12.98c.04-.32.07-.65-.07-.98s-.02-.66.07-.98l2.11-1.65a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.61-.22l-2.49 1a7.2 7.2 0 0 0-1.69-.98L14.5 2.42A.49.49 0 0 0 14 2h-4a.49.49 0 0 0-.49.42L9.13 5.07c-.61.25-1.17.58-1.69.98l-2.49-1a.5.5 0 0 0-.61.22l-2 3.46a.5.5 0 0 0 .12.64l2.11 1.65c-.04.32-.08.65-.08.98s.03.66.08.98l-2.11 1.65a.5.5 0 0 0-.12.64l2 3.46c.12.22.38.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.04.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.58 1.69-.98l2.49 1c.23.08.49 0 .61-.22l2-3.46a.5.5 0 0 0-.12-.64l-2.11-1.65ZM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5Z" />
+      </svg>
+    </button>
 
     <div class="top-bar__sep"></div>
 
