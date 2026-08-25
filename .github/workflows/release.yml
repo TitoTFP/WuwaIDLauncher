@@ -138,7 +138,7 @@ jobs:
           Compress-Archive -LiteralPath $exe.FullName -DestinationPath $zipPath -Force
           Copy-Item -LiteralPath $exe.FullName -Destination (Join-Path $artifactRoot $exe.Name) -Force
           $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          Set-Content -LiteralPath (Join-Path $artifactRoot "SHA256sums.txt") -Value "$hash  *$zipName" -Encoding ascii
+          Set-Content -LiteralPath (Join-Path $artifactRoot "SHA256sums.txt") -Value "$hash *$zipName" -Encoding ascii
           Copy-Item -LiteralPath ".github/release-notes/$env:RELEASE_TAG.md" -Destination (Join-Path $artifactRoot "RELEASE_NOTES.md") -Force
           Write-Host "${zipName}: $hash"
 

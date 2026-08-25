@@ -136,6 +136,7 @@ function Assert-WorkflowContract {
     Assert-True ($allWorkflows -match "--locked") "Workflows must enforce the committed Cargo.lock."
     Assert-True ($allWorkflows -match "cargo fmt") "Workflows must check Rust formatting."
     Assert-True ($release -match "windows-release-gate") "Release workflow must run the Windows release gate."
+    Assert-True ($release -notmatch '\$hash  \*\$zipName') "Release checksum manifest must use sha256sum-compatible spacing."
     Assert-True ($ci -match "test:patch-status") "CI must run the patch-status bridge regression."
     Assert-True ($release -match "test:patch-status") "Release workflow must run the patch-status bridge regression."
     Assert-True ($gate -match "test:patch-status") "Windows release gate must run the patch-status bridge regression."
