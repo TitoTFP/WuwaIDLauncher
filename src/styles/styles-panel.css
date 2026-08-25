@@ -146,7 +146,7 @@
 .side-panel {
     position: fixed;
     left: 0;
-    bottom: 130px;
+    bottom: 75px;
     width: 288px;
     height: 310px;
     z-index: 100;
