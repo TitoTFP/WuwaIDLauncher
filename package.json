@@ -1,7 +1,7 @@
 {
   "name": "wuwaid-launcher-tauri",
   "private": true,
-  "version": "2.9.1",
+  "version": "2.9.2",
   "type": "module",
   "engines": {
     "node": ">=20"

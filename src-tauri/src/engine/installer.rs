@@ -887,11 +887,18 @@ fn parse_resource_version(value: &str) -> Option<(u32, u32, u32)> {
 
 fn find_official_signature(version_dir: &Path) -> Option<PathBuf> {
     let mut candidates = Vec::new();
-    for root_name in ["Lang_en", "Resource"] {
-        let root = version_dir.join(root_name);
-        if let Ok(entries) = fs::read_dir(root) {
+    if let Ok(entries) = fs::read_dir(version_dir) {
+        for entry in entries.flatten() {
+            let root = entry.path();
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if !root.is_dir() || (name != "resource" && !name.starts_with("lang_")) {
+                continue;
+            }
+            let Ok(children) = fs::read_dir(root) else {
+                continue;
+            };
             candidates.extend(
-                entries
+                children
                     .flatten()
                     .map(|entry| entry.path())
                     .filter(|path| path.is_dir()),
@@ -942,10 +949,13 @@ fn is_official_signature(version_dir: &Path, signature_path: &Path) -> bool {
         return false;
     };
     let relative = relative.to_string_lossy().replace('\\', "/");
-    let mount_name = if relative.starts_with("Lang_en/") {
-        "MountLang_en.txt"
-    } else if relative.starts_with("Resource/") {
-        "MountResource.txt"
+    let Some(root_name) = relative.split('/').next() else {
+        return false;
+    };
+    let mount_name = if root_name.eq_ignore_ascii_case("Resource") {
+        "MountResource.txt".to_string()
+    } else if root_name.to_ascii_lowercase().starts_with("lang_") {
+        format!("Mount{root_name}.txt")
     } else {
         return false;
     };
@@ -1175,6 +1185,33 @@ mod tests {
             version_dir.join("Mount/MountResource.txt"),
             format!(
                 "::Mount::\nResource/3.5.13/pakchunk0-WindowsNoEditor,4,{},{},,\n::Del::\n",
+                compute_sha1(&official_pak).unwrap(),
+                compute_sha1(&official_sig).unwrap(),
+            ),
+        )
+        .unwrap();
+
+        let plan = probe_resource_mount(&game_dir).unwrap();
+
+        assert_eq!(plan.source_signature_path, official_sig);
+    }
+
+    #[test]
+    fn resource_mount_finds_signature_in_versioned_language_directory() {
+        let (_tmp, game_dir) = setup_mock_game_dir();
+        let version_dir = game_dir.join("Client/Saved/Resources/2.6.0");
+        fs::remove_dir_all(version_dir.join("Lang_en")).unwrap();
+
+        let language_dir = version_dir.join("Lang_ja/3.6.8");
+        fs::create_dir_all(&language_dir).unwrap();
+        let official_pak = language_dir.join("pakchunk10-WindowsNoEditor_P.pak");
+        let official_sig = language_dir.join("pakchunk10-WindowsNoEditor_P.sig");
+        fs::write(&official_pak, b"OFFICIAL_LANGUAGE_PAK").unwrap();
+        fs::write(&official_sig, b"OFFICIAL_LANGUAGE_SIG").unwrap();
+        fs::write(
+            version_dir.join("Mount/MountLang_ja.txt"),
+            format!(
+                "::Mount::\nLang_ja/3.6.8/pakchunk10-WindowsNoEditor_P,12,{},{},,\n::Del::\n",
                 compute_sha1(&official_pak).unwrap(),
                 compute_sha1(&official_sig).unwrap(),
             ),

@@ -2647,7 +2647,7 @@ pub mod frontend_fixture {
         );
 
         let stdin = io::stdin();
-        for line in stdin.lock().lines().flatten() {
+        for line in stdin.lock().lines().map_while(Result::ok) {
             let Ok(request) = serde_json::from_str::<FixtureRequest>(&line) else {
                 continue;
             };

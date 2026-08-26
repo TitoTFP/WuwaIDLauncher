@@ -26,7 +26,9 @@ test("release metadata and frontend fallback use one version", async () => {
   const cargoLock = await read("src-tauri/Cargo.lock");
   const tauriConfig = JSON.parse(await read("src-tauri/tauri.conf.json"));
   const readme = await read("README.md");
-  const releaseNotes = await read(".github/release-notes/v2.9.1.md");
+  const releaseNotes = await read(
+    `.github/release-notes/v${packageJson.version}.md`,
+  );
   const launcherState = await read("src/lib/launcherState.svelte.ts");
   const version = packageJson.version;
 
