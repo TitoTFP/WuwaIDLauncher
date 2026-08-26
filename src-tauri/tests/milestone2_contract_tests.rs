@@ -128,6 +128,15 @@ fn preflight_rejects_resource_mount_without_resource_manifest() {
 }
 
 #[test]
+fn loader_preflight_does_not_require_resource_mount() {
+    let (_temp, game) = setup_game();
+    fs::remove_dir_all(game.join("Client").join("Saved").join("Resources")).unwrap();
+
+    installer::validate_installation_preconditions(&game.to_string_lossy(), InstallMethod::Loader)
+        .unwrap();
+}
+
+#[test]
 fn loader_transaction_requires_loader_and_leaves_no_partial_artifacts() {
     let (_temp, game) = setup_game();
     let pak_source = game.join("source.pak");

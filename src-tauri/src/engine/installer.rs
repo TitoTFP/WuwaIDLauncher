@@ -836,14 +836,24 @@ pub fn probe_resource_mount(game_path: &Path) -> Result<ResourceMountPlan, Strin
     }
 
     versions.sort_by_key(|b| std::cmp::Reverse(b.0));
-    let (_, version_name, version_dir) = versions.remove(0);
-
-    let mount_dir = version_dir.join("Mount");
-    if !mount_dir.is_dir() {
-        return Err("Folder Mount tidak ditemukan pada resource game aktif.".to_string());
+    let mut fallback_error = "Folder Mount tidak ditemukan pada resource game aktif.".to_string();
+    let mut selected = None;
+    for (_, version_name, version_dir) in versions {
+        let mount_dir = version_dir.join("Mount");
+        if !mount_dir.is_dir() {
+            continue;
+        }
+        let Some(source_signature_path) = find_official_signature(&version_dir) else {
+            fallback_error =
+                "Signature resmi tidak ditemukan pada resource game aktif.".to_string();
+            continue;
+        };
+        selected = Some((version_name, version_dir, mount_dir, source_signature_path));
+        break;
     }
-    let source_signature_path = find_official_signature(&version_dir)
-        .ok_or_else(|| "Signature resmi tidak ditemukan pada resource game aktif.".to_string())?;
+    let Some((version_name, version_dir, mount_dir, source_signature_path)) = selected else {
+        return Err(fallback_error);
+    };
     let patch_dir = version_dir.join("Patch").join(PATCH_FOLDER_NAME);
 
     let pak_path = patch_dir.join(PATCH_PAK_FILE_NAME);
@@ -877,17 +887,18 @@ fn parse_resource_version(value: &str) -> Option<(u32, u32, u32)> {
 
 fn find_official_signature(version_dir: &Path) -> Option<PathBuf> {
     let mut candidates = Vec::new();
-    let english_root = version_dir.join("Lang_en");
-    if let Ok(entries) = fs::read_dir(&english_root) {
-        candidates.extend(
-            entries
-                .flatten()
-                .map(|entry| entry.path())
-                .filter(|path| path.is_dir()),
-        );
+    for root_name in ["Lang_en", "Resource"] {
+        let root = version_dir.join(root_name);
+        if let Ok(entries) = fs::read_dir(root) {
+            candidates.extend(
+                entries
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .filter(|path| path.is_dir()),
+            );
+        }
     }
     candidates.sort_by_key(|path| path.to_string_lossy().to_ascii_lowercase());
-    candidates.push(version_dir.join("Resource").join("Base"));
 
     let own_stem = PATCH_PAK_FILE_NAME
         .strip_suffix(".pak")
@@ -1142,6 +1153,45 @@ mod tests {
             .join("ResManifest");
         fs::remove_file(&manifest).unwrap();
         fs::create_dir(&manifest).unwrap();
+
+        let plan = probe_resource_mount(&game_dir).unwrap();
+
+        assert_eq!(plan.version_name, "2.6.0");
+    }
+
+    #[test]
+    fn resource_mount_finds_signature_in_versioned_resource_directory() {
+        let (_tmp, game_dir) = setup_mock_game_dir();
+        let version_dir = game_dir.join("Client/Saved/Resources/2.6.0");
+        fs::remove_dir_all(version_dir.join("Lang_en")).unwrap();
+
+        let resource_dir = version_dir.join("Resource/3.5.13");
+        fs::create_dir_all(&resource_dir).unwrap();
+        let official_pak = resource_dir.join("pakchunk0-WindowsNoEditor.pak");
+        let official_sig = resource_dir.join("pakchunk0-WindowsNoEditor.sig");
+        fs::write(&official_pak, b"OFFICIAL_RESOURCE_PAK").unwrap();
+        fs::write(&official_sig, b"OFFICIAL_RESOURCE_SIG").unwrap();
+        fs::write(
+            version_dir.join("Mount/MountResource.txt"),
+            format!(
+                "::Mount::\nResource/3.5.13/pakchunk0-WindowsNoEditor,4,{},{},,\n::Del::\n",
+                compute_sha1(&official_pak).unwrap(),
+                compute_sha1(&official_sig).unwrap(),
+            ),
+        )
+        .unwrap();
+
+        let plan = probe_resource_mount(&game_dir).unwrap();
+
+        assert_eq!(plan.source_signature_path, official_sig);
+    }
+
+    #[test]
+    fn resource_mount_skips_newer_incomplete_resource_version() {
+        let (_tmp, game_dir) = setup_mock_game_dir();
+        let newer = game_dir.join("Client/Saved/Resources/2.7.0");
+        fs::create_dir_all(newer.join("Mount")).unwrap();
+        fs::write(newer.join("ResManifest"), b"manifest 2.7.0").unwrap();
 
         let plan = probe_resource_mount(&game_dir).unwrap();
 
