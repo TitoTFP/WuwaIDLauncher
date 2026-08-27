@@ -1,5 +1,6 @@
 use crate::engine::downloader::{
-    download_file, read_response_body_limited, verify_sha256, DownloadProgress,
+    download_file, read_response_body_limited, replace_file_atomically, verify_sha256,
+    DownloadProgress,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -124,22 +125,7 @@ fn replace_verified_asset(candidate: &Path, destination: &Path) -> Result<(), St
     if destination.exists() && !destination.is_file() {
         return Err(format!("Target media bukan file: {:?}", destination));
     }
-    let backup = destination.with_extension("previous");
-    if backup.exists() {
-        let _ = std::fs::remove_file(&backup);
-    }
-    if destination.exists() {
-        std::fs::rename(destination, &backup)
-            .map_err(|error| format!("Gagal menyimpan media lama: {error}"))?;
-    }
-    if let Err(error) = std::fs::rename(candidate, destination) {
-        if backup.exists() {
-            let _ = std::fs::rename(&backup, destination);
-        }
-        return Err(format!("Gagal mengaktifkan media baru: {error}"));
-    }
-    let _ = std::fs::remove_file(backup);
-    Ok(())
+    replace_file_atomically(candidate, destination)
 }
 
 pub async fn sync_media<F>(
@@ -248,7 +234,10 @@ mod tests {
             ]
         }"#;
 
-        let manifest = parse_manifest(json).unwrap();
+        let manifest = match parse_manifest(json) {
+            Ok(manifest) => manifest,
+            Err(error) => panic!("manifest fixture invalid: {error}"),
+        };
         assert_eq!(
             manifest.update_date.as_deref(),
             Some("2026-08-20T03:00:00Z")
@@ -259,8 +248,8 @@ mod tests {
     }
 
     #[test]
-    fn test_get_cached_media_paths() {
-        let temp = tempfile::tempdir().unwrap();
+    fn test_get_cached_media_paths() -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
         let cache_dir = temp.path();
 
         let (bgm, vid) = get_cached_media_paths(cache_dir);
@@ -268,22 +257,23 @@ mod tests {
         assert!(vid.is_none());
 
         let bgm_path = cache_dir.join("bgm.mp3");
-        std::fs::write(&bgm_path, b"dummy audio").unwrap();
+        std::fs::write(&bgm_path, b"dummy audio")?;
 
         let (bgm2, vid2) = get_cached_media_paths(cache_dir);
         assert!(bgm2.is_some());
         assert!(vid2.is_none());
 
-        std::fs::remove_file(&bgm_path).unwrap();
-        std::fs::create_dir(&bgm_path).unwrap();
+        std::fs::remove_file(&bgm_path)?;
+        std::fs::create_dir(&bgm_path)?;
         let (bgm3, vid3) = get_cached_media_paths(cache_dir);
         assert!(bgm3.is_none());
         assert!(vid3.is_none());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_media_rejects_empty_sha256() {
-        let temp = tempfile::tempdir().unwrap();
+    async fn test_media_rejects_empty_sha256() -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
         let cache_dir = temp.path();
 
         let manifest = AssetManifest {
@@ -304,13 +294,16 @@ mod tests {
         };
 
         let res = sync_media(cache_dir, &manifest, |_, _| {}).await;
-        assert!(res.is_err());
-        assert!(res.unwrap_err().contains("SHA-256 checksum wajib"));
+        assert!(matches!(
+            res,
+            Err(error) if error.contains("SHA-256 checksum wajib")
+        ));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_media_rejects_missing_video_asset() {
-        let temp = tempfile::tempdir().unwrap();
+    async fn test_media_rejects_missing_video_asset() -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
         let cache_dir = temp.path();
 
         let manifest = AssetManifest {
@@ -325,8 +318,10 @@ mod tests {
 
         let res = sync_media(cache_dir, &manifest, |_, _| {}).await;
         assert!(res.is_err());
-        assert!(res
-            .unwrap_err()
-            .contains("Manifest tidak memuat aset wajib bg-video.mp4"));
+        assert!(matches!(
+            res,
+            Err(error) if error.contains("Manifest tidak memuat aset wajib bg-video.mp4")
+        ));
+        Ok(())
     }
 }
