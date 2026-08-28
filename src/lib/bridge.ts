@@ -45,7 +45,8 @@ export const bridge = {
     gamePath: string,
     installMethod: InstallMethod,
     hideUid: boolean,
-  ): Promise<void> => invoke("check_patch_status", { gamePath, installMethod, hideUid }),
+  ): Promise<void> =>
+    invoke("check_patch_status", { gamePath, installMethod, hideUid }),
   switchMethod: (
     gamePath: string,
     newMethod: InstallMethod,

@@ -184,11 +184,22 @@ jadi tinjau sebelum membagikannya secara manual.
    npm install
    ```
 
-3. Jalankan aplikasi mode pengembangan (Live Reload):
+3. Jalankan aplikasi mode pengembangan (Live Reload) di Windows:
 
    ```bash
    npm run tauri -- dev
    ```
+
+Untuk membuka pratinjau frontend langsung di browser tanpa runtime Tauri:
+
+```bash
+npm run dev -- --host 0.0.0.0
+```
+
+Buka `http://localhost:1420/`. Prototype modal tersedia di:
+
+- `http://localhost:1420/?prototype=release-notes` — dialog update dengan catatan rilis.
+- `http://localhost:1420/?prototype=patch-notes` — modal catatan rilis launcher.
 
 ### Pengujian & Validasi Kualitas
 
@@ -286,7 +297,7 @@ WuwaIDLauncher/
 ├── 📁 src/                       # Frontend Svelte 5 + TypeScript
 │   ├── 📁 components/            # Komponen UI (TopBar, SettingsOverlay, SidePanel, RightPanel, AudioPlayer, dll.)
 │   ├── 📁 lib/                   # Bridge RPC Tauri, State Management (Svelte 5 runes), Types
-│   ├── 📁 styles/                # CSS Modular (base, panel, effects)
+│   ├── 📁 styles/                # CSS Modular (base, panel, theme, effects)
 │   ├── 📄 App.svelte             # Root UI Layout
 │   └── 📄 main.ts               # Frontend Entrypoint
 ├── 📁 src-tauri/                 # Backend Rust & Engine Mod

@@ -5,7 +5,7 @@ import "./styles/styles-base.css";
 import "./styles/styles-panel.css";
 import "./styles/styles-effects.css";
 import "./styles/styles-font.css";
-import "./styles/styles-bilibili.css";
+import "./styles/styles-theme.css";
 
 const target = document.querySelector("#app");
 const app = target ? mount(App, { target }) : null;

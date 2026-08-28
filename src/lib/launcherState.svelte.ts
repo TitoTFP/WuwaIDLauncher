@@ -1,4 +1,5 @@
 import { bridge, setupEventBridge } from "./bridge";
+import { isTauriRuntime } from "./runtime";
 import {
   compactText,
   createGameExitDeduper,
@@ -315,6 +316,8 @@ export class LauncherState implements ILauncherState {
     installMethod: InstallMethod,
     manualCheck = false,
   ) {
+    if (!isTauriRuntime()) return;
+
     const request: PatchStatusRequest = {
       generation: ++this.patchStatusGeneration,
       gamePath,
@@ -371,6 +374,8 @@ export class LauncherState implements ILauncherState {
   }
 
   async selectGameFolder(): Promise<boolean> {
+    if (!isTauriRuntime()) return false;
+
     const token = this.beginOperation("folder");
     if (!token) {
       this.setStatus(
@@ -419,6 +424,10 @@ export class LauncherState implements ILauncherState {
 
   async switchInstallMethod(method: InstallMethod) {
     if (method === this.config.installMethod) return;
+    if (!isTauriRuntime()) {
+      this.config.installMethod = method;
+      return;
+    }
 
     const token = this.beginOperation("method-switch");
     if (!token) throw new Error(this.getOperationBusyMessage("method-switch"));
@@ -459,6 +468,8 @@ export class LauncherState implements ILauncherState {
   }
 
   async startMediaSync() {
+    if (!isTauriRuntime()) return;
+
     const token = this.beginOperation("media-sync");
     if (!token) throw new Error(this.getOperationBusyMessage("media-sync"));
     try {
@@ -470,6 +481,8 @@ export class LauncherState implements ILauncherState {
   }
 
   async forceQuitGame(): Promise<boolean> {
+    if (!isTauriRuntime()) return false;
+
     const token = this.beginOperation("force-quit");
     if (!token) throw new Error(this.getOperationBusyMessage("force-quit"));
     try {
@@ -480,6 +493,8 @@ export class LauncherState implements ILauncherState {
   }
 
   async resetWebViewCache() {
+    if (!isTauriRuntime()) return;
+
     const token = this.beginOperation("cache-reset");
     if (!token) throw new Error(this.getOperationBusyMessage("cache-reset"));
     try {
@@ -492,6 +507,8 @@ export class LauncherState implements ILauncherState {
   }
 
   async performLauncherUpdate(version: string) {
+    if (!isTauriRuntime()) return;
+
     const token = this.beginOperation("launcher-update");
     if (!token) {
       throw new Error(this.getOperationBusyMessage("launcher-update"));
@@ -505,6 +522,8 @@ export class LauncherState implements ILauncherState {
   }
 
   async restartAsAdmin() {
+    if (!isTauriRuntime()) return;
+
     const token = this.beginOperation("restart-as-admin");
     if (!token) {
       throw new Error(this.getOperationBusyMessage("restart-as-admin"));
@@ -517,6 +536,10 @@ export class LauncherState implements ILauncherState {
   }
 
   init(): Promise<void> {
+    if (!isTauriRuntime()) {
+      this.releaseNotesLoading = false;
+      return Promise.resolve();
+    }
     if (this.initialized) return Promise.resolve();
     if (this.initPromise) return this.initPromise;
 
@@ -858,6 +881,7 @@ export class LauncherState implements ILauncherState {
     this.config = normalizeLauncherConfig(this.config).config;
     this.gamePath = this.config.gamePath;
     this.bgmVolume = this.config.bgmVolume;
+    if (!isTauriRuntime()) return;
 
     const serialized = JSON.stringify(this.config);
     this.pendingConfigSaveCount += 1;

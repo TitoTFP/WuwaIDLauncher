@@ -1,3 +1,5 @@
+/* Active launcher theme: mist-aqua, jade, lantern, and ink. */
+
 :root {
     --mist-jade: #e0f0ef;
     --mist-aqua: #aad6d9;
@@ -10,12 +12,6 @@
     --mist-line: rgba(184, 231, 230, 0.28);
     --mist-line-strong: rgba(184, 231, 230, 0.54);
     --mist-grad: linear-gradient(135deg, #d6f0e7 0%, #a6d7d0 44%, #d9cc91 100%);
-
-    /* Backwards-compatible aliases used by the existing panel rules. */
-    --gold: var(--mist-aqua);
-    --gold-bright: var(--mist-jade);
-    --gold-deep: var(--mist-slate);
-    --gold-grad: var(--mist-grad);
 }
 
 .rn-head__title,

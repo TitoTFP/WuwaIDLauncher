@@ -45,7 +45,7 @@
         <!-- eslint-disable-next-line svelte/no-at-html-tags -->
         {@html parsedHtml}
       {:else}
-        <div class="rn-text">
+        <div>
           <p><strong>Selamat datang di WuwaID Launcher!</strong></p>
           <p>Nikmati petualangan di Sol3 dengan patch terjemahan Bahasa Indonesia untuk Wuthering Waves.</p>
           <br />

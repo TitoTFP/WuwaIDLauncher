@@ -1,6 +1,7 @@
 <script lang="ts">
   import { appState } from '../lib/launcherState.svelte';
   import { bridge } from '../lib/bridge';
+  import { isTauriRuntime } from '../lib/runtime';
 
   interface Props {
     onsettings?: () => void;
@@ -10,11 +11,13 @@
   let { onsettings, settingsopen = false }: Props = $props();
 
   async function handleMinimize() {
+    if (!isTauriRuntime()) return;
     try { await bridge.minimizeWindow(); }
     catch (error) { appState.showToast(`Gagal meminimalkan launcher: ${error instanceof Error ? error.message : String(error)}`, 'err'); }
   }
 
   async function handleClose() {
+    if (!isTauriRuntime()) return;
     const token = appState.beginOperation('close');
     if (!token) {
       appState.showToast(appState.getOperationBusyMessage('close'), 'info');
@@ -55,13 +58,13 @@
 
     <div class="top-bar__sep"></div>
 
-    <button class="top-bar__btn" id="btnMinimize" title="Minimalkan" onclick={handleMinimize} type="button">
+    <button class="top-bar__btn" id="btnMinimize" title="Minimalkan" disabled={!isTauriRuntime()} onclick={handleMinimize} type="button">
       <svg viewBox="0 0 24 24" width="14" height="14">
         <path fill="currentColor" d="M19 13H5v-2h14v2z" />
       </svg>
     </button>
 
-    <button class="top-bar__btn top-bar__btn--close" id="btnClose" title="Tutup" disabled={closeDisabled} onclick={handleClose} type="button">
+    <button class="top-bar__btn top-bar__btn--close" id="btnClose" title="Tutup" disabled={closeDisabled || !isTauriRuntime()} onclick={handleClose} type="button">
       <svg viewBox="0 0 24 24" width="14" height="14">
         <path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
       </svg>

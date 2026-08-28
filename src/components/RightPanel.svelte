@@ -1,6 +1,7 @@
 <script lang="ts">
   import { appState } from '../lib/launcherState.svelte.ts';
   import { bridge } from '../lib/bridge.ts';
+  import { isTauriRuntime } from '../lib/runtime';
   import { countdownExpired, shouldRunCountdown } from '../lib/countdown';
   import type { LauncherOperation } from '../lib/types';
 
@@ -52,11 +53,13 @@
 
   async function handleBrowseGameDir() {
     closeDropdown();
+    if (!isTauriRuntime()) return;
     await appState.selectGameFolder();
   }
 
   async function handleCheckPatch() {
     closeDropdown();
+    if (!isTauriRuntime()) return;
     if (!appState.gamePath) {
       appState.setStatus('Pilih folder game terlebih dahulu.');
       return;
@@ -74,6 +77,7 @@
 
   async function handleCheckLauncherUpdate() {
     closeDropdown();
+    if (!isTauriRuntime()) return;
     try {
       await bridge.checkLauncherUpdate();
     } catch (error) {
@@ -83,7 +87,7 @@
 
   async function handleForceQuit() {
     closeDropdown();
-    if (forceQuitDisabled) return;
+    if (!isTauriRuntime() || forceQuitDisabled) return;
     try {
       const terminated = await appState.forceQuitGame();
       if (!terminated) appState.showToast('Game tidak sedang berjalan.', 'info');
@@ -94,6 +98,7 @@
 
   async function handleRestartAdmin() {
     closeDropdown();
+    if (!isTauriRuntime()) return;
     try {
       await appState.restartAsAdmin();
     } catch (error) {
@@ -103,6 +108,7 @@
 
   async function handleResetCache() {
     closeDropdown();
+    if (!isTauriRuntime()) return;
     try {
       await appState.resetWebViewCache();
       appState.setStatus('Cache tampilan berhasil direset.');
@@ -113,6 +119,7 @@
 
   async function handleSupport() {
     closeDropdown();
+    if (!isTauriRuntime()) return;
     try {
       await bridge.openSupport();
       appState.showToast('Halaman dukungan dibuka di browser.', 'ok');
@@ -137,6 +144,7 @@
 
   async function handleConfirmUninstall() {
     showUninstallConfirm = false;
+    if (!isTauriRuntime()) return;
     if (
       !appState.gamePath ||
       appState.gameRunning ||
@@ -171,6 +179,7 @@
   }
 
   async function handlePrimaryAction() {
+    if (!isTauriRuntime()) return;
     if (appState.gameRunning || appState.installing || appState.launching) return;
 
     const primaryOperation = !appState.gamePath

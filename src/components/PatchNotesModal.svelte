@@ -45,18 +45,148 @@
 {/if}
 
 <style>
-  .patch-notes-overlay { position: fixed; inset: 0; z-index: 900; display: grid; place-items: center; padding: 28px; background: rgba(4, 7, 15, .72); }
-  .patch-notes-modal { width: min(720px, 100%); max-height: min(680px, 90vh); display: flex; flex-direction: column; overflow: hidden; color: #f6f0df; background: rgba(14, 18, 32, .98); border: 1px solid rgba(220, 188, 112, .55); border-radius: 14px; box-shadow: 0 18px 60px rgba(0,0,0,.55); }
-  .patch-notes-modal__head { display: flex; justify-content: space-between; gap: 20px; padding: 22px 24px 16px; border-bottom: 1px solid rgba(220, 188, 112, .18); }
-  .patch-notes-modal__eyebrow { margin: 0 0 6px; color: #dcb86b; letter-spacing: .18em; font-size: 11px; }
-  h2 { margin: 0 0 6px; font-size: 22px; }
-  .patch-notes-modal__meta { margin: 0; color: #aeb2bd; font-size: 12px; }
-  .patch-notes-modal__close { width: 32px; height: 32px; flex: 0 0 auto; border: 1px solid rgba(220,188,112,.35); border-radius: 50%; background: transparent; color: #f6f0df; font-size: 22px; cursor: pointer; }
-  .patch-notes-modal__body { overflow: auto; padding: 22px 24px; color: #d6d8df; line-height: 1.55; }
-  .patch-notes-modal__body :global(h1), .patch-notes-modal__body :global(h2), .patch-notes-modal__body :global(h3) { color: #e2c780; }
-  .patch-notes-modal__body :global(a) { color: #e2c780; }
-  .patch-notes-modal__actions { display: flex; justify-content: flex-end; padding: 14px 24px 20px; border-top: 1px solid rgba(220, 188, 112, .18); }
-  .patch-notes-modal__actions button { border: 1px solid rgba(220, 188, 112, .5); border-radius: 7px; padding: 9px 18px; background: rgba(220,188,112,.14); color: #f6f0df; cursor: pointer; }
-  .patch-notes-modal__actions button:hover, .patch-notes-modal__close:hover { background: rgba(220,188,112,.25); }
-  @media (max-width: 600px) { .patch-notes-overlay { padding: 12px; } .patch-notes-modal__head, .patch-notes-modal__body { padding-left: 16px; padding-right: 16px; } }
+  .patch-notes-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 900;
+    display: grid;
+    place-items: center;
+    padding: 28px;
+    background: rgba(3, 18, 21, 0.78);
+    backdrop-filter: blur(7px) saturate(1.08);
+    -webkit-backdrop-filter: blur(7px) saturate(1.08);
+  }
+
+  .patch-notes-modal {
+    position: relative;
+    width: min(720px, 100%);
+    max-height: min(680px, 90vh);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    margin: 0;
+    color: var(--text-1);
+    background: rgba(7, 26, 30, 0.96);
+    border: 1px solid var(--mist-line-strong);
+    border-radius: 0;
+    clip-path: polygon(
+      0 0,
+      calc(100% - 18px) 0,
+      100% 18px,
+      100% calc(100% - 18px),
+      calc(100% - 18px) 100%,
+      0 100%
+    );
+    box-shadow:
+      0 24px 70px rgba(0, 0, 0, 0.72),
+      0 0 34px rgba(121, 203, 208, 0.14),
+      inset 0 1px 0 rgba(236, 255, 249, 0.08);
+  }
+
+  .patch-notes-modal::after {
+    position: absolute;
+    right: 18px;
+    bottom: 8px;
+    width: 34px;
+    height: 1px;
+    content: '';
+    background: var(--mist-lantern);
+    box-shadow: 0 0 8px rgba(231, 211, 148, 0.42);
+    pointer-events: none;
+  }
+
+  .patch-notes-modal__head {
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 22px 24px 16px;
+    border-bottom: 1px solid var(--mist-line);
+  }
+
+  .patch-notes-modal__eyebrow {
+    margin: 0 0 6px;
+    color: var(--mist-lantern);
+    letter-spacing: 0.18em;
+    font-size: 10px;
+    font-weight: 800;
+  }
+
+  h2 {
+    margin: 0 0 6px;
+    color: var(--mist-aqua);
+    font-family: "Cormorant Garamond", "Noto Serif", Georgia, serif;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+  }
+
+  .patch-notes-modal__meta {
+    margin: 0;
+    color: var(--mist-slate);
+    font-size: 11px;
+  }
+
+  .patch-notes-modal__close {
+    width: 32px;
+    height: 32px;
+    flex: 0 0 auto;
+    border: 1px solid var(--mist-line);
+    border-radius: 0;
+    clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+    background: rgba(170, 214, 217, 0.06);
+    color: var(--mist-aqua);
+    font-size: 22px;
+    cursor: var(--cursor-select);
+  }
+
+  .patch-notes-modal__close:hover {
+    background: rgba(170, 214, 217, 0.14);
+    color: var(--mist-jade);
+  }
+
+  .patch-notes-modal__body {
+    overflow: auto;
+    padding: 22px 24px;
+    color: var(--text-2);
+    line-height: 1.55;
+  }
+
+  .patch-notes-modal__body :global(h1),
+  .patch-notes-modal__body :global(h2),
+  .patch-notes-modal__body :global(h3) {
+    color: var(--mist-jade);
+  }
+
+  .patch-notes-modal__body :global(a) {
+    color: var(--mist-aqua);
+  }
+
+  .patch-notes-modal__actions {
+    display: flex;
+    justify-content: flex-end;
+    padding: 14px 24px 20px;
+    border-top: 1px solid var(--mist-line);
+  }
+
+  .patch-notes-modal__actions button {
+    border: 1px solid rgba(231, 211, 148, 0.78);
+    border-radius: 0;
+    clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
+    padding: 9px 18px;
+    background: var(--mist-grad);
+    color: var(--mist-ink);
+    font-weight: 800;
+    cursor: var(--cursor-select);
+  }
+
+  .patch-notes-modal__actions button:hover {
+    filter: brightness(1.06);
+    box-shadow: 0 0 18px rgba(170, 214, 217, 0.3);
+  }
+
+  @media (max-width: 600px) {
+    .patch-notes-overlay { padding: 12px; }
+    .patch-notes-modal__head,
+    .patch-notes-modal__body { padding-left: 16px; padding-right: 16px; }
+  }
 </style>

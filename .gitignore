@@ -3,6 +3,9 @@ dist/
 src-tauri/target/
 node_modules/
 .frontend-validation-*/
+release-artifacts/
+release-gate-evidence/
+release-gate-fixture/
 *.exe
 *.zip
 SHA256sums.txt
