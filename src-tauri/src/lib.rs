@@ -23,6 +23,8 @@ const PROCESS_HANDOFF_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const PROCESS_HANDOFF_GRACE: Duration = Duration::from_secs(3);
 const MAX_UNRANGED_MEDIA_RESPONSE_BYTES: u64 = 1024 * 1024;
 const TRAY_ICON_ID: &str = "launcher-tray";
+#[cfg(windows)]
+const LAUNCHER_UPDATE_READY_ENV: &str = "WUWAID_LAUNCHER_UPDATE_READY";
 
 #[cfg(windows)]
 fn windows_directory() -> PathBuf {
@@ -394,6 +396,14 @@ fn configure_webview_memory_target<R: Runtime>(_app: &AppHandle<R>) {
 
 fn request_close<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     engine::operations::global().request_close()?;
+    set_tray_mode(app, false);
+    app.exit(0);
+    Ok(())
+}
+
+#[cfg(windows)]
+fn request_close_after_launcher_update<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    engine::operations::global().request_close_for_launcher_update()?;
     set_tray_mode(app, false);
     app.exit(0);
     Ok(())
@@ -946,6 +956,14 @@ fn get_pending_launcher_release_notes_path() -> PathBuf {
     get_appdata_dir().join("launcher-whats-new-pending.json")
 }
 
+fn get_launcher_release_note_transaction_path() -> PathBuf {
+    get_appdata_dir().join("launcher-whats-new-transaction.json")
+}
+
+fn get_launcher_release_note_ready_path() -> PathBuf {
+    get_appdata_dir().join("launcher-whats-new-ready.tag")
+}
+
 fn normalized_launcher_version(value: &str) -> &str {
     let value = value.trim();
     value
@@ -1024,6 +1042,8 @@ fn launcher_update_payload(
     })
 }
 
+const MAX_LAUNCHER_RELEASE_NOTE_MARKER_BYTES: u64 = 256;
+
 fn read_launcher_release_note(path: &Path) -> Option<engine::atom_feed::ReleaseNoteEntry> {
     let size = std::fs::metadata(path).ok()?.len();
     if size > MAX_LAUNCHER_RELEASE_NOTE_FILE_BYTES {
@@ -1032,6 +1052,135 @@ fn read_launcher_release_note(path: &Path) -> Option<engine::atom_feed::ReleaseN
     let content = std::fs::read(path).ok()?;
     let payload = serde_json::from_slice::<serde_json::Value>(&content).ok()?;
     validated_launcher_release_note(payload)
+}
+
+fn read_launcher_release_note_ready_marker(path: &Path) -> Option<String> {
+    let size = std::fs::metadata(path).ok()?.len();
+    if size > MAX_LAUNCHER_RELEASE_NOTE_MARKER_BYTES {
+        return None;
+    }
+    let marker = std::fs::read_to_string(path).ok()?;
+    let marker = marker.trim();
+    (!marker.is_empty()).then(|| marker.to_string())
+}
+
+fn remove_file_if_exists(path: &Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("Gagal menghapus file release notes: {error}")),
+    }
+}
+
+fn launcher_release_note_marker_temp_path(path: &Path) -> PathBuf {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("launcher-whats-new-ready.tag");
+    path.with_file_name(format!("{name}.tmp"))
+}
+
+fn clear_launcher_release_note_state(
+    transaction_path: &Path,
+    pending_path: &Path,
+    ready_marker_path: &Path,
+) -> Result<(), String> {
+    // Invalidate the visibility marker first. If a later file deletion is
+    // interrupted, pending data is still not eligible for display.
+    let ready_marker_temp_path = launcher_release_note_marker_temp_path(ready_marker_path);
+    let paths = [
+        ready_marker_path,
+        &ready_marker_temp_path,
+        transaction_path,
+        pending_path,
+    ];
+    let mut first_error = None;
+    for path in paths {
+        if let Err(error) = remove_file_if_exists(path) {
+            first_error.get_or_insert(error);
+        }
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
+fn read_committed_launcher_release_note(
+    transaction_path: &Path,
+    pending_path: &Path,
+    ready_marker_path: &Path,
+    current_version: &str,
+) -> Option<engine::atom_feed::ReleaseNoteEntry> {
+    if transaction_path.exists()
+        || launcher_release_note_marker_temp_path(ready_marker_path).exists()
+    {
+        return None;
+    }
+    let note = read_launcher_release_note(pending_path)?;
+    let marker = read_launcher_release_note_ready_marker(ready_marker_path)?;
+    if launcher_release_note_matches_version(&note, current_version)
+        && launcher_release_note_matches_version(&note, &marker)
+    {
+        Some(note)
+    } else {
+        None
+    }
+}
+
+#[doc(hidden)]
+pub mod launcher_update_state {
+    use super::{
+        clear_launcher_release_note_state, launcher_release_note_marker_temp_path,
+        launcher_release_note_matches_version, read_committed_launcher_release_note,
+        read_launcher_release_note, read_launcher_release_note_ready_marker,
+    };
+    use crate::engine::atom_feed::ReleaseNoteEntry;
+    use std::path::Path;
+
+    pub fn read_committed_release_note(
+        transaction_path: &Path,
+        pending_path: &Path,
+        ready_marker_path: &Path,
+        current_version: &str,
+    ) -> Option<ReleaseNoteEntry> {
+        read_committed_launcher_release_note(
+            transaction_path,
+            pending_path,
+            ready_marker_path,
+            current_version,
+        )
+    }
+
+    pub fn invalidate(
+        transaction_path: &Path,
+        pending_path: &Path,
+        ready_marker_path: &Path,
+    ) -> Result<(), String> {
+        clear_launcher_release_note_state(transaction_path, pending_path, ready_marker_path)
+    }
+
+    pub fn acknowledge(
+        transaction_path: &Path,
+        pending_path: &Path,
+        ready_marker_path: &Path,
+        tag: &str,
+    ) -> Result<(), String> {
+        if transaction_path.exists()
+            || launcher_release_note_marker_temp_path(ready_marker_path).exists()
+        {
+            return Ok(());
+        }
+        let Some(note) = read_launcher_release_note(pending_path) else {
+            return Ok(());
+        };
+        let Some(marker) = read_launcher_release_note_ready_marker(ready_marker_path) else {
+            return Ok(());
+        };
+        if launcher_release_note_matches_version(&note, tag)
+            && launcher_release_note_matches_version(&note, &marker)
+        {
+            clear_launcher_release_note_state(transaction_path, pending_path, ready_marker_path)?;
+        }
+        Ok(())
+    }
 }
 
 fn write_json_atomically<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), String> {
@@ -1077,45 +1226,71 @@ fn write_launcher_release_note(
     write_json_atomically(path, note)
 }
 
+const LAUNCHER_RELEASE_NOTE_COMMIT_WAIT: Duration = Duration::from_secs(10);
+
 #[tauri::command]
 fn get_launcher_release_notes<R: Runtime>(app: AppHandle<R>) {
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
+        let transaction_path = get_launcher_release_note_transaction_path();
         let pending_path = get_pending_launcher_release_notes_path();
+        let ready_marker_path = get_launcher_release_note_ready_path();
         let current_version = app_version_value();
-        let Some(note) = read_launcher_release_note(&pending_path) else {
-            return;
-        };
+        let deadline = Instant::now() + LAUNCHER_RELEASE_NOTE_COMMIT_WAIT;
 
-        if launcher_release_note_matches_version(&note, &current_version) {
-            let _ = app_handle.emit("onLauncherReleaseNotes", note);
-        } else if !engine::updater::is_newer_version(&current_version, &note.tag) {
-            let _ = std::fs::remove_file(pending_path);
+        loop {
+            if let Some(note) = read_committed_launcher_release_note(
+                &transaction_path,
+                &pending_path,
+                &ready_marker_path,
+                &current_version,
+            ) {
+                let _ = app_handle.emit("onLauncherReleaseNotes", note);
+                return;
+            }
+
+            if let (Some(note), Some(marker)) = (
+                read_launcher_release_note(&pending_path),
+                read_launcher_release_note_ready_marker(&ready_marker_path),
+            ) {
+                // A committed note for a future version belongs to the next
+                // launcher process; keep it until that version starts.
+                if launcher_release_note_matches_version(&note, &marker)
+                    && engine::updater::is_newer_version(&current_version, &note.tag)
+                {
+                    return;
+                }
+            }
+
+            if !transaction_path.exists() && !pending_path.exists() && !ready_marker_path.exists() {
+                let _ = clear_launcher_release_note_state(
+                    &transaction_path,
+                    &pending_path,
+                    &ready_marker_path,
+                );
+                return;
+            }
+            if Instant::now() >= deadline {
+                let _ = clear_launcher_release_note_state(
+                    &transaction_path,
+                    &pending_path,
+                    &ready_marker_path,
+                );
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     });
 }
 
-fn acknowledge_launcher_release_note_at(path: &Path, tag: &str) -> Result<(), String> {
-    let Some(note) = read_launcher_release_note(path) else {
-        return Ok(());
-    };
-    if launcher_release_note_matches_version(&note, tag) {
-        match std::fs::remove_file(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(format!(
-                    "Gagal menghapus release notes yang sudah dibaca: {error}"
-                ))
-            }
-        }
-    }
-    Ok(())
-}
-
 #[tauri::command]
 fn acknowledge_launcher_release_notes(tag: String) -> Result<(), String> {
-    acknowledge_launcher_release_note_at(&get_pending_launcher_release_notes_path(), &tag)
+    launcher_update_state::acknowledge(
+        &get_launcher_release_note_transaction_path(),
+        &get_pending_launcher_release_notes_path(),
+        &get_launcher_release_note_ready_path(),
+        &tag,
+    )
 }
 
 async fn get_latest_patch_version() -> Option<String> {
@@ -1498,6 +1673,9 @@ fn perform_launcher_update<R: Runtime>(app: AppHandle<R>, version: String) -> Re
         return Ok(());
     }
 
+    let pending_note_path = get_pending_launcher_release_notes_path();
+    let transaction_path = get_launcher_release_note_transaction_path();
+    let ready_marker_path = get_launcher_release_note_ready_path();
     #[cfg(windows)]
     let pending_note = match read_launcher_release_note(&get_launcher_release_notes_path())
         .filter(|note| launcher_release_note_matches_version(note, &tag))
@@ -1511,8 +1689,6 @@ fn perform_launcher_update<R: Runtime>(app: AppHandle<R>, version: String) -> Re
             return Ok(());
         }
     };
-    #[cfg(windows)]
-    let pending_note_path = get_pending_launcher_release_notes_path();
 
     let operation = engine::operations::global()
         .try_acquire(engine::operations::OperationKind::LauncherUpdate)?;
@@ -1526,6 +1702,12 @@ fn perform_launcher_update<R: Runtime>(app: AppHandle<R>, version: String) -> Re
         let app_progress = app_handle.clone();
 
         let result: Result<(), String> = async {
+            launcher_update_state::invalidate(
+                &transaction_path,
+                &pending_note_path,
+                &ready_marker_path,
+            )
+            .map_err(|error| format!("Gagal membersihkan state update sebelumnya: {error}"))?;
             if !engine::updater::is_newer_version(env!("CARGO_PKG_VERSION"), &version) {
                 return Err("Versi update tidak lebih baru dari launcher saat ini.".to_string());
             }
@@ -1582,17 +1764,27 @@ fn perform_launcher_update<R: Runtime>(app: AppHandle<R>, version: String) -> Re
                     .map_err(|error| format!("Gagal membersihkan staging lama: {error}"))?;
             }
             let exe_path = engine::updater::extract_zip_update(&zip_data, &staging)?;
+            #[cfg(windows)]
             let current_exe = std::env::current_exe().map_err(|error| {
                 format!("Executable launcher saat ini tidak ditemukan: {error}")
             })?;
-            engine::updater::create_update_handoff(&staging, &current_exe, &handoff_path)?;
 
             #[cfg(windows)]
             {
-                // Do not announce or execute the handoff until the new launcher
-                // has a durable, version-gated What's New payload to consume.
-                write_launcher_release_note(&pending_note_path, &pending_note)
-                    .map_err(|error| format!("Gagal menyimpan pending What's New: {error}"))?;
+                // Persist the complete payload before starting the handoff.
+                // The handoff promotes this transaction to pending only after
+                // the new executable is running and has passed its health check.
+                write_launcher_release_note(&transaction_path, &pending_note)
+                    .map_err(|error| format!("Gagal menyimpan transaksi What's New: {error}"))?;
+                engine::updater::create_update_handoff_with_release_state(
+                    &staging,
+                    &current_exe,
+                    &handoff_path,
+                    &transaction_path,
+                    &pending_note_path,
+                    &ready_marker_path,
+                    &tag,
+                )?;
                 let _ = app_handle.emit(
                     "onLauncherUpdateProgress",
                     serde_json::json!({
@@ -1621,8 +1813,8 @@ fn perform_launcher_update<R: Runtime>(app: AppHandle<R>, version: String) -> Re
                     "onLauncherUpdateRestarting",
                     serde_json::json!({"remainingSeconds": 0}),
                 );
+                request_close_after_launcher_update(&app_handle)?;
                 drop(_operation);
-                request_close(&app_handle)?;
                 Ok::<(), String>(())
             }
             #[cfg(not(windows))]
@@ -1635,6 +1827,11 @@ fn perform_launcher_update<R: Runtime>(app: AppHandle<R>, version: String) -> Re
 
         if let Err(error) = result {
             cleanup_update_artifacts(&temp_zip, &staging, &handoff_path);
+            let _ = launcher_update_state::invalidate(
+                &transaction_path,
+                &pending_note_path,
+                &ready_marker_path,
+            );
             let message = if let Some(error) = error.strip_prefix("download: ") {
                 format!("Gagal mengunduh update launcher: {error}")
             } else {
@@ -2482,8 +2679,26 @@ fn restart_as_admin() -> Result<(), String> {
 // Application Entrypoint
 // -----------------------------------------------------------------------------
 
+#[cfg(windows)]
+fn signal_launcher_update_ready() {
+    let Some(path) = std::env::var_os(LAUNCHER_UPDATE_READY_ENV) else {
+        return;
+    };
+    if let Err(error) = std::fs::write(path, format!("{}\n", std::process::id())) {
+        log::error!("Tidak dapat menulis marker launcher update: {error}");
+        // A handoff without a readiness marker cannot safely prove which
+        // process to stop before rollback. Exit so the handoff can restore the
+        // backup instead of copying over a live replacement executable.
+        std::process::exit(1);
+    }
+    std::env::remove_var(LAUNCHER_UPDATE_READY_ENV);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run<R: tauri::Runtime>(context: tauri::Context<R>) {
+    #[cfg(windows)]
+    signal_launcher_update_ready();
+
     tauri::Builder::<R>::new()
         .manage(RuntimeCoordinator::default())
         .manage(engine::active_player::ActivePlayerService::new(
@@ -2733,6 +2948,27 @@ pub mod frontend_fixture {
     #[tauri::command(rename = "get_launcher_release_notes")]
     fn fixture_get_launcher_release_notes() {}
 
+    #[tauri::command(rename = "fixture_emit_launcher_release_notes")]
+    fn fixture_emit_launcher_release_notes<R: Runtime>(
+        app: AppHandle<R>,
+        tag: String,
+    ) -> Result<(), String> {
+        app.emit(
+            "onLauncherReleaseNotes",
+            json!({
+                "tag": tag,
+                "date": "2026-08-28T12:00:00Z",
+                "title": "WuwaID Launcher 2.10.0",
+                "body": "## What's new\\n- Verified update",
+                "author": "WuwaID Team"
+            }),
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    #[tauri::command(rename = "acknowledge_launcher_release_notes")]
+    fn fixture_acknowledge_launcher_release_notes(_tag: String) {}
+
     #[tauri::command(rename = "check_launcher_update")]
     fn fixture_check_launcher_update() {}
 
@@ -2773,6 +3009,8 @@ pub mod frontend_fixture {
                 fixture_notify_ui_interactive,
                 fixture_get_vh_release_notes,
                 fixture_get_launcher_release_notes,
+                fixture_emit_launcher_release_notes,
+                fixture_acknowledge_launcher_release_notes,
                 fixture_check_launcher_update,
             ])
             .build(mock_context(noop_assets()))
@@ -2782,7 +3020,7 @@ pub mod frontend_fixture {
             .unwrap();
 
         let mut listeners = Vec::new();
-        for event_name in ["onPatchStatus", "onMediaStatus"] {
+        for event_name in ["onPatchStatus", "onMediaStatus", "onLauncherReleaseNotes"] {
             let event_name = event_name.to_string();
             let listener_event_name = event_name.clone();
             let event_output = Arc::clone(&output);
@@ -3375,7 +3613,9 @@ mod tests {
     #[test]
     fn acknowledging_pending_release_notes_requires_matching_tag() {
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("launcher-whats-new-pending.json");
+        let transaction = temp.path().join("launcher-whats-new-transaction.json");
+        let pending = temp.path().join("launcher-whats-new-pending.json");
+        let ready = temp.path().join("launcher-whats-new-ready.tag");
         let note = engine::atom_feed::ReleaseNoteEntry {
             tag: "v2.10.0".to_string(),
             date: String::new(),
@@ -3383,12 +3623,78 @@ mod tests {
             body: "Notes".to_string(),
             author: "Team".to_string(),
         };
-        write_launcher_release_note(&path, &note).unwrap();
+        write_launcher_release_note(&pending, &note).unwrap();
+        std::fs::write(&ready, "v2.10.0\n").unwrap();
 
-        acknowledge_launcher_release_note_at(&path, "v2.9.2").unwrap();
-        assert!(path.exists());
-        acknowledge_launcher_release_note_at(&path, "2.10.0").unwrap();
-        assert!(!path.exists());
+        launcher_update_state::acknowledge(&transaction, &pending, &ready, "v2.9.2").unwrap();
+        assert!(pending.exists());
+        assert!(ready.exists());
+        std::fs::write(&transaction, "in progress").unwrap();
+        launcher_update_state::acknowledge(&transaction, &pending, &ready, "2.10.0").unwrap();
+        assert!(transaction.exists());
+        assert!(pending.exists());
+        assert!(ready.exists());
+        std::fs::remove_file(&transaction).unwrap();
+        launcher_update_state::acknowledge(&transaction, &pending, &ready, "2.10.0").unwrap();
+        assert!(!transaction.exists());
+        assert!(!pending.exists());
+        assert!(!ready.exists());
+    }
+
+    #[test]
+    fn committed_launcher_release_notes_require_matching_ready_marker() {
+        let temp = tempfile::tempdir().unwrap();
+        let pending = temp.path().join("launcher-whats-new-pending.json");
+        let ready = temp.path().join("launcher-whats-new-ready.tag");
+        let note = engine::atom_feed::ReleaseNoteEntry {
+            tag: "v2.10.0".to_string(),
+            date: String::new(),
+            title: "WuwaID Launcher 2.10.0".to_string(),
+            body: "Notes".to_string(),
+            author: "Team".to_string(),
+        };
+        write_launcher_release_note(&pending, &note).unwrap();
+
+        let transaction = temp.path().join("launcher-whats-new-transaction.json");
+        assert!(
+            read_committed_launcher_release_note(&transaction, &pending, &ready, "2.10.0")
+                .is_none()
+        );
+        std::fs::write(&ready, "v2.9.2\n").unwrap();
+        assert!(
+            read_committed_launcher_release_note(&transaction, &pending, &ready, "2.10.0")
+                .is_none()
+        );
+        std::fs::write(&ready, "v2.10.0\n").unwrap();
+        assert_eq!(
+            read_committed_launcher_release_note(&transaction, &pending, &ready, "2.10.0"),
+            Some(note)
+        );
+        std::fs::write(&transaction, "in progress").unwrap();
+        assert!(
+            read_committed_launcher_release_note(&transaction, &pending, &ready, "2.10.0")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn invalidated_launcher_release_note_state_cannot_be_displayed() {
+        let temp = tempfile::tempdir().unwrap();
+        let transaction = temp.path().join("launcher-whats-new-transaction.json");
+        let pending = temp.path().join("launcher-whats-new-pending.json");
+        let ready = temp.path().join("launcher-whats-new-ready.tag");
+        std::fs::write(&transaction, "transaction").unwrap();
+        std::fs::write(&pending, "pending").unwrap();
+        std::fs::write(&ready, "v2.10.0\n").unwrap();
+
+        launcher_update_state::invalidate(&transaction, &pending, &ready).unwrap();
+        assert!(
+            read_committed_launcher_release_note(&transaction, &pending, &ready, "2.10.0")
+                .is_none()
+        );
+        assert!(!transaction.exists());
+        assert!(!pending.exists());
+        assert!(!ready.exists());
     }
 
     #[test]

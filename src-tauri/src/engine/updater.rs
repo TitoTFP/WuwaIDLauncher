@@ -209,6 +209,59 @@ pub fn create_update_handoff(
     current_executable: &Path,
     handoff_path: &Path,
 ) -> Result<PathBuf, String> {
+    create_update_handoff_impl(staging_dir, current_executable, handoff_path, None)
+}
+
+/// Creates a handoff which commits the release-notes transaction only after
+/// the replacement executable is running and passes the process health check.
+/// Failed copy, rollback, launch, or health-check paths remove all release-note
+/// state so a failed update cannot surface as What's New later.
+pub fn create_update_handoff_with_release_state(
+    staging_dir: &Path,
+    current_executable: &Path,
+    handoff_path: &Path,
+    transaction_path: &Path,
+    pending_path: &Path,
+    ready_marker_path: &Path,
+    release_tag: &str,
+) -> Result<PathBuf, String> {
+    create_update_handoff_impl(
+        staging_dir,
+        current_executable,
+        handoff_path,
+        Some((
+            transaction_path,
+            pending_path,
+            ready_marker_path,
+            release_tag,
+        )),
+    )
+}
+
+fn release_note_marker_temp_path(path: &Path) -> PathBuf {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("launcher-whats-new-ready.tag");
+    path.with_file_name(format!("{name}.tmp"))
+}
+
+fn normalize_batch_fragment(fragment: &str) -> String {
+    let normalized = fragment.replace("\\\n", "").replace('\r', "");
+    let lines = normalized.lines().map(str::trim_start).collect::<Vec<_>>();
+    if lines.is_empty() {
+        String::new()
+    } else {
+        format!("{}\r\n", lines.join("\r\n"))
+    }
+}
+
+fn create_update_handoff_impl(
+    staging_dir: &Path,
+    current_executable: &Path,
+    handoff_path: &Path,
+    release_state: Option<(&Path, &Path, &Path, &str)>,
+) -> Result<PathBuf, String> {
     let staged_executable = staging_dir.join(
         current_executable
             .file_name()
@@ -243,7 +296,173 @@ pub fn create_update_handoff(
     }) {
         return Err("Path handoff update mengandung karakter yang tidak valid.".to_string());
     }
-    let quote = |path: &Path| format!("\"{}\"", path.to_string_lossy().replace('%', "%%"));
+    if let Some((transaction_path, pending_path, ready_marker_path, release_tag)) = release_state {
+        let ready_marker_temp = release_note_marker_temp_path(ready_marker_path);
+        let release_paths = [
+            transaction_path,
+            pending_path,
+            ready_marker_path,
+            ready_marker_temp.as_path(),
+        ];
+        if release_paths.iter().any(|path| {
+            let value = path.to_string_lossy();
+            value.contains('"') || value.contains('\r') || value.contains('\n')
+        }) || release_tag.is_empty()
+            || !release_tag
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+        {
+            return Err(
+                "State release notes handoff mengandung nilai yang tidak valid.".to_string(),
+            );
+        }
+    }
+    let path_value = |path: &Path| path.to_string_lossy().replace('%', "%%");
+    let quote = |path: &Path| format!("\"{}\"", path_value(path));
+    let release_setup = release_state
+        .map(
+            |(transaction_path, pending_path, ready_marker_path, release_tag)| {
+                let ready_marker_temp = release_note_marker_temp_path(ready_marker_path);
+                format!(
+                    "         set \"release_transaction={}\"\r\n\\
+                 set \"release_pending={}\"\r\n\\
+                 set \"release_ready={}\"\r\n\\
+                 set \"release_ready_temp={}\"\r\n\\
+                 set \"release_tag={}\"\r\n\\
+                 del /Q \"%release_ready_temp%\" >nul 2>nul\r\n\\
+                 if exist \"%release_ready_temp%\" goto fail_12\r\n\\
+                 set \"WUWAID_LAUNCHER_UPDATE_READY=%release_ready_temp%\"\r\n",
+                    path_value(transaction_path),
+                    path_value(pending_path),
+                    path_value(ready_marker_path),
+                    path_value(ready_marker_temp.as_path()),
+                    release_tag,
+                )
+            },
+        )
+        .unwrap_or_default();
+    let release_precondition = release_state
+        .map(|(_transaction_path, _, _, _)| {
+            "         if not exist \"%release_transaction%\" goto fail_11\r\n".to_string()
+        })
+        .unwrap_or_default();
+    let release_health_check = release_state
+        .map(|_| {
+            "         if not exist \"%release_ready_temp%\" goto release_health_failure\r\n\\
+                 set \"release_pid=\"\r\n\\
+                 set \"release_pid_valid=\"\r\n\\
+                 set /p \"release_pid=\"<\"%release_ready_temp%\"\r\n\\
+                 if not defined release_pid goto release_health_failure\r\n\\
+                 for /f \"delims=0123456789\" %%A in (\"%release_pid%\") do goto release_health_failure\r\n\\
+                 set \"release_pid_valid=1\"\r\n\\
+                 %SystemRoot%\\System32\\tasklist.exe /FI \"PID eq %release_pid%\" /FI \"IMAGENAME eq WuwaIDLauncher.exe\" | %SystemRoot%\\System32\\findstr.exe /I /C:\"WuwaIDLauncher.exe\" >nul\r\n\\
+                 if errorlevel 1 goto release_health_failure\r\n"
+                .to_string()
+        })
+        .unwrap_or_default();
+    let release_rollback = |failure: &str| {
+        format!(
+            "                 if defined release_pid_valid call :stop_released_launcher\r\n\\
+                 copy /Y {backup} {current} >nul\r\n\\
+                 if errorlevel 1 goto fail_8\r\n\\
+                 goto {failure}\r\n",
+            current = quote(current_executable),
+            backup = quote(&backup_executable),
+            failure = failure,
+        )
+    };
+    let release_commit = release_state
+        .map(|(_, _, _, _)| {
+            let pending_rollback = release_rollback("fail_11");
+            let marker_rollback = release_rollback("fail_12");
+            let ready_rollback = release_rollback("fail_13");
+            format!(
+                "         move /Y \"%release_transaction%\" \"%release_pending%\" >nul\r\n\\
+                 if errorlevel 1 (\r\n\\
+                 {pending_rollback}                 )\r\n\\
+                 del /Q \"%release_ready_temp%\" >nul 2>nul\r\n\\
+                 >\"%release_ready_temp%\" echo %release_tag%\r\n\\
+                 if not exist \"%release_ready_temp%\" (\r\n\\
+                 {marker_rollback}                 )\r\n\\
+                 move /Y \"%release_ready_temp%\" \"%release_ready%\" >nul\r\n\\
+                 if errorlevel 1 (\r\n\\
+                 {ready_rollback}                 )\r\n",
+                pending_rollback = pending_rollback,
+                marker_rollback = marker_rollback,
+                ready_rollback = ready_rollback,
+            )
+        })
+        .unwrap_or_default();
+    let failure_state_cleanup = if release_state.is_some() {
+        "         call :cleanup_release_state\r\n"
+    } else {
+        ""
+    };
+    let release_process_cleanup = release_state
+        .map(|_| {
+            "         :stop_released_launcher\r\n\\
+                 %SystemRoot%\\System32\\taskkill.exe /PID %release_pid% /T /F >nul 2>nul\r\n\\
+                 for /L %%W in (1,1,10) do (\r\n\\
+                     %SystemRoot%\\System32\\tasklist.exe /FI \"PID eq %release_pid%\" /FO CSV /NH | %SystemRoot%\\System32\\findstr.exe /I /C:\"%release_pid%\" >nul\r\n\\
+                     if errorlevel 1 exit /b 0\r\n\\
+                     %SystemRoot%\\System32\\timeout.exe /t 1 /nobreak >nul\r\n\\
+                 )\r\n\\
+                 exit /b 0\r\n"
+            .to_string()
+        })
+        .unwrap_or_default();
+    let release_health_failure = release_state
+        .map(|_| {
+            format!(
+                ":release_health_failure\r\n{rollback}",
+                rollback = release_rollback("fail_7"),
+            )
+        })
+        .unwrap_or_default();
+    let failure_labels = format!(
+        "{release_process_cleanup}{release_health_failure}:fail_1\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 1\r\n\\
+         :fail_2\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 2\r\n\\
+         :fail_3\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 3\r\n\\
+         :fail_4\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 4\r\n\\
+         :fail_5\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 5\r\n\\
+         :fail_6\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 6\r\n\\
+         :fail_7\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 7\r\n\\
+         :fail_8\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 8\r\n\\
+         :fail_9\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 9\r\n\\
+         :fail_10\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 10\r\n\\
+         :fail_11\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 11\r\n\\
+         :fail_12\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 12\r\n\\
+         :fail_13\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 13\r\n",
+    );
+    let release_cleanup = release_state
+        .map(|(transaction_path, pending_path, ready_marker_path, _)| {
+            let ready_marker_temp = release_note_marker_temp_path(ready_marker_path);
+            format!(
+                ":cleanup_release_state\r\n\\
+                 rem Remove the visibility marker before payload files.\r\n\\
+                 del /Q {} >nul 2>nul\r\n\\
+                 del /Q {} >nul 2>nul\r\n\\
+                 del /Q {} >nul 2>nul\r\n\\
+                 del /Q {} >nul 2>nul\r\n\\
+                 exit /b 0\r\n",
+                quote(ready_marker_path),
+                quote(ready_marker_temp.as_path()),
+                quote(transaction_path),
+                quote(pending_path),
+            )
+        })
+        .unwrap_or_default();
+    let update_cleanup = format!(
+        ":cleanup_update_files\r\n\\
+         del /Q {replacement} >nul 2>nul\r\n\\
+         del /Q {backup} >nul 2>nul\r\n\\
+         rmdir /S /Q {staging} >nul 2>nul\r\n\\
+         del \"%~f0\" >nul 2>nul\r\n\\
+         exit /b 0\r\n",
+        replacement = quote(&replacement_executable),
+        backup = quote(&backup_executable),
+        staging = quote(staging_dir),
+    );
     let script = format!(
         "@echo off\r\n\
          setlocal\r\n\
@@ -294,6 +513,63 @@ pub fn create_update_handoff(
         replacement = quote(&replacement_executable),
         staging = quote(staging_dir),
     );
+    let script = if release_state.is_some() {
+        let release_setup = normalize_batch_fragment(&release_setup);
+        let release_precondition = normalize_batch_fragment(&release_precondition);
+        let release_health_check = normalize_batch_fragment(&release_health_check);
+        let release_commit = normalize_batch_fragment(&release_commit);
+        let failure_labels = normalize_batch_fragment(&failure_labels);
+        let release_cleanup = normalize_batch_fragment(&release_cleanup);
+        let update_cleanup = normalize_batch_fragment(&update_cleanup);
+        let mut script = script;
+        script = script.replace("setlocal\r\n", &format!("setlocal\r\n{release_setup}"));
+        for code in 1..=8 {
+            script = script.replace(
+                &format!("exit /b {code}\r\n"),
+                &format!("goto fail_{code}\r\n"),
+            );
+        }
+        let replacement = quote(&replacement_executable);
+        let replacement_anchor =
+            format!("if exist {replacement} del /Q {replacement} >nul 2>nul\r\n");
+        script = script.replace(
+            &replacement_anchor,
+            &format!("{release_precondition}{replacement_anchor}"),
+        );
+        let backup = quote(&backup_executable);
+        let health_anchor =
+            "%SystemRoot%\\System32\\tasklist.exe /FI \"IMAGENAME eq WuwaIDLauncher.exe\" | %SystemRoot%\\System32\\findstr.exe /I /C:\"WuwaIDLauncher.exe\" >nul\r\n";
+        if !script.contains(health_anchor) {
+            return Err(
+                "Template handoff update tidak memiliki pemeriksaan kesehatan yang diharapkan."
+                    .to_string(),
+            );
+        }
+        script = script.replace(health_anchor, &release_health_check);
+        let staging = quote(staging_dir);
+        let success_anchor = format!(
+            "del /Q {backup} >nul 2>nul\r\nrmdir /S /Q {staging} >nul 2>nul\r\ndel \"%~f0\"\r\n",
+            backup = backup,
+            staging = staging,
+        );
+        if !script.contains(&success_anchor) {
+            return Err(
+                "Template handoff update tidak memiliki akhir sukses yang diharapkan.".to_string(),
+            );
+        }
+        let success = format!(
+            "{release_commit}del /Q {backup} >nul 2>nul\r\nrmdir /S /Q {staging} >nul 2>nul\r\ndel \"%~f0\" >nul 2>nul\r\nexit /b 0\r\n{failure_labels}{release_cleanup}{update_cleanup}",
+            release_commit = release_commit,
+            backup = backup,
+            staging = staging,
+            failure_labels = failure_labels,
+            release_cleanup = release_cleanup,
+            update_cleanup = update_cleanup,
+        );
+        script.replace(&success_anchor, &success)
+    } else {
+        script
+    };
     if let Some(parent) = handoff_path.parent() {
         fs::create_dir_all(parent)
             .map_err(|error| format!("Gagal membuat folder handoff update: {error}"))?;
@@ -720,5 +996,49 @@ mod tests {
 
         assert!(replace_file_recoverable(&source, &target).is_err());
         assert_eq!(std::fs::read(&target).unwrap(), b"current");
+    }
+
+    #[test]
+    fn release_note_handoff_script_commits_only_after_health_check() {
+        let temp = tempfile::tempdir().unwrap();
+        let staging = temp.path().join("staging");
+        let current = temp.path().join(RELEASE_EXECUTABLE_NAME);
+        let handoff = temp.path().join("handoff.cmd");
+        let transaction = temp.path().join("launcher-whats-new-transaction.json");
+        let pending = temp.path().join("launcher-whats-new-pending.json");
+        let ready = temp.path().join("launcher-whats-new-ready.tag");
+        std::fs::create_dir_all(&staging).unwrap();
+
+        create_update_handoff_with_release_state(
+            &staging,
+            &current,
+            &handoff,
+            &transaction,
+            &pending,
+            &ready,
+            "v2.10.0",
+        )
+        .unwrap();
+        let script = std::fs::read_to_string(handoff).unwrap();
+
+        assert!(script.contains("if not exist \"%release_transaction%\" goto fail_11"));
+        assert!(script.contains("move /Y \"%release_transaction%\" \"%release_pending%\""));
+        assert!(script.contains("set \"release_tag=v2.10.0\""));
+        assert!(script.contains("set \"WUWAID_LAUNCHER_UPDATE_READY=%release_ready_temp%\""));
+        assert!(script.contains("if exist \"%release_ready_temp%\" goto fail_12"));
+        assert!(script.contains("PID eq %release_pid%"));
+        assert!(script.contains(":stop_released_launcher"));
+        assert!(script.contains("taskkill.exe /PID %release_pid% /T /F"));
+        let health_failure = &script[script.find(":release_health_failure").unwrap()..];
+        assert!(
+            health_failure.find("call :stop_released_launcher").unwrap()
+                < health_failure.find("copy /Y").unwrap()
+        );
+        assert!(!script.contains("tasklist.exe /FI \"IMAGENAME eq WuwaIDLauncher.exe\" |"));
+        assert!(script.contains("goto fail_7"));
+        assert!(script.contains("if not exist \"%release_ready_temp%\""));
+        assert!(script.contains(":cleanup_release_state"));
+        assert!(!script.lines().any(|line| line.trim_end().ends_with('\\')));
+        assert!(script.contains(&format!("del /Q \"{}\"", pending.to_string_lossy())));
     }
 }

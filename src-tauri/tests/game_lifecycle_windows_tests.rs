@@ -7,7 +7,8 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use tempfile::{tempdir, TempDir};
-use wuwaid_launcher_lib::engine::runtime;
+use wuwaid_launcher_lib::engine::{atom_feed::ReleaseNoteEntry, runtime, updater};
+use wuwaid_launcher_lib::launcher_update_state;
 
 struct ProcessCleanup {
     root_pid: u32,
@@ -30,6 +31,12 @@ struct ChildCleanup(Child);
 
 impl Drop for ChildCleanup {
     fn drop(&mut self) {
+        let pid = self.0.id().to_string();
+        let _ = Command::new(windows_system_executable("taskkill.exe"))
+            .args(["/PID", &pid, "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
@@ -322,4 +329,388 @@ fn launcher_child_handoff_stays_owned_and_force_quit_cleans_the_tree() {
     )
     .unwrap());
     wait_for_owned_tree_exit(root_pid, root_identity, &expected);
+}
+
+fn launcher_fixture_pid_path(root: &Path) -> PathBuf {
+    root.join("launcher-fixture.pid")
+}
+
+struct LauncherFixtureCleanup {
+    pid_file: PathBuf,
+}
+
+impl LauncherFixtureCleanup {
+    fn new(root: &Path) -> Self {
+        Self {
+            pid_file: launcher_fixture_pid_path(root),
+        }
+    }
+}
+
+impl Drop for LauncherFixtureCleanup {
+    fn drop(&mut self) {
+        let Ok(pid) = fs::read_to_string(&self.pid_file)
+            .ok()
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .ok_or(())
+        else {
+            return;
+        };
+        let _ = Command::new(windows_system_executable("taskkill.exe"))
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+fn launcher_release_note(tag: &str) -> ReleaseNoteEntry {
+    ReleaseNoteEntry {
+        tag: tag.to_string(),
+        date: "2026-08-28T12:00:00Z".to_string(),
+        title: format!("WuwaID Launcher {tag}"),
+        body: "## What's new\n- Verified update".to_string(),
+        author: "WuwaID Team".to_string(),
+    }
+}
+
+fn release_state_paths(root: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+    (
+        root.join("launcher-whats-new-transaction.json"),
+        root.join("launcher-whats-new-pending.json"),
+        root.join("launcher-whats-new-ready.tag"),
+        root.join("launcher-whats-new-ready.tag.tmp"),
+    )
+}
+
+fn write_release_note(path: &Path, note: &ReleaseNoteEntry) {
+    fs::write(path, serde_json::to_vec(note).unwrap()).unwrap();
+}
+
+fn write_committed_release_note(root: &Path, tag: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let (transaction, pending, ready, _) = release_state_paths(root);
+    let note = launcher_release_note(tag);
+    write_release_note(&pending, &note);
+    fs::write(&ready, format!("{tag}\n")).unwrap();
+    (transaction, pending, ready)
+}
+
+fn run_handoff_script(path: &Path) -> std::process::ExitStatus {
+    let mut script = fs::read_to_string(path).unwrap();
+    if std::env::var_os("WINE_HOST_HOME").is_some() {
+        // Wine's bundled fc does not implement /B; native Windows runs the exact script.
+        script = script.replace(
+            "%SystemRoot%\\System32\\fc.exe /B",
+            "%SystemRoot%\\System32\\fc.exe",
+        );
+    }
+    fs::write(path, script).unwrap();
+    let pid_file = launcher_fixture_pid_path(path.parent().unwrap());
+    let mut command = Command::new(windows_system_executable("cmd.exe"));
+    let mut child = command
+        .env("WUWAID_LAUNCHER_UPDATE_PID_FILE", &pid_file)
+        .args(["/D", "/C", path.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        assert!(Instant::now() < deadline, "update handoff script timed out");
+        sleep(Duration::from_millis(100));
+    }
+}
+
+fn wait_for_launcher_pid_exit(pid_file: &Path) {
+    let pid = fs::read_to_string(pid_file)
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+    let filter = format!("PID eq {pid}");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let output = Command::new(windows_system_executable("tasklist.exe"))
+            .args(["/FI", &filter, "/FO", "CSV", "/NH"])
+            .output()
+            .unwrap();
+        let running = String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\""));
+        if !running {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "failed launcher process did not exit"
+        );
+        sleep(Duration::from_millis(100));
+    }
+}
+
+#[test]
+fn windows_handoff_commits_whats_new_after_successful_restart() {
+    let temp = tempdir().unwrap();
+    let _launcher_cleanup = LauncherFixtureCleanup::new(temp.path());
+    let current = temp.path().join("WuwaIDLauncher.exe");
+    let staging = temp.path().join("staging");
+    let handoff = temp.path().join("update-handoff.cmd");
+    fs::create_dir_all(&staging).unwrap();
+    fs::copy(fixture_binary(), &current).unwrap();
+    fs::copy(fixture_binary(), staging.join("WuwaIDLauncher.exe")).unwrap();
+    let (transaction, pending, ready, ready_temp) = release_state_paths(temp.path());
+    write_release_note(&transaction, &launcher_release_note("v2.10.0"));
+
+    updater::create_update_handoff_with_release_state(
+        &staging,
+        &current,
+        &handoff,
+        &transaction,
+        &pending,
+        &ready,
+        "v2.10.0",
+    )
+    .unwrap();
+    let status = run_handoff_script(&handoff);
+
+    assert!(status.success(), "handoff failed with {status}");
+    assert!(!handoff.exists());
+    assert!(!staging.exists());
+    assert!(!transaction.exists());
+    assert!(!ready_temp.exists());
+    assert!(pending.exists());
+    assert_eq!(fs::read_to_string(&ready).unwrap().trim(), "v2.10.0");
+    let committed = launcher_update_state::read_committed_release_note(
+        &transaction,
+        &pending,
+        &ready,
+        "2.10.0",
+    )
+    .unwrap();
+    assert_eq!(committed.tag, "v2.10.0");
+}
+
+#[test]
+fn windows_offline_startup_reads_matching_committed_whats_new() {
+    let temp = tempdir().unwrap();
+    let (transaction, pending, ready) = write_committed_release_note(temp.path(), "v2.10.0");
+
+    let note = launcher_update_state::read_committed_release_note(
+        &transaction,
+        &pending,
+        &ready,
+        "2.10.0",
+    )
+    .expect("matching committed note should be available offline");
+    assert_eq!(note.title, "WuwaID Launcher v2.10.0");
+    assert_eq!(note.body, "## What's new\n- Verified update");
+}
+
+#[test]
+fn windows_acknowledgement_is_once_per_tag() {
+    let temp = tempdir().unwrap();
+    let (transaction, pending, ready) = write_committed_release_note(temp.path(), "v2.10.0");
+
+    launcher_update_state::acknowledge(&transaction, &pending, &ready, "v2.9.2").unwrap();
+    assert!(pending.exists());
+    launcher_update_state::acknowledge(&transaction, &pending, &ready, "2.10.0").unwrap();
+    assert!(!transaction.exists());
+    assert!(!pending.exists());
+    assert!(!ready.exists());
+    launcher_update_state::acknowledge(&transaction, &pending, &ready, "2.10.0").unwrap();
+}
+
+#[test]
+fn windows_missing_transaction_rejects_handoff_without_display() {
+    let temp = tempdir().unwrap();
+    let current = temp.path().join("WuwaIDLauncher.exe");
+    let staging = temp.path().join("staging");
+    let handoff = temp.path().join("update-handoff.cmd");
+    fs::create_dir_all(&staging).unwrap();
+    fs::copy(fixture_binary(), &current).unwrap();
+    fs::copy(fixture_binary(), staging.join("WuwaIDLauncher.exe")).unwrap();
+    let current_bytes = fs::read(&current).unwrap();
+    let (transaction, pending, ready, ready_temp) = release_state_paths(temp.path());
+    write_committed_release_note(temp.path(), "v2.10.0");
+
+    updater::create_update_handoff_with_release_state(
+        &staging,
+        &current,
+        &handoff,
+        &transaction,
+        &pending,
+        &ready,
+        "v2.10.0",
+    )
+    .unwrap();
+    let _status = run_handoff_script(&handoff);
+
+    assert!(!handoff.exists());
+    assert!(!staging.exists());
+    assert_eq!(fs::read(&current).unwrap(), current_bytes);
+    assert!(!transaction.exists());
+    assert!(!pending.exists());
+    assert!(!ready.exists());
+    assert!(!ready_temp.exists());
+    assert!(launcher_update_state::read_committed_release_note(
+        &transaction,
+        &pending,
+        &ready,
+        "2.10.0",
+    )
+    .is_none());
+}
+
+#[test]
+fn windows_cancelled_update_invalidates_uncommitted_whats_new() {
+    let temp = tempdir().unwrap();
+    let (transaction, pending, ready, ready_temp) = release_state_paths(temp.path());
+    fs::write(&transaction, "transaction").unwrap();
+    fs::write(&pending, "pending").unwrap();
+    fs::write(&ready, "v2.10.0\n").unwrap();
+    fs::write(&ready_temp, "v2.10.0\n").unwrap();
+
+    launcher_update_state::invalidate(&transaction, &pending, &ready).unwrap();
+    assert!(!transaction.exists());
+    assert!(!pending.exists());
+    assert!(!ready.exists());
+    assert!(!ready_temp.exists());
+}
+
+#[test]
+fn windows_failed_update_does_not_display_whats_new() {
+    let temp = tempdir().unwrap();
+    let _launcher_cleanup = LauncherFixtureCleanup::new(temp.path());
+    let current = temp.path().join("WuwaIDLauncher.exe");
+    let staging = temp.path().join("staging");
+    let handoff = temp.path().join("update-handoff.cmd");
+    fs::create_dir_all(&staging).unwrap();
+    fs::copy(fixture_binary(), &current).unwrap();
+    let current_bytes = fs::read(&current).unwrap();
+    let (transaction, pending, ready, _) = release_state_paths(temp.path());
+    write_release_note(&transaction, &launcher_release_note("v2.10.0"));
+    write_committed_release_note(temp.path(), "v2.10.0");
+
+    updater::create_update_handoff_with_release_state(
+        &staging,
+        &current,
+        &handoff,
+        &transaction,
+        &pending,
+        &ready,
+        "v2.10.0",
+    )
+    .unwrap();
+    let _status = run_handoff_script(&handoff);
+
+    assert!(!handoff.exists());
+    assert_eq!(fs::read(&current).unwrap(), current_bytes);
+    assert!(launcher_update_state::read_committed_release_note(
+        &transaction,
+        &pending,
+        &ready,
+        "2.10.0",
+    )
+    .is_none());
+    assert!(!transaction.exists());
+    assert!(!pending.exists());
+    assert!(!ready.exists());
+}
+
+#[test]
+fn windows_health_check_failure_rolls_back_and_discards_whats_new() {
+    let temp = tempdir().unwrap();
+    let _launcher_cleanup = LauncherFixtureCleanup::new(temp.path());
+    let current = temp.path().join("WuwaIDLauncher.exe");
+    let staging = temp.path().join("staging");
+    let handoff = temp.path().join("update-handoff.cmd");
+    fs::create_dir_all(&staging).unwrap();
+    fs::copy(fixture_binary(), &current).unwrap();
+    let current_bytes = fs::read(&current).unwrap();
+    let unrelated_dir = temp.path().join("unrelated");
+    fs::create_dir_all(&unrelated_dir).unwrap();
+    let unrelated_launcher = unrelated_dir.join("WuwaIDLauncher.exe");
+    fs::copy(fixture_binary(), &unrelated_launcher).unwrap();
+    let _unrelated = ChildCleanup(
+        Command::new(&unrelated_launcher)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    fs::copy(
+        windows_system_executable("wscript.exe"),
+        staging.join("WuwaIDLauncher.exe"),
+    )
+    .unwrap();
+    let (transaction, pending, ready, ready_temp) = release_state_paths(temp.path());
+    write_release_note(&transaction, &launcher_release_note("v2.10.0"));
+
+    updater::create_update_handoff_with_release_state(
+        &staging,
+        &current,
+        &handoff,
+        &transaction,
+        &pending,
+        &ready,
+        "v2.10.0",
+    )
+    .unwrap();
+    let _status = run_handoff_script(&handoff);
+
+    assert!(!handoff.exists());
+    assert!(!staging.exists());
+    assert_eq!(fs::read(&current).unwrap(), current_bytes);
+    assert!(!transaction.exists());
+    assert!(!pending.exists());
+    assert!(!ready.exists());
+    assert!(!ready_temp.exists());
+    assert!(launcher_update_state::read_committed_release_note(
+        &transaction,
+        &pending,
+        &ready,
+        "2.10.0",
+    )
+    .is_none());
+}
+
+#[test]
+fn windows_health_failure_stops_launched_process_before_rollback() {
+    let temp = tempdir().unwrap();
+    let _launcher_cleanup = LauncherFixtureCleanup::new(temp.path());
+    let current = temp.path().join("FakeLauncher.exe");
+    let staging = temp.path().join("staging");
+    let handoff = temp.path().join("update-handoff.cmd");
+    fs::create_dir_all(&staging).unwrap();
+    fs::copy(fixture_binary(), &current).unwrap();
+    fs::copy(fixture_binary(), staging.join("FakeLauncher.exe")).unwrap();
+    let current_bytes = fs::read(&current).unwrap();
+    let (transaction, pending, ready, ready_temp) = release_state_paths(temp.path());
+    fs::create_dir(&pending).unwrap();
+    write_release_note(&transaction, &launcher_release_note("v2.10.0"));
+
+    updater::create_update_handoff_with_release_state(
+        &staging,
+        &current,
+        &handoff,
+        &transaction,
+        &pending,
+        &ready,
+        "v2.10.0",
+    )
+    .unwrap();
+    let _status = run_handoff_script(&handoff);
+
+    wait_for_launcher_pid_exit(&launcher_fixture_pid_path(temp.path()));
+    assert!(!handoff.exists());
+    assert!(!staging.exists());
+    assert_eq!(fs::read(&current).unwrap(), current_bytes);
+    assert!(!transaction.exists());
+    assert!(pending.is_dir());
+    assert!(!ready.exists());
+    assert!(!ready_temp.exists());
+    fs::remove_dir_all(&pending).unwrap();
 }

@@ -26,9 +26,18 @@ test("real Tauri bridge routes backend status events during a legacy-path method
   );
   const previousStateShim = globalThis.__testState;
   const previousWindow = globalThis.window;
+  const previousTauriInternals = globalThis.__TAURI_INTERNALS__;
+  const previousLocalStorage = globalThis.localStorage;
   const previousFixtureRoot = process.env.WUWAID_FIXTURE_ROOT;
+  const releaseNotesStorage = new Map();
   globalThis.__testState = (value) => value;
   globalThis.window = globalThis;
+  globalThis.__TAURI_INTERNALS__ = {};
+  globalThis.localStorage = {
+    getItem: (key) => releaseNotesStorage.get(key) ?? null,
+    setItem: (key, value) => releaseNotesStorage.set(key, String(value)),
+    removeItem: (key) => releaseNotesStorage.delete(key),
+  };
   process.env.WUWAID_FIXTURE_ROOT = repoRoot;
 
   try {
@@ -86,6 +95,11 @@ test("real Tauri bridge routes backend status events during a legacy-path method
     else globalThis.__testState = previousStateShim;
     if (previousWindow === undefined) delete globalThis.window;
     else globalThis.window = previousWindow;
+    if (previousTauriInternals === undefined)
+      delete globalThis.__TAURI_INTERNALS__;
+    else globalThis.__TAURI_INTERNALS__ = previousTauriInternals;
+    if (previousLocalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = previousLocalStorage;
     if (previousFixtureRoot === undefined)
       delete process.env.WUWAID_FIXTURE_ROOT;
     else process.env.WUWAID_FIXTURE_ROOT = previousFixtureRoot;

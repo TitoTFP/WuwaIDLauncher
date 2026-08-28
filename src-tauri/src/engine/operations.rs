@@ -140,6 +140,35 @@ impl OperationCoordinator {
         Ok(())
     }
 
+    /// Allows the launcher-update guard itself to remain held while the close
+    /// transition is committed, eliminating the race between dropping that
+    /// guard and requesting application shutdown.
+    pub fn request_close_for_launcher_update(&self) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.closing {
+            return Err("busy: launcher close is already in progress".to_string());
+        }
+        if !state.active.contains(&OperationKind::LauncherUpdate) {
+            return Err("busy: launcher update is not in progress".to_string());
+        }
+        if let Some(active) = state
+            .active
+            .iter()
+            .copied()
+            .find(|active| *active != OperationKind::LauncherUpdate)
+        {
+            return Err(format!(
+                "busy: cannot close while {} is in progress",
+                active.label()
+            ));
+        }
+        state.closing = true;
+        Ok(())
+    }
+
     pub fn request_close_for_tray(&self) -> Result<(), String> {
         let mut state = self
             .state
@@ -242,6 +271,21 @@ mod tests {
         assert!(error.contains("game launch"));
         drop(launch);
         assert!(coordinator.request_close().is_ok());
+    }
+
+    #[test]
+    fn launcher_update_can_commit_close_without_dropping_its_guard() {
+        let coordinator = OperationCoordinator::default();
+        let update = coordinator
+            .try_acquire(OperationKind::LauncherUpdate)
+            .unwrap();
+
+        coordinator.request_close_for_launcher_update().unwrap();
+        assert!(coordinator
+            .try_acquire(OperationKind::MediaSync)
+            .unwrap_err()
+            .contains("closing"));
+        drop(update);
     }
 
     #[test]

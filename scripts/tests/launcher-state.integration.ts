@@ -1,7 +1,9 @@
 import { appState } from "../../src/lib/launcherState.svelte";
+import { isTauriRuntime } from "../../src/lib/runtime";
 import {
   calls,
   fixtureReady,
+  invoke,
   shutdownFixture,
 } from "./launcherStateTauriFixture.js";
 
@@ -30,6 +32,36 @@ export async function runLauncherStateScenario() {
     const initStarted = performance.now();
     await appState.init();
     const initDuration = performance.now() - initStarted;
+    assert(isTauriRuntime(), "frontend fixture did not expose Tauri runtime");
+
+    await invoke("fixture_emit_launcher_release_notes", { tag: "v2.10.0" });
+    assert(
+      appState.firstLaunchLauncherReleaseNotes?.tag === "v2.10.0",
+      "release-note event was not routed to LauncherState",
+    );
+    appState.dismissFirstLaunchLauncherReleaseNotes();
+    assert(
+      appState.firstLaunchLauncherReleaseNotes === null,
+      "release-note dismissal did not close the modal state",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const acknowledgementCalls = callsFor("acknowledge_launcher_release_notes");
+    assert(
+      acknowledgementCalls.length === 1 &&
+        acknowledgementCalls[0].args.tag === "v2.10.0",
+      `release-note dismissal did not acknowledge the matching tag: ${JSON.stringify(acknowledgementCalls)}`,
+    );
+    await invoke("fixture_emit_launcher_release_notes", { tag: "v2.10.0" });
+    assert(
+      appState.firstLaunchLauncherReleaseNotes === null,
+      "an acknowledged release-note tag was shown again",
+    );
+    await invoke("fixture_emit_launcher_release_notes", { tag: "v2.11.0" });
+    assert(
+      appState.firstLaunchLauncherReleaseNotes?.tag === "v2.11.0",
+      "a new release-note tag was not shown",
+    );
+    appState.dismissFirstLaunchLauncherReleaseNotes();
 
     assert(
       initDuration < 5_000,
