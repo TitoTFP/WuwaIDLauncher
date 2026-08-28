@@ -229,10 +229,8 @@ export function launcherReleaseNotesSeenStorageKey(tag: string): string {
   return `wuwaid-launcher.launcher-release-notes-seen.${encodeURIComponent(tag.trim())}`;
 }
 
-export interface LauncherUpdatePayload {
+export interface LauncherUpdatePayload extends ReleaseNotePayload {
   version: string;
-  tag: string;
-  body: string;
 }
 
 export interface ILauncherState {

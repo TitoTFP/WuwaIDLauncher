@@ -2,13 +2,17 @@
   import { marked } from 'marked';
   import { appState } from '../lib/launcherState.svelte';
   import { sanitizeReleaseNotesHtml } from '../lib/sanitize';
+  import type { ReleaseNotePayload } from '../lib/types';
+
+  type UpdateReleaseNote = Pick<ReleaseNotePayload, 'tag' | 'body'> &
+    Partial<Pick<ReleaseNotePayload, 'date' | 'title' | 'author'>>;
 
   interface Props {
     open?: boolean;
     version?: string;
     currentVersion?: string;
     releaseNotesBody?: string;
-    prototypeMode?: boolean;
+    releaseNote?: UpdateReleaseNote | null;
     progress?: number;
     status?: string;
     error?: string;
@@ -21,7 +25,7 @@
     version = '',
     currentVersion = '',
     releaseNotesBody = '',
-    prototypeMode = false,
+    releaseNote,
     progress = 0,
     status = '',
     error = '',
@@ -30,7 +34,6 @@
   }: Props = $props();
 
   let isUpdating = $state(false);
-  let prototypeComplete = $state(false);
   let updateProgress = $state(0);
   let updateStatus = $state('');
 
@@ -47,31 +50,13 @@
     updateProgress = progress;
     updateStatus = error || status;
     if (error) isUpdating = false;
-    if (!open) {
-      isUpdating = false;
-      prototypeComplete = false;
-    }
+    if (!open) isUpdating = false;
   });
 
   async function startUpdate() {
     if (isUpdating || !version) return;
     isUpdating = true;
     updateStatus = 'Mengunduh pembaruan...';
-    if (prototypeMode) {
-      for (const [nextProgress, nextStatus] of [
-        [24, 'Mengunduh paket update...'],
-        [58, 'Memverifikasi checksum...'],
-        [86, 'Menyiapkan restart launcher...'],
-        [100, 'Update siap diterapkan.'],
-      ] as const) {
-        await new Promise<void>((resolve) => window.setTimeout(resolve, 280));
-        updateProgress = nextProgress;
-        updateStatus = nextStatus;
-      }
-      isUpdating = false;
-      prototypeComplete = true;
-      return;
-    }
     try {
       await appState.performLauncherUpdate(version);
     } catch (err) {
@@ -102,18 +87,25 @@
       </p>
       <p class="lu-modal__desc">Lihat perubahan versi ini sebelum memperbarui launcher.</p>
 
-      {#if parsedReleaseNotes}
-        <section class="lu-notes" aria-labelledby="luNotesTitle">
-          <div class="lu-notes__heading">
-            <span id="luNotesTitle">YANG BARU DI {version}</span>
-            <span>RELEASE NOTES</span>
-          </div>
-          <div class="lu-notes__body">
+      <section class="lu-notes" aria-labelledby="luNotesTitle">
+        <div class="lu-notes__heading">
+          <span id="luNotesTitle">YANG BARU DI {version}</span>
+          <span>RELEASE NOTES</span>
+        </div>
+        {#if releaseNote}
+          <p class="lu-notes__meta">
+            {releaseNote.tag}{releaseNote.date ? ` · ${releaseNote.date}` : ''}{releaseNote.author ? ` · ${releaseNote.author}` : ''}
+          </p>
+        {/if}
+        <div class="lu-notes__body">
+          {#if parsedReleaseNotes}
             <!-- eslint-disable-next-line svelte/no-at-html-tags -->
             {@html parsedReleaseNotes}
-          </div>
-        </section>
-      {/if}
+          {:else}
+            <p>Catatan rilis belum tersedia. Update tetap dapat dilanjutkan.</p>
+          {/if}
+        </div>
+      </section>
 
       {#if restartCountdown !== null}
         <div class="lu-pbar" role="status" aria-live="assertive">
@@ -123,16 +115,13 @@
           </div>
           <div class="lu-pbar__sub">Update selesai diunduh. Launcher akan tertutup otomatis dan dibuka ulang.</div>
         </div>
-      {:else if isUpdating || prototypeComplete || (status && status !== 'Menunggu konfirmasi.')}
+      {:else if isUpdating || (status && status !== 'Menunggu konfirmasi.')}
         <div class="lu-pbar">
           <div class="lu-pbar__text">{updateProgress}%</div>
           <div class="lu-pbar__track">
             <div class="lu-pbar__fill" style="width: {updateProgress}%"></div>
           </div>
-          <div class="lu-pbar__sub">{prototypeComplete ? 'Prototype selesai — launcher akan dimulai ulang.' : updateStatus || 'Menyiapkan update...'}</div>
-          {#if prototypeComplete}
-            <button class="lu-modal__btn lu-modal__btn--secondary lu-pbar__done" onclick={dismiss} type="button">Tutup prototype</button>
-          {/if}
+          <div class="lu-pbar__sub">{updateStatus || 'Menyiapkan update...'}</div>
         </div>
       {:else}
         <div class="lu-modal__btns">
@@ -254,6 +243,13 @@
     font-weight: 600;
   }
 
+  .lu-notes__meta {
+    margin: 0 0 8px;
+    color: var(--mist-slate);
+    font-size: 9px;
+    line-height: 1.35;
+  }
+
   .lu-notes__body {
     max-height: 240px;
     overflow-y: auto;
@@ -294,8 +290,4 @@
     color: var(--mist-aqua) !important;
   }
 
-  .lu-pbar__done {
-    align-self: center;
-    margin-top: 8px;
-  }
 </style>

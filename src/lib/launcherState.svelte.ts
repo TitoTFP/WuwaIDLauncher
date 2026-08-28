@@ -212,6 +212,11 @@ export class LauncherState implements ILauncherState {
       }
     }
     this.firstLaunchLauncherReleaseNotes = null;
+    if (tag && isTauriRuntime()) {
+      void bridge.acknowledgeLauncherReleaseNotes(tag).catch(() => {
+        // A failed acknowledgement must not prevent the modal from closing.
+      });
+    }
   }
 
   beginOperation(kind: LauncherOperation): OperationToken | null {

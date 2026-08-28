@@ -1,6 +1,6 @@
 pub mod engine;
 
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -16,6 +16,7 @@ const WUWAID_LATEST_DOWNLOAD_BASE_URL: &str =
 const WUWAID_LATEST_CHECKSUMS_URL: &str =
     "https://github.com/TitoTFP/WuwaID/releases/latest/download/SHA256sums.txt";
 const SUPPORT_URL: &str = "https://trakteer.id/TitoTFP";
+#[cfg(any(windows, test))]
 const LAUNCHER_UPDATE_RESTART_DELAY_SECONDS: u64 = 12;
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const PROCESS_HANDOFF_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -58,6 +59,7 @@ fn windows_root_executable(name: &str) -> PathBuf {
     windows_directory().join(name)
 }
 
+#[cfg(any(windows, test))]
 fn launcher_update_restart_countdown() -> impl Iterator<Item = u64> {
     (1..=LAUNCHER_UPDATE_RESTART_DELAY_SECONDS).rev()
 }
@@ -934,8 +936,31 @@ fn validate_loader_metadata(game_path: &Path) -> Result<(), String> {
     }
 }
 
+const MAX_LAUNCHER_RELEASE_NOTE_FILE_BYTES: u64 = 3 * 1024 * 1024;
+
 fn get_launcher_release_notes_path() -> PathBuf {
     get_appdata_dir().join("launcher-release-notes.json")
+}
+
+fn get_pending_launcher_release_notes_path() -> PathBuf {
+    get_appdata_dir().join("launcher-whats-new-pending.json")
+}
+
+fn normalized_launcher_version(value: &str) -> &str {
+    let value = value.trim();
+    value
+        .strip_prefix('v')
+        .or_else(|| value.strip_prefix('V'))
+        .unwrap_or(value)
+}
+
+fn launcher_release_note_matches_version(
+    note: &engine::atom_feed::ReleaseNoteEntry,
+    version: &str,
+) -> bool {
+    let note_version = normalized_launcher_version(&note.tag);
+    let current_version = normalized_launcher_version(version);
+    !note_version.is_empty() && note_version.eq_ignore_ascii_case(current_version)
 }
 
 fn launcher_release_note_payload(release: &engine::updater::ReleaseInfo) -> serde_json::Value {
@@ -948,53 +973,149 @@ fn launcher_release_note_payload(release: &engine::updater::ReleaseInfo) -> serd
     })
 }
 
-fn validate_launcher_release_note_payload(payload: serde_json::Value) -> Option<serde_json::Value> {
+fn validated_launcher_release_note(
+    payload: serde_json::Value,
+) -> Option<engine::atom_feed::ReleaseNoteEntry> {
     serde_json::from_value::<engine::atom_feed::ReleaseNoteEntry>(payload)
         .ok()
         .and_then(|entry| engine::atom_feed::validate_release_note(&entry).ok())
-        .and_then(|entry| serde_json::to_value(entry).ok())
+        .filter(|entry| !entry.body.trim().is_empty())
+}
+
+fn fallback_launcher_release_note(tag: &str, version: &str) -> engine::atom_feed::ReleaseNoteEntry {
+    engine::atom_feed::ReleaseNoteEntry {
+        tag: tag.to_string(),
+        date: String::new(),
+        title: format!("WuwaID Launcher {version}"),
+        body: "Catatan rilis belum tersedia. Launcher berhasil diperbarui.".to_string(),
+        author: "WuwaID Team".to_string(),
+    }
+}
+
+fn launcher_release_note_for_release(
+    release: &engine::updater::ReleaseInfo,
+) -> engine::atom_feed::ReleaseNoteEntry {
+    validated_launcher_release_note(launcher_release_note_payload(release)).unwrap_or_else(|| {
+        let mut fallback = fallback_launcher_release_note(&release.tag_name, &release.version);
+        if !release.date.trim().is_empty() {
+            fallback.date = release.date.clone();
+        }
+        if !release.title.trim().is_empty() {
+            fallback.title = release.title.clone();
+        }
+        if !release.author.trim().is_empty() {
+            fallback.author = release.author.clone();
+        }
+        fallback
+    })
+}
+
+fn launcher_update_payload(
+    release: &engine::updater::ReleaseInfo,
+    note: &engine::atom_feed::ReleaseNoteEntry,
+) -> serde_json::Value {
+    serde_json::json!({
+        "version": release.version,
+        "tag": note.tag,
+        "date": note.date,
+        "body": note.body,
+        "title": note.title,
+        "author": note.author
+    })
+}
+
+fn read_launcher_release_note(path: &Path) -> Option<engine::atom_feed::ReleaseNoteEntry> {
+    let size = std::fs::metadata(path).ok()?.len();
+    if size > MAX_LAUNCHER_RELEASE_NOTE_FILE_BYTES {
+        return None;
+    }
+    let content = std::fs::read(path).ok()?;
+    let payload = serde_json::from_slice::<serde_json::Value>(&content).ok()?;
+    validated_launcher_release_note(payload)
+}
+
+fn write_json_atomically<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), String> {
+    let content = serde_json::to_vec(value)
+        .map_err(|error| format!("Gagal serialisasi metadata release notes: {error}"))?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("Gagal membuat folder release notes: {error}"))?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("launcher-release-notes.json");
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let temporary = parent.join(format!(".{name}.tmp-{}-{stamp}", std::process::id()));
+
+    let result = (|| -> Result<(), String> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| format!("Gagal membuat file sementara release notes: {error}"))?;
+        file.write_all(&content)
+            .map_err(|error| format!("Gagal menulis release notes: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("Gagal menyimpan release notes: {error}"))?;
+        drop(file);
+        engine::downloader::replace_file_atomically(&temporary, path)
+    })();
+    let _ = std::fs::remove_file(&temporary);
+    result
+}
+
+fn write_launcher_release_note(
+    path: &Path,
+    note: &engine::atom_feed::ReleaseNoteEntry,
+) -> Result<(), String> {
+    write_json_atomically(path, note)
 }
 
 #[tauri::command]
 fn get_launcher_release_notes<R: Runtime>(app: AppHandle<R>) {
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        let cache_path = get_launcher_release_notes_path();
-        let mut had_cached = false;
+        let pending_path = get_pending_launcher_release_notes_path();
+        let current_version = app_version_value();
+        let Some(note) = read_launcher_release_note(&pending_path) else {
+            return;
+        };
 
-        if let Ok(content) = std::fs::read_to_string(&cache_path) {
-            if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(payload) = validate_launcher_release_note_payload(payload) {
-                    let _ = app_handle.emit("onLauncherReleaseNotes", payload);
-                    had_cached = true;
-                }
-            }
-        }
-
-        match engine::updater::fetch_latest_release().await {
-            Ok(release) => {
-                let Some(payload) =
-                    validate_launcher_release_note_payload(launcher_release_note_payload(&release))
-                else {
-                    log::warn!("Latest launcher release notes rejected by validation");
-                    return;
-                };
-
-                if let Some(parent) = cache_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                if let Ok(content) = serde_json::to_string(&payload) {
-                    let _ = std::fs::write(&cache_path, content);
-                }
-                let _ = app_handle.emit("onLauncherReleaseNotes", payload);
-            }
-            Err(error) => {
-                if !had_cached {
-                    log::debug!("Launcher release notes unavailable: {error}");
-                }
-            }
+        if launcher_release_note_matches_version(&note, &current_version) {
+            let _ = app_handle.emit("onLauncherReleaseNotes", note);
+        } else if !engine::updater::is_newer_version(&current_version, &note.tag) {
+            let _ = std::fs::remove_file(pending_path);
         }
     });
+}
+
+fn acknowledge_launcher_release_note_at(path: &Path, tag: &str) -> Result<(), String> {
+    let Some(note) = read_launcher_release_note(path) else {
+        return Ok(());
+    };
+    if launcher_release_note_matches_version(&note, tag) {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "Gagal menghapus release notes yang sudah dibaca: {error}"
+                ))
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn acknowledge_launcher_release_notes(tag: String) -> Result<(), String> {
+    acknowledge_launcher_release_note_at(&get_pending_launcher_release_notes_path(), &tag)
 }
 
 async fn get_latest_patch_version() -> Option<String> {
@@ -1016,7 +1137,10 @@ fn check_launcher_update<R: Runtime>(app: AppHandle<R>) {
         let current_version = env!("CARGO_PKG_VERSION");
         match engine::updater::check_latest_release(current_version).await {
             Ok(Some(release)) => {
-                if let (Some(zip), Some(checksums)) = (release.zip_url, release.checksums_url) {
+                let release_note = launcher_release_note_for_release(&release);
+                if let (Some(zip), Some(checksums)) =
+                    (release.zip_url.clone(), release.checksums_url.clone())
+                {
                     if let Err(error) = engine::updater::validate_update_request(
                         &release.version,
                         &release.tag_name,
@@ -1029,13 +1153,22 @@ fn check_launcher_update<R: Runtime>(app: AppHandle<R>) {
                         );
                         return;
                     }
+                    // The update dialog and post-restart modal must share this
+                    // exact validated payload. Do not offer the update if its
+                    // durable source cannot be published first.
+                    if let Err(error) = write_launcher_release_note(
+                        &get_launcher_release_notes_path(),
+                        &release_note,
+                    ) {
+                        let _ = app_handle.emit(
+                            "onLauncherUpdateError",
+                            format!("Gagal menyimpan cache launcher release notes: {error}"),
+                        );
+                        return;
+                    }
                     let _ = app_handle.emit(
                         "onLauncherUpdateAvailable",
-                        serde_json::json!({
-                            "version": release.version,
-                            "tag": release.tag_name,
-                            "body": release.body
-                        }),
+                        launcher_update_payload(&release, &release_note),
                     );
                 } else {
                     let _ = app_handle.emit(
@@ -1310,6 +1443,14 @@ fn launcher_update_tag(version: &str) -> String {
 
 #[tauri::command]
 fn perform_launcher_update<R: Runtime>(app: AppHandle<R>, version: String) -> Result<(), String> {
+    if std::env::consts::OS != "windows" {
+        let _ = app.emit(
+            "onLauncherUpdateError",
+            "Self-update launcher hanya tersedia pada Windows.".to_string(),
+        );
+        return Ok(());
+    }
+
     let version = version.trim().to_string();
     let tag = launcher_update_tag(&version);
     let expected_zip = match engine::updater::expected_zip_asset_name(&tag) {
@@ -1356,6 +1497,22 @@ fn perform_launcher_update<R: Runtime>(app: AppHandle<R>, version: String) -> Re
         );
         return Ok(());
     }
+
+    #[cfg(windows)]
+    let pending_note = match read_launcher_release_note(&get_launcher_release_notes_path())
+        .filter(|note| launcher_release_note_matches_version(note, &tag))
+    {
+        Some(note) => note,
+        None => {
+            let _ = app.emit(
+                "onLauncherUpdateError",
+                "Catatan release update tidak tersedia. Silakan periksa update lagi.".to_string(),
+            );
+            return Ok(());
+        }
+    };
+    #[cfg(windows)]
+    let pending_note_path = get_pending_launcher_release_notes_path();
 
     let operation = engine::operations::global()
         .try_acquire(engine::operations::OperationKind::LauncherUpdate)?;
@@ -1429,25 +1586,30 @@ fn perform_launcher_update<R: Runtime>(app: AppHandle<R>, version: String) -> Re
                 format!("Executable launcher saat ini tidak ditemukan: {error}")
             })?;
             engine::updater::create_update_handoff(&staging, &current_exe, &handoff_path)?;
-            let _ = app_handle.emit(
-                "onLauncherUpdateProgress",
-                serde_json::json!({
-                    "percent": 100,
-                    "status": "Update terverifikasi dan siap diterapkan."
-                }),
-            );
-            log::info!("Update staged at {:?}", exe_path);
-            let _ = app_handle.emit("onLauncherUpdateStaged", ());
-            for remaining_seconds in launcher_update_restart_countdown() {
-                let _ = app_handle.emit(
-                    "onLauncherUpdateRestarting",
-                    serde_json::json!({"remainingSeconds": remaining_seconds}),
-                );
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
 
             #[cfg(windows)]
             {
+                // Do not announce or execute the handoff until the new launcher
+                // has a durable, version-gated What's New payload to consume.
+                write_launcher_release_note(&pending_note_path, &pending_note)
+                    .map_err(|error| format!("Gagal menyimpan pending What's New: {error}"))?;
+                let _ = app_handle.emit(
+                    "onLauncherUpdateProgress",
+                    serde_json::json!({
+                        "percent": 100,
+                        "status": "Update terverifikasi dan siap diterapkan."
+                    }),
+                );
+                log::info!("Update staged at {:?}", exe_path);
+                let _ = app_handle.emit("onLauncherUpdateStaged", ());
+                for remaining_seconds in launcher_update_restart_countdown() {
+                    let _ = app_handle.emit(
+                        "onLauncherUpdateRestarting",
+                        serde_json::json!({"remainingSeconds": remaining_seconds}),
+                    );
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+
                 use std::os::windows::process::CommandExt;
                 let handoff_arg = handoff_path.to_string_lossy().to_string();
                 std::process::Command::new(windows_system_executable("cmd.exe"))
@@ -1465,6 +1627,7 @@ fn perform_launcher_update<R: Runtime>(app: AppHandle<R>, version: String) -> Re
             }
             #[cfg(not(windows))]
             {
+                let _ = exe_path;
                 Err("Self-update handoff hanya tersedia pada Windows.".to_string())
             }
         }
@@ -2385,6 +2548,7 @@ pub fn run<R: tauri::Runtime>(context: tauri::Context<R>) {
             open_support,
             get_vh_release_notes,
             get_launcher_release_notes,
+            acknowledge_launcher_release_notes,
             perform_launcher_update,
             check_patch_status,
             switch_method,
@@ -3133,6 +3297,172 @@ mod tests {
         assert_eq!(payload["body"], "## Launcher changes");
         assert_eq!(payload["date"], "2026-08-18T12:00:00Z");
         assert_eq!(payload["author"], "TitoTFP");
+    }
+
+    #[test]
+    fn launcher_release_note_cache_round_trips_and_replaces_atomically() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("launcher-release-notes.json");
+        let note = engine::atom_feed::ReleaseNoteEntry {
+            tag: "v2.10.0".to_string(),
+            date: "2026-08-28T12:00:00Z".to_string(),
+            title: "WuwaID Launcher 2.10.0".to_string(),
+            body: "## What's new".to_string(),
+            author: "WuwaID Team".to_string(),
+        };
+
+        write_launcher_release_note(&path, &note).unwrap();
+
+        assert_eq!(read_launcher_release_note(&path), Some(note));
+        let temporary_files = std::fs::read_dir(temp.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".launcher-release-notes.json.tmp-")
+            })
+            .count();
+        assert_eq!(temporary_files, 0);
+    }
+
+    #[test]
+    fn launcher_release_note_cache_write_surfaces_target_errors() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("target-directory");
+        std::fs::create_dir(&path).unwrap();
+        let note = engine::atom_feed::ReleaseNoteEntry {
+            tag: "v2.10.0".to_string(),
+            date: String::new(),
+            title: "Launcher".to_string(),
+            body: "Notes".to_string(),
+            author: "Team".to_string(),
+        };
+
+        assert!(write_launcher_release_note(&path, &note).is_err());
+        assert!(path.is_dir());
+        assert_eq!(
+            std::fs::read_dir(temp.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".target-directory.tmp-")
+                })
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn launcher_release_note_version_match_handles_tag_prefix_only() {
+        let note = engine::atom_feed::ReleaseNoteEntry {
+            tag: "v2.10.0".to_string(),
+            date: String::new(),
+            title: "Launcher".to_string(),
+            body: "Notes".to_string(),
+            author: "Team".to_string(),
+        };
+
+        assert!(launcher_release_note_matches_version(&note, "2.10.0"));
+        assert!(launcher_release_note_matches_version(&note, "V2.10.0"));
+        assert!(!launcher_release_note_matches_version(&note, "2.10.1"));
+    }
+
+    #[test]
+    fn acknowledging_pending_release_notes_requires_matching_tag() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("launcher-whats-new-pending.json");
+        let note = engine::atom_feed::ReleaseNoteEntry {
+            tag: "v2.10.0".to_string(),
+            date: String::new(),
+            title: "WuwaID Launcher 2.10.0".to_string(),
+            body: "Notes".to_string(),
+            author: "Team".to_string(),
+        };
+        write_launcher_release_note(&path, &note).unwrap();
+
+        acknowledge_launcher_release_note_at(&path, "v2.9.2").unwrap();
+        assert!(path.exists());
+        acknowledge_launcher_release_note_at(&path, "2.10.0").unwrap();
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn invalid_launcher_release_body_gets_safe_fallback_without_blocking_update() {
+        let release = engine::updater::ReleaseInfo {
+            tag_name: "v2.10.0".to_string(),
+            version: "2.10.0".to_string(),
+            title: "WuwaID Launcher 2.10.0".to_string(),
+            date: "2026-08-28T12:00:00Z".to_string(),
+            author: "WuwaID Team".to_string(),
+            body: "<script>alert(1)</script>".to_string(),
+            zip_url: Some("https://github.com/TitoTFP/WuwaIDLauncher/releases/download/v2.10.0/WuwaIDLauncher-v2.10.0.zip".to_string()),
+            checksums_url: Some("https://github.com/TitoTFP/WuwaIDLauncher/releases/download/v2.10.0/SHA256sums.txt".to_string()),
+        };
+
+        let note = launcher_release_note_for_release(&release);
+
+        assert_eq!(note.tag, "v2.10.0");
+        assert_eq!(note.title, release.title);
+        assert_eq!(note.date, release.date);
+        assert_eq!(note.author, release.author);
+        assert!(note.body.contains("belum tersedia"));
+        assert!(!note.body.contains("script"));
+    }
+
+    #[test]
+    fn empty_launcher_release_body_gets_fallback_summary() {
+        let release = engine::updater::ReleaseInfo {
+            tag_name: "v2.10.0".to_string(),
+            version: "2.10.0".to_string(),
+            title: "WuwaID Launcher 2.10.0".to_string(),
+            date: String::new(),
+            author: "WuwaID Team".to_string(),
+            body: "  \n".to_string(),
+            zip_url: None,
+            checksums_url: None,
+        };
+
+        let note = launcher_release_note_for_release(&release);
+
+        assert_eq!(
+            note.body,
+            "Catatan rilis belum tersedia. Launcher berhasil diperbarui."
+        );
+    }
+
+    #[test]
+    fn launcher_update_payload_carries_full_release_note() {
+        let release = engine::updater::ReleaseInfo {
+            tag_name: "v2.10.0".to_string(),
+            version: "2.10.0".to_string(),
+            title: "Ignored by note".to_string(),
+            date: "ignored".to_string(),
+            author: "ignored".to_string(),
+            body: "ignored".to_string(),
+            zip_url: None,
+            checksums_url: None,
+        };
+        let note = engine::atom_feed::ReleaseNoteEntry {
+            tag: "v2.10.0".to_string(),
+            date: "2026-08-28".to_string(),
+            title: "WuwaID Launcher 2.10.0".to_string(),
+            body: "## Notes".to_string(),
+            author: "WuwaID Team".to_string(),
+        };
+
+        let payload = launcher_update_payload(&release, &note);
+
+        assert_eq!(payload["version"], "2.10.0");
+        assert_eq!(payload["tag"], "v2.10.0");
+        assert_eq!(payload["date"], "2026-08-28");
+        assert_eq!(payload["title"], "WuwaID Launcher 2.10.0");
+        assert_eq!(payload["author"], "WuwaID Team");
+        assert_eq!(payload["body"], "## Notes");
     }
 
     #[test]

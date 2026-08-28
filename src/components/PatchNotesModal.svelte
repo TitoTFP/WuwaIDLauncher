@@ -11,21 +11,25 @@
   let { note, onclose }: Props = $props();
 
   let parsedHtml = $derived.by(() => {
-    if (!note?.body) return '<p>Belum ada isi patch notes.</p>';
+    const fallback = '<p>Catatan rilis belum tersedia. Launcher berhasil diperbarui.</p>';
+    if (!note?.body) return fallback;
     try {
-      return sanitizeReleaseNotesHtml(marked.parse(note.body, { async: false }) as string);
+      const html = sanitizeReleaseNotesHtml(marked.parse(note.body, { async: false }) as string);
+      return html.trim() ? html : fallback;
     } catch {
-      return sanitizeReleaseNotesHtml(note.body);
+      const html = sanitizeReleaseNotesHtml(note.body);
+      return html.trim() ? html : fallback;
     }
   });
 </script>
 
 {#if note}
   <div class="patch-notes-overlay" role="presentation">
-    <dialog open class="patch-notes-modal" aria-labelledby="patch-notes-title">
+    <dialog open class="patch-notes-modal" aria-modal="true" aria-labelledby="patch-notes-title">
       <div class="patch-notes-modal__head">
         <div>
-          <p class="patch-notes-modal__eyebrow">LAUNCHER RELEASE NOTES</p>
+          <p class="patch-notes-modal__eyebrow">WHAT'S NEW</p>
+          <p class="patch-notes-modal__status">PEMBARUAN BERHASIL DITERAPKAN</p>
           <h2 id="patch-notes-title">{note.title || 'Pembaruan launcher'}</h2>
           <p class="patch-notes-modal__meta">
             {note.tag}{note.date ? ` · ${note.date}` : ''}{note.author ? ` · ${note.author}` : ''}
@@ -109,6 +113,14 @@
     letter-spacing: 0.18em;
     font-size: 10px;
     font-weight: 800;
+  }
+
+  .patch-notes-modal__status {
+    margin: 0 0 6px;
+    color: var(--mist-jade);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.12em;
   }
 
   h2 {

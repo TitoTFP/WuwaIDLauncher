@@ -13,53 +13,11 @@
   import ToastHost from './components/ToastHost.svelte';
   import AdminModal from './components/AdminModal.svelte';
 
-  const prototypeKind =
-    typeof window !== 'undefined'
-      ? new URLSearchParams(window.location.search).get('prototype')
-      : null;
-  const releaseNotesPrototype = prototypeKind === 'release-notes';
-  const patchNotesPrototype = prototypeKind === 'patch-notes';
   const hasTauriRuntime = isTauriRuntime();
-  const releaseNotesPrototypeBody = `### Yang baru di versi 2.10.0
-
-- Download patch sekarang dapat dilanjutkan setelah koneksi terputus.
-- Verifikasi file dan checksum dibuat lebih ketat.
-- Tampilan launcher lebih ringan dan stabil.
-
-> Prototype: catatan versi tampil langsung di dalam dialog update.`;
 
   let settingsOpen = $state(false);
 
-  function closeLauncherUpdate() {
-    appState.dismissLauncherUpdate();
-    if (appState.firstLaunchLauncherReleaseNotes) {
-      appState.dismissFirstLaunchLauncherReleaseNotes();
-    }
-  }
-
   onMount(() => {
-    if (releaseNotesPrototype || patchNotesPrototype) {
-      appState.appVersion = '2.9.0';
-      appState.releaseNotesLoading = false;
-      if (releaseNotesPrototype) {
-        appState.launcherUpdatePayload = {
-          version: '2.10.0',
-          tag: 'v2.10.0',
-          body: releaseNotesPrototypeBody,
-        };
-        appState.launcherUpdateAvailable = true;
-      } else {
-        appState.firstLaunchLauncherReleaseNotes = {
-          tag: 'v2.10.0',
-          date: '2026-08-28',
-          title: 'WuwaID Launcher 2.10.0',
-          body: releaseNotesPrototypeBody,
-          author: 'WuwaID Team',
-        };
-      }
-      return () => appState.dispose();
-    }
-
     // Keep the browser preview usable without invoking the Tauri bridge.
     // The packaged launcher always exposes __TAURI_INTERNALS__.
     if (!hasTauriRuntime) {
@@ -108,12 +66,12 @@
     version={appState.launcherUpdatePayload?.version ?? ''}
     currentVersion={appState.appVersion}
     releaseNotesBody={appState.launcherUpdatePayload?.body ?? ''}
-    prototypeMode={releaseNotesPrototype}
+    releaseNote={appState.launcherUpdatePayload}
     progress={appState.launcherUpdateProgress}
     status={appState.launcherUpdateStatus}
     error={appState.launcherUpdateError}
     restartCountdown={appState.launcherUpdateRestartCountdown}
-    onclose={closeLauncherUpdate}
+    onclose={() => appState.dismissLauncherUpdate()}
   />
   <PatchNotesModal
     note={appState.launcherUpdateAvailable ? null : appState.firstLaunchLauncherReleaseNotes}

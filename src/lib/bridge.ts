@@ -37,6 +37,8 @@ export const bridge = {
   getVhReleaseNotes: (): Promise<void> => invoke("get_vh_release_notes"),
   getLauncherReleaseNotes: (): Promise<void> =>
     invoke("get_launcher_release_notes"),
+  acknowledgeLauncherReleaseNotes: (tag: string): Promise<void> =>
+    invoke("acknowledge_launcher_release_notes", { tag }),
   performLauncherUpdate: (version: string): Promise<void> =>
     invoke("perform_launcher_update", { version }),
 

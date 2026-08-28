@@ -68,7 +68,7 @@ Acceptance manual Windows tetap diperlukan untuk memvalidasi game nyata, mode ad
 
 - **Streaming Video Background & BGM:** Mengambil manifest live `assets.json`, mengunduh aset video latar dan musik dengan verifikasi SHA-256 ke cache lokal, dan men-stream melalui protokol `media://` dengan dukungan HTTP Range/206.
 - **Dynamic Release Notes (Atom Feed):** Mengambil catatan rilis terbaru langsung dari `releases.atom` GitHub repo WuwaID dan merendernya sebagai Markdown di drawer pengumuman `SidePanel`.
-- **Launcher Release Notes:** Saat pertama kali membuka tag rilis launcher baru, menampilkan body kurasi dan automated patch notes dari GitHub Release repo WuwaIDLauncher. Catatan launcher dicache terpisah dan hanya ditampilkan sekali per tag.
+- **Launcher Release Notes:** Catatan release resmi ditampilkan di dialog sebelum update; setelah self-update sukses, payload yang sama disimpan atomik dan ditampilkan sebagai **What's New** sekali per tag, termasuk saat startup offline.
 - **Countdown Tanggal Update:** Mem-parsing jadwal pembaruan game dari manifest untuk menampilkan hitung mundur waktu rilis patch berikutnya.
 
 ### ⚡ Mode Tray & Penghematan Resource Ekstrem
@@ -196,10 +196,7 @@ Untuk membuka pratinjau frontend langsung di browser tanpa runtime Tauri:
 npm run dev -- --host 0.0.0.0
 ```
 
-Buka `http://localhost:1420/`. Prototype modal tersedia di:
-
-- `http://localhost:1420/?prototype=release-notes` — dialog update dengan catatan rilis.
-- `http://localhost:1420/?prototype=patch-notes` — modal catatan rilis launcher.
+Buka `http://localhost:1420/` untuk memeriksa layout frontend tanpa runtime Tauri.
 
 ### Pengujian & Validasi Kualitas
 
