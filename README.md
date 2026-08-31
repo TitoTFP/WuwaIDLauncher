@@ -207,6 +207,9 @@ npm run check
 # Build frontend
 npm run build
 
+# Regression test: launcher update countdown keeps one toast
+node --test scripts/tests/launcher-update-notification.test.mjs
+
 # Test frontend async state contracts
 npm run test:patch-status
 

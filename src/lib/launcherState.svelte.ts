@@ -5,6 +5,7 @@ import {
   createGameExitDeduper,
   gameExitToast,
 } from "./gameExitNotice.js";
+import { createLauncherUpdateEventHandlers } from "./launcherUpdateRestart.js";
 import { createPatchStatusWaiter } from "./patchStatusWait.js";
 import { samePath } from "./pathIdentity.js";
 import {
@@ -597,6 +598,10 @@ export class LauncherState implements ILauncherState {
     }
     if (!isCurrent()) return;
 
+    const launcherUpdateEventHandlers = createLauncherUpdateEventHandlers(
+      this,
+      () => this.endCurrentOperation("launcher-update"),
+    );
     const unlisteners = await setupEventBridge({
       onGameRuntimeState: (active, origin) => {
         this.gameRunning = active;
@@ -742,20 +747,8 @@ export class LauncherState implements ILauncherState {
         this.launcherUpdateStatus = statusText;
         this.launcherUpdateError = "";
       },
-      onLauncherUpdateRestarting: (remainingSeconds) => {
-        const safeSeconds = Math.max(0, Math.floor(remainingSeconds));
-        this.launcherUpdateError = "";
-        this.launcherUpdateRestartCountdown = safeSeconds;
-        this.launcherUpdateStatus =
-          safeSeconds === 0
-            ? "Launcher sedang dimulai ulang..."
-            : `Update selesai diunduh. Launcher akan tertutup otomatis dan dibuka kembali dalam ${safeSeconds} detik.`;
-        if (safeSeconds === 0) this.endCurrentOperation("launcher-update");
-        else
-          this.setStatus(
-            "Launcher akan tertutup otomatis lalu dibuka kembali.",
-          );
-      },
+      onLauncherUpdateRestarting:
+        launcherUpdateEventHandlers.onLauncherUpdateRestarting,
       onLauncherUpdateError: (error) => {
         this.endCurrentOperation("launcher-update");
         this.dismissLauncherUpdate();
@@ -772,10 +765,8 @@ export class LauncherState implements ILauncherState {
       onLauncherUpdateStatus: (payload) => {
         this.showToast(payload.message, payload.kind);
       },
-      onLauncherUpdateStaged: () => {
-        this.launcherUpdateStatus = "Update terverifikasi dan siap diterapkan.";
-        this.showToast("Update launcher sudah diverifikasi.", "ok");
-      },
+      onLauncherUpdateStaged:
+        launcherUpdateEventHandlers.onLauncherUpdateStaged,
       onMediaReady: (payload) => {
         this.mediaStatus = "ready";
         this.mediaStatusMessage = "Media siap digunakan.";
