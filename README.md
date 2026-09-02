@@ -58,11 +58,11 @@ Acceptance manual Windows tetap diperlukan untuk memvalidasi game nyata, mode ad
   - **Metode 1 — `resource_mount` (Resource Mount):** Deploy file PAK + signature + berkas mount ke folder resource game aktif (`Client/Saved/Resources/<ver>/Mount/`) tanpa menyentuh signature utama game. Dilengkapi proteksi rollback transaksional dan verifikasi integritas struktur Unreal PAK.
   - **Metode 2 — `loader` (Loader):** Menempatkan loader `winhttp.dll` dan folder `wuwaIndonesia/` pada direktori binaries game (`Client/Binaries/Win64/`).
 - **Dynamic Method Switcher:** Berpindah metode instalasi secara instan dengan pembersihan artefak pada path kanonis metode sebelumnya. Path kanonis diperlakukan sebagai target launcher, termasuk saat artefak berasal dari launcher lama.
-- **Settings Overlay:** Ikon gear accessible membuka pengaturan ringkas untuk metode instalasi, Sembunyikan UID, Optimasi C#, dan DirectX 11. Overlay dapat ditutup melalui tombol tutup, **SELESAI**, klik luar, atau `Esc`.
+- **Settings Overlay:** Ikon gear accessible membuka pengaturan ringkas untuk metode instalasi, identitas UID (`DEFAULT`/`CUSTOM`), Optimasi C#, dan DirectX 11. Overlay dapat ditutup melalui tombol tutup, **SELESAI**, klik luar, atau `Esc`.
 - **Pemilihan Folder Game:** Membuka dialog folder interaktif untuk memilih lokasi instalasi Wuthering Waves dan memvalidasi folder yang dipilih.
 - **Engine PAK Packer & FNV64:** Modul Rust murni untuk pembuatan paket PAK Unreal Engine kompatibel dengan hashing FNV64 & index SHA-1.
 - **Opsi Peluncuran:** Toggle opt-in DirectX 11 dan optimisasi environment C# (`-ForceEnableCSharpEnvironment`); keduanya diteruskan sebagai argumen proses tanpa memodifikasi shortcut Steam maupun executable game.
-- **Hide UID:** Toggle opt-in memilih PAK terjemahan dengan tiga surface UID database diganti U+3164 Hangul Filler (`ㅤ`). Perubahan varian ditandai sebagai patch yang perlu dipasang ulang, bukan dianggap instalasi siap.
+- **Identitas UID:** Mode `DEFAULT` mempertahankan teks UID bawaan game. Mode `CUSTOM` mengganti tiga entri UID di database terjemahan dengan teks pilihan (maksimal 64 karakter, satu baris); teks custom yang kosong menyembunyikan UID memakai U+3164 Hangul Filler (`ㅤ`). Perubahan varian ditandai sebagai patch yang perlu dipasang ulang, bukan dianggap instalasi siap.
 
 ### 🎬 Live Media Ingestion & Dynamic Release Notes
 
@@ -102,7 +102,7 @@ Acceptance manual Windows tetap diperlukan untuk memvalidasi game nyata, mode ad
 ### 3️⃣ Pilih Metode & Instal Patch
 
 1. Klik ikon gear **Pengaturan**, lalu pilih kartu metode instalasi yang diinginkan.
-2. Aktifkan **Sembunyikan UID**, **Optimisasi C#**, atau **DirectX 11** sesuai kebutuhan. Perubahan pengaturan tersimpan otomatis.
+2. Pada bagian **Identitas UID**, pilih `DEFAULT` atau `CUSTOM`. Jika memilih `CUSTOM`, masukkan teks satu baris maksimal 64 karakter; kosongkan teks untuk menyembunyikan UID. Aktifkan **Optimisasi C#** atau **DirectX 11** sesuai kebutuhan. Perubahan pengaturan tersimpan otomatis.
 3. Klik tombol **Instal Patch ID** (atau **Perbarui Patch**).
 4. Setelah selesai, klik **Mainkan** untuk langsung masuk ke Sol3 dalam Bahasa Indonesia!
 
@@ -111,18 +111,19 @@ Acceptance manual Windows tetap diperlukan untuk memvalidasi game nyata, mode ad
 Rilis WuwaID menyediakan PAK normal mentah, `winhttp.dll`, dan `SHA256sums.txt`.
 Launcher memverifikasi SHA-256 serta struktur PAK normal sebelum menggunakannya.
 
-Jika **Sembunyikan UID** aktif, launcher membuat salinan lokal melalui crate repak V12,
-mengubah tepat tiga ID berikut di database terjemahan menjadi U+3164 Hangul Filler yang tidak terlihat,
-lalu mengemasnya kembali:
+Jika mode **CUSTOM** dipilih, launcher membuat salinan lokal melalui crate repak V12,
+mengganti tepat tiga ID berikut di database terjemahan dengan teks custom, lalu mengemasnya kembali:
 
 - `Text_FriendMyUid_Text`
 - `Text_UserId_Text`
 - `PrefabTextItem_1341587207_Text`
 
-PAK hasil Hide UID hanya disimpan di cache launcher dan dipasang dengan nama PAK
-normal. Launcher gagal dengan pesan jelas bila database atau salah satu ID target tidak
-ada/ambigu; launcher tidak pernah diam-diam mengganti permintaan Hide UID dengan PAK
-normal. Release WuwaID tidak perlu menyediakan `WuwaID.zip` atau PAK Hide UID kedua.
+Jika teks custom kosong atau hanya berisi spasi, launcher menggunakan U+3164 Hangul Filler
+(`ㅤ`) sehingga UID tidak terlihat. PAK hasil kustomisasi hanya disimpan di cache launcher
+dan dipasang dengan nama PAK normal. Launcher gagal dengan pesan jelas bila database atau
+salah satu ID target tidak ada/ambigu; launcher tidak pernah diam-diam mengganti permintaan
+kustomisasi UID dengan PAK normal. Release WuwaID cukup menyediakan PAK normal,
+`winhttp.dll`, dan `SHA256sums.txt`; tidak perlu menyediakan PAK custom atau PAK Hide UID kedua.
 
 ### Mapping Metode dan Recovery
 
