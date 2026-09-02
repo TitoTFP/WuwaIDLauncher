@@ -332,6 +332,8 @@ fn create_update_handoff_impl(
     }
     let path_value = |path: &Path| path.to_string_lossy().replace('%', "%%");
     let quote = |path: &Path| format!("\"{}\"", path_value(path));
+    let sleep_one = "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 1\" >nul 2>nul\r\n";
+    let sleep_two = "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 2\" >nul 2>nul\r\n";
     let release_setup = release_state
         .map(
             |(transaction_path, pending_path, ready_marker_path, release_tag)| {
@@ -438,15 +440,16 @@ fn create_update_handoff_impl(
     };
     let release_process_cleanup = release_state
         .map(|_| {
-            "         :stop_released_launcher\r\n\\
+            format!(
+                "         :stop_released_launcher\r\n\\
                  %SystemRoot%\\System32\\taskkill.exe /PID %release_pid% /T /F >nul 2>nul\r\n\\
                  for /L %%W in (1,1,10) do (\r\n\\
                      %SystemRoot%\\System32\\tasklist.exe /FI \"PID eq %release_pid%\" /FO CSV /NH | %SystemRoot%\\System32\\findstr.exe /I /C:\"%release_pid%\" >nul\r\n\\
                      if errorlevel 1 exit /b 0\r\n\\
-                     %SystemRoot%\\System32\\timeout.exe /t 1 /nobreak >nul\r\n\\
-                 )\r\n\\
-                 exit /b 0\r\n"
-            .to_string()
+                     {sleep_one}                 )\r\n\\
+                 exit /b 0\r\n",
+                sleep_one = sleep_one,
+            )
         })
         .unwrap_or_default();
     let release_health_failure = release_state
@@ -507,7 +510,7 @@ fn create_update_handoff_impl(
         "@echo off\r\n\
          setlocal\r\n\
          rem WuwaID updater handoff with a verified backup and rollback\r\n\
-         %SystemRoot%\\System32\\timeout.exe /t 1 /nobreak >nul\r\n\
+         {sleep_one}\r\n\
          if not exist {staged} exit /b 1\r\n\
          if not exist {current} exit /b 1\r\n\
          if exist {replacement} del /Q {replacement} >nul 2>nul\r\n\
@@ -537,7 +540,7 @@ fn create_update_handoff_impl(
              if errorlevel 1 exit /b 8\r\n\
              exit /b 6\r\n\
          )\r\n\
-          %SystemRoot%\\System32\\timeout.exe /t 2 /nobreak >nul\r\n\
+          {sleep_two}\r\n\
           %SystemRoot%\\System32\\tasklist.exe /FI \"IMAGENAME eq WuwaIDLauncher.exe\" | %SystemRoot%\\System32\\findstr.exe /I /C:\"WuwaIDLauncher.exe\" >nul\r\n\
           if errorlevel 1 (\r\n\
              copy /Y {backup} {current} >nul\r\n\
@@ -552,6 +555,8 @@ fn create_update_handoff_impl(
         backup = quote(&backup_executable),
         replacement = quote(&replacement_executable),
         staging = quote(staging_dir),
+        sleep_one = sleep_one,
+        sleep_two = sleep_two,
     );
     let script = if release_state.is_some() {
         let release_setup = normalize_batch_fragment(&release_setup);
@@ -1074,6 +1079,8 @@ mod tests {
         assert!(script.contains("if not exist \"%release_transaction%\" goto fail_11"));
         assert!(script.contains("move /Y \"%release_transaction%\" \"%release_pending%\""));
         assert!(script.contains("set \"release_tag=v2.10.0\""));
+        assert!(script.contains("Start-Sleep -Seconds 2"));
+        assert!(!script.contains("timeout.exe"));
         assert!(script.contains("set \"WUWAID_LAUNCHER_UPDATE_READY=%release_ready_temp%\""));
         assert!(script.contains("Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE"));
         assert!(script.contains("[IO.File]::WriteAllText($env:WUWAID_UPDATE_PID_FILE"));
