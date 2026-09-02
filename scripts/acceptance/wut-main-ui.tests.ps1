@@ -9,8 +9,11 @@ $modal = Get-Content -Raw -LiteralPath (Join-Path $root "src\components\UpdateMo
 $rightPanel = Get-Content -Raw -LiteralPath (Join-Path $root "src\components\RightPanel.svelte")
 $bridge = Get-Content -Raw -LiteralPath (Join-Path $root "src\lib\bridge.ts")
 
-if ($topBar -match '>\s*PERFORMA\s*<' -or $topBar -match 'HOME|PENGATURAN|TENTANG|SETTINGS|LOGS|ABOUT') {
+if ($topBar -match '>\s*PERFORMA\s*<' -or $topBar -match 'HOME|TENTANG|LOGS|ABOUT') {
     throw "Top navigation still exposes a removed page"
+}
+if ($topBar -notmatch 'settingsTrigger' -or $topBar -notmatch 'aria-haspopup="dialog"') {
+    throw "Settings dialog trigger is missing from the top bar"
 }
 foreach ($removedPath in @('src\components\SettingsPanel.svelte', 'src\components\AboutPanel.svelte')) {
     if (Test-Path (Join-Path $root $removedPath)) {

@@ -15,7 +15,7 @@ _Nikmati petualangan di Sol3 dengan teks Bahasa Indonesia yang presisi, launcher
 
 ---
 
-[Fitur Utama](#-fitur-utama) • [Cara Penggunaan](#-cara-penggunaan) • [Persyaratan Sistem](#-persyaratan-sistem) • [Pengembangan & Build](#-pengembangan--build) • [Performa](#-performa) • [Struktur Proyek](#-struktur-direktori-proyek) • [Kredit](#-kredit--apresiasi) • [Lisensi](#-lisensi)
+[Fitur Utama](#-fitur-utama) • [Cara Penggunaan](#-cara-penggunaan) • [Persyaratan Sistem](#-persyaratan-sistem) • [Pengembangan & Build](#-pengembangan--build) • [CI/CD](#cicd) • [Performa](#-performa) • [Struktur Proyek](#-struktur-direktori-proyek) • [Kredit](#-kredit--apresiasi) • [Lisensi](#-lisensi)
 
 </div>
 
@@ -42,10 +42,11 @@ Kontrak utama launcher sudah diimplementasikan dan diverifikasi melalui test sui
 | Self-update checksum, ZIP validation, staging, rollback handoff, cleanup | **Implemented + manual restart smoke** | Checksum/ZIP/handoff tests; valid release asset diperlukan untuk restart end-to-end |
 | Local runtime diagnostics tanpa upload log | **Implemented** | Isi diagnostics tetap lokal; heartbeat active-player hanya mengirim payload minimal |
 | Distribusi ZIP updater dan SHA256 manifest | **Implemented** | Artifact gate dan workflow release; executable tersedia di dalam ZIP; MSI/NSIS sengaja tidak dibuat |
-| Real game/admin/read-only/tray/offline/restart acceptance | **Partial / manual** | Jalankan matrix acceptance pada Windows release machine |
+| Real game/tray/WebView2/resource acceptance | **Automated on trusted Windows** | Workflow manual/nightly memerlukan runner self-hosted dan game yang sudah ter-patch |
+| Admin/read-only/offline/restart self-update acceptance | **Partial / manual** | Jalankan pada mesin release; kontrak ACL/lifecycle tetap diuji di CI |
 | Future features di luar WUT-5 sampai WUT-29 | **Planned** | Tidak menjadi bagian release gate ini |
 
-Acceptance manual Windows tetap diperlukan untuk memvalidasi game nyata, mode admin/read-only, tray, offline, dan restart self-update pada mesin release.
+Acceptance game nyata, tray, WebView2, dan resource dijalankan pada runner Windows tepercaya. UAC interaktif, read-only, offline, dan restart self-update tetap memerlukan operator karena tidak aman untuk dipaksa pada runner CI.
 
 ---
 
@@ -208,8 +209,8 @@ npm run check
 # Build frontend
 npm run build
 
-# Regression test: launcher update countdown keeps one toast
-node --test scripts/tests/launcher-update-notification.test.mjs
+# Regression tests: lifecycle, resource, and launcher update contracts
+node --test scripts/tests/game-exit-notice.test.mjs scripts/tests/resource-lifecycle.test.mjs scripts/tests/launcher-update-notification.test.mjs
 
 # Test frontend async state contracts
 npm run test:patch-status
@@ -270,18 +271,23 @@ Checklist sebelum publish:
     -Mode automated `
     -ArtifactRoot .\release-artifacts `
     -OutputRoot .\release-gate-evidence `
-    -FixtureRoot .\release-gate-fixture `
-    -RunCommandGate
+    -FixtureRoot .\release-gate-fixture
   ```
 
-- [ ] Jalankan acceptance manual pada Windows dengan fixture reversible.
-- [ ] Uji read-only/admin, tray, force quit, offline media, dan self-update restart pada mesin release.
+- [ ] Jalankan acceptance manual/nightly pada Windows tepercaya:
+  `pwsh -NoProfile -File scripts/acceptance/run-windows-real-acceptance.ps1 -LauncherPath .\src-tauri\target\release\WuwaIDLauncher.exe -GamePath <game-path>`.
+- [ ] Uji read-only/admin, offline media, dan self-update restart pada mesin release.
 - [ ] Tinjau diagnostics lokal sebelum membagikannya secara manual.
 
-Workflow release memvalidasi checkout tepat pada tag `vX.Y.Z` dan hanya membuat
-rilis portable ZIP beserta `SHA256sums.txt`; installer MSI/NSIS tidak dibuat.
-Push tag atau `workflow_dispatch` menjalankan gate yang sama. Acceptance game nyata
-tetap memerlukan mesin Windows release.
+### CI/CD
+
+- Pull request, push `main`, dan push `feat/**` menjalankan job Ubuntu paralel untuk frontend/Rust serta job Windows untuk native regression, deterministic acceptance, dan binary build.
+- `windows-acceptance.yml` hanya berjalan terjadwal atau manual pada runner Windows self-hosted tepercaya. Set repository variable `WUWAID_ACCEPTANCE_GAME_PATH` ke instalasi game yang sudah ter-patch; workflow menyimpan evidence resource/tray dan memulihkan `settings.json`.
+- Release memvalidasi checkout tepat pada tag `vX.Y.Z`, melakukan satu kompilasi Windows, membuat ZIP portable + `SHA256sums.txt`, lalu membuat provenance attestation. Publish menunggu approval environment `release-production`.
+- Distribusi tetap unsigned karena proyek belum memiliki sertifikat Authenticode. SHA-256 dan attestation menjadi bukti integritas/provenance; signing dapat ditambahkan bila sertifikat atau program OSS yang layak tersedia.
+- Aktifkan required checks `Frontend and JavaScript contracts`, `Rust checks`, dan `Windows regression and build` pada branch protection. Dependabot memeriksa npm, Cargo, dan GitHub Actions setiap minggu dengan cooldown tujuh hari.
+
+Workflow release tidak membuat installer MSI/NSIS. UAC interaktif dan restart self-update tetap menjadi langkah operator pada mesin release.
 
 ---
 

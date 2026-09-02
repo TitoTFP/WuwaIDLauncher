@@ -20,8 +20,11 @@ concurrency:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 60
     permissions:
       contents: read
+      id-token: write
+      attestations: write
     outputs:
       tag: ${{ steps.release.outputs.tag }}
     env:
@@ -32,6 +35,7 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Resolve and verify release tag
         id: release
@@ -80,18 +84,12 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
-          cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           toolchain: 1.97.1
           targets: x86_64-pc-windows-msvc
-
-      - name: Cache Rust
-        uses: swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
-        with:
-          workspaces: src-tauri -> target
 
       - name: Install frontend dependencies
         run: npm ci
@@ -101,6 +99,9 @@ jobs:
 
       - name: Build frontend
         run: npm run build
+
+      - name: Test JavaScript contracts
+        run: node --test scripts/tests/game-exit-notice.test.mjs scripts/tests/resource-lifecycle.test.mjs scripts/tests/launcher-update-notification.test.mjs
 
       - name: Test patch status bridge
         run: npm run test:patch-status
@@ -116,6 +117,23 @@ jobs:
 
       - name: Lint backend
         run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Run deterministic Windows acceptance contracts
+        shell: pwsh
+        run: |
+          $tests = @(
+            "scripts/acceptance/wut-36-acl.tests.ps1",
+            "scripts/acceptance/wut-38-launch-evidence.tests.ps1",
+            "scripts/acceptance/wut-main-ui-acl.tests.ps1",
+            "scripts/acceptance/wut-main-ui.tests.ps1",
+            "scripts/acceptance/wut-game-lifecycle.tests.ps1"
+          )
+          foreach ($test in $tests) {
+            & pwsh -NoProfile -File $test
+            if ($LASTEXITCODE -ne 0) {
+              throw "Acceptance contract failed: $test"
+            }
+          }
 
       - name: Build launcher binary
         shell: pwsh
@@ -155,11 +173,15 @@ jobs:
             -Mode automated `
             -ArtifactRoot "$env:GITHUB_WORKSPACE\release-artifacts" `
             -OutputRoot $evidence `
-            -FixtureRoot $fixture `
-            -RunCommandGate
+            -FixtureRoot $fixture
           if ($LASTEXITCODE -ne 0) {
             throw "Windows release gate failed with exit code $LASTEXITCODE"
           }
+
+      - name: Attest release ZIP provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: release-artifacts/WuwaIDLauncher-${{ steps.release.outputs.tag }}.zip
 
       - name: Upload release gate evidence
         if: ${{ always() }}
@@ -182,6 +204,10 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: release-production
+      url: https://github.com/${{ github.repository }}/releases/tag/${{ needs.build.outputs.tag }}
     permissions:
       contents: write
     steps:
@@ -192,14 +218,14 @@ jobs:
           path: release-payload
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          tag_name: ${{ needs.build.outputs.tag }}
-          name: WuwaID Launcher ${{ needs.build.outputs.tag }}
-          draft: false
-          prerelease: false
-          body_path: release-payload/RELEASE_NOTES.md
-          generate_release_notes: true
-          files: |
-            release-payload/WuwaIDLauncher-${{ needs.build.outputs.tag }}.zip
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "WuwaID Launcher $RELEASE_TAG" \
+            --notes-file release-payload/RELEASE_NOTES.md \
+            "release-payload/WuwaIDLauncher-$RELEASE_TAG.zip" \
             release-payload/SHA256sums.txt

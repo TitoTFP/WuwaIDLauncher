@@ -1,3 +1,5 @@
+# CI workflow
+
 name: CI
 
 on:
@@ -18,8 +20,83 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
+  frontend:
+    name: Frontend and JavaScript contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGOFLAGS: --locked
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: 1.97.1
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Check frontend
+        run: npm run check
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Test JavaScript contracts
+        run: node --test scripts/tests/game-exit-notice.test.mjs scripts/tests/resource-lifecycle.test.mjs scripts/tests/launcher-update-notification.test.mjs
+
+      - name: Test patch status bridge
+        run: npm run test:patch-status
+
+      - name: Check release version consistency
+        run: npm run test:version
+
+  rust:
+    name: Rust checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGOFLAGS: --locked
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: 1.97.1
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
+      - name: Test backend
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1
+
+      - name: Lint backend
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+  windows:
+    name: Windows regression and build
     runs-on: windows-latest
+    timeout-minutes: 45
     env:
       CARGOFLAGS: --locked
     steps:
@@ -46,26 +123,29 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Check frontend
-        run: npm run check
-
       - name: Build frontend
         run: npm run build
 
-      - name: Test patch status bridge
-        run: npm run test:patch-status
-
-      - name: Check release version consistency
-        run: npm run test:version
-
-      - name: Check Rust formatting
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
-
-      - name: Test backend
+      - name: Test Windows backend
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1
 
-      - name: Lint backend
-        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Run Windows static acceptance contracts
+        shell: pwsh
+        run: |
+          $tests = @(
+            "scripts/acceptance/windows-release-gate.tests.ps1",
+            "scripts/acceptance/wut-36-acl.tests.ps1",
+            "scripts/acceptance/wut-38-launch-evidence.tests.ps1",
+            "scripts/acceptance/wut-main-ui-acl.tests.ps1",
+            "scripts/acceptance/wut-main-ui.tests.ps1",
+            "scripts/acceptance/wut-game-lifecycle.tests.ps1"
+          )
+          foreach ($test in $tests) {
+            & pwsh -NoProfile -File $test
+            if ($LASTEXITCODE -ne 0) {
+              throw "Acceptance contract failed: $test"
+            }
+          }
 
       - name: Build launcher binary
         run: npm run tauri -- build --no-bundle
@@ -80,6 +160,7 @@ jobs:
           Write-Host "WuwaIDLauncher.exe: $($exe.Length) bytes"
 
       - name: Upload launcher artifact
+        if: ${{ success() && github.event_name != 'pull_request' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: WuwaIDLauncher-ci-${{ github.run_number }}

@@ -121,13 +121,21 @@ function Assert-WorkflowContract {
     $workflowRoot = Join-Path $PSScriptRoot "..\..\.github\workflows"
     $ciPath = Join-Path $workflowRoot "ci.yml"
     $releasePath = Join-Path $workflowRoot "release.yml"
+    $acceptancePath = Join-Path $workflowRoot "windows-acceptance.yml"
+    $dependabotPath = Join-Path $workflowRoot "..\dependabot.yml"
     $gatePath = Join-Path $PSScriptRoot "windows-release-gate.ps1"
+    $realAcceptancePath = Join-Path $PSScriptRoot "run-windows-real-acceptance.ps1"
     Assert-True (Test-Path -LiteralPath $ciPath -PathType Leaf) "Professional CI workflow is required."
     Assert-True (Test-Path -LiteralPath $releasePath -PathType Leaf) "Professional release workflow is required."
+    Assert-True (Test-Path -LiteralPath $acceptancePath -PathType Leaf) "Trusted Windows acceptance workflow is required."
+    Assert-True (Test-Path -LiteralPath $dependabotPath -PathType Leaf) "Dependabot configuration is required."
     Assert-True (Test-Path -LiteralPath $gatePath -PathType Leaf) "Windows release gate runner is required."
+    Assert-True (Test-Path -LiteralPath $realAcceptancePath -PathType Leaf) "Real Windows acceptance runner is required."
 
     $ci = Get-Content -Raw -LiteralPath $ciPath
     $release = Get-Content -Raw -LiteralPath $releasePath
+    $acceptance = Get-Content -Raw -LiteralPath $acceptancePath
+    $dependabot = Get-Content -Raw -LiteralPath $dependabotPath
     $gate = Get-Content -Raw -LiteralPath $gatePath
     $allWorkflows = @(Get-ChildItem -LiteralPath $workflowRoot -Filter "*.yml" -File | Get-Content -Raw) -join "`n"
 
@@ -140,9 +148,21 @@ function Assert-WorkflowContract {
     Assert-True ($allWorkflows -match "--locked") "Workflows must enforce the committed Cargo.lock."
     Assert-True ($allWorkflows -match "cargo fmt") "Workflows must check Rust formatting."
     Assert-True ($release -match "windows-release-gate") "Release workflow must run the Windows release gate."
+    Assert-True ($release -match "attest-build-provenance") "Release workflow must attest the release payload."
+    Assert-True ($release -match "release-production") "Release publish must use the protected production environment."
+    Assert-True ($release -match "gh release create") "Release publish must use the native GitHub CLI."
+    Assert-True ($release -notmatch "RunCommandGate") "Release workflow must not rebuild through the optional command gate."
     Assert-True ($release -notmatch '\$hash  \*\$zipName') "Release checksum manifest must use sha256sum-compatible spacing."
+    Assert-True ($ci -match "runs-on:\s+ubuntu-latest" -and $ci -match "runs-on:\s+windows-latest") "CI must keep hybrid Ubuntu and Windows jobs."
+    Assert-True ($ci -match "node --test" -and $ci -match "wut-game-lifecycle") "CI must run JavaScript and Windows lifecycle regressions."
     Assert-True ($ci -match "test:patch-status") "CI must run the patch-status bridge regression."
     Assert-True ($ci -match "test:version") "CI must run the release version consistency regression."
+    Assert-True ($acceptance -notmatch "pull_request") "Trusted acceptance must never run on pull requests."
+    Assert-True ($acceptance -match "self-hosted" -and $acceptance -match "schedule:" -and $acceptance -match "workflow_dispatch") "Trusted acceptance must be scheduled/manual on a self-hosted runner."
+    Assert-True ($acceptance -match "WUWAID_ACCEPTANCE_GAME_PATH" -and $acceptance -match "run-windows-real-acceptance") "Trusted acceptance must run the real game smoke with a configured game path."
+    Assert-True ($acceptance -match "if:\s+\$\{\{\s*always\(\)\s*\}\}") "Trusted acceptance must upload evidence after failures."
+    Assert-True ($dependabot -match "package-ecosystem: npm" -and $dependabot -match "package-ecosystem: cargo" -and $dependabot -match "package-ecosystem: github-actions") "Dependabot must cover npm, Cargo, and Actions."
+    Assert-True ($dependabot -match "cooldown:" -and $dependabot -match "default-days:\s+7") "Dependabot updates need a cooldown."
     Assert-True ($release -match "test:patch-status") "Release workflow must run the patch-status bridge regression."
     Assert-True ($release -match "test:version") "Release workflow must run the release version consistency regression."
     Assert-True ($gate -match "test:patch-status") "Windows release gate must run the patch-status bridge regression."
