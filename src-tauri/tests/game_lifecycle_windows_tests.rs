@@ -411,8 +411,8 @@ fn run_handoff_script(path: &Path) -> std::process::ExitStatus {
         .env("WUWAID_LAUNCHER_UPDATE_PID_FILE", &pid_file)
         .args(["/D", "/C", path.to_str().unwrap()])
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
         .spawn()
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);

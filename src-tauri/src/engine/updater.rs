@@ -285,6 +285,13 @@ fn create_update_handoff_impl(
     let current_directory = current_executable
         .parent()
         .unwrap_or_else(|| Path::new("."));
+    let started_pid_path = handoff_path.with_file_name(format!(
+        "{}.wuwaid-started.pid",
+        handoff_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("update-handoff.cmd")
+    ));
     let paths = [
         staging_dir,
         &staged_executable,
@@ -293,6 +300,7 @@ fn create_update_handoff_impl(
         &replacement_executable,
         handoff_path,
         current_directory,
+        &started_pid_path,
     ];
     if paths.iter().any(|path| {
         let value = path.to_string_lossy();
@@ -307,6 +315,7 @@ fn create_update_handoff_impl(
             pending_path,
             ready_marker_path,
             ready_marker_temp.as_path(),
+            started_pid_path.as_path(),
         ];
         if release_paths.iter().any(|path| {
             let value = path.to_string_lossy();
@@ -332,14 +341,17 @@ fn create_update_handoff_impl(
                  set \"release_pending={}\"\r\n\\
                  set \"release_ready={}\"\r\n\\
                  set \"release_ready_temp={}\"\r\n\\
+                 set \"release_started_pid_file={}\"\r\n\\
                  set \"release_tag={}\"\r\n\\
                  del /Q \"%release_ready_temp%\" >nul 2>nul\r\n\\
+                 del /Q \"%release_started_pid_file%\" >nul 2>nul\r\n\\
                  if exist \"%release_ready_temp%\" goto fail_12\r\n\\
                  set \"WUWAID_LAUNCHER_UPDATE_READY=%release_ready_temp%\"\r\n",
                     path_value(transaction_path),
                     path_value(pending_path),
                     path_value(ready_marker_path),
                     path_value(ready_marker_temp.as_path()),
+                    path_value(started_pid_path.as_path()),
                     release_tag,
                 )
             },
@@ -359,7 +371,7 @@ fn create_update_handoff_impl(
                  for /f \"delims=0123456789\" %%A in (\"%release_marker_pid%\") do goto release_health_failure\r\n\\
                  set \"release_pid=%release_marker_pid%\"\r\n\\
                  set \"release_pid_valid=1\"\r\n\\
-                 cmd /c exit 0\r\n                 %SystemRoot%\\System32\\tasklist.exe /FI \"PID eq %release_pid%\" /FI \"IMAGENAME eq WuwaIDLauncher.exe\" | %SystemRoot%\\System32\\findstr.exe /I /C:\"WuwaIDLauncher.exe\" >nul\r\n\\
+                 %SystemRoot%\\System32\\tasklist.exe /FI \"PID eq %release_pid%\" /FI \"IMAGENAME eq WuwaIDLauncher.exe\" | %SystemRoot%\\System32\\findstr.exe /I /C:\"WuwaIDLauncher.exe\" >nul\r\n\\
                  if errorlevel 1 goto release_health_failure\r\n"
                 .to_string()
         })
@@ -369,13 +381,20 @@ fn create_update_handoff_impl(
             format!(
                 "         set \"WUWAID_UPDATE_EXECUTABLE={}\"\r\n\\
                  set \"WUWAID_UPDATE_DIRECTORY={}\"\r\n\\
+                 set \"WUWAID_UPDATE_PID_FILE={}\"\r\n\\
+                 %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"$process = Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE -WorkingDirectory $env:WUWAID_UPDATE_DIRECTORY -PassThru; [IO.File]::WriteAllText($env:WUWAID_UPDATE_PID_FILE, [string]$process.Id)\"\r\n\\
+                 if errorlevel 1 goto fail_6\r\n\\
+                 if not exist \"%release_started_pid_file%\" goto fail_6\r\n\\
                  set \"release_started_pid=\"\r\n\\
-                 for /f \"usebackq delims=\" %%P in (`%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"$process = Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE -WorkingDirectory $env:WUWAID_UPDATE_DIRECTORY -PassThru; $process.Id\"`) do set \"release_started_pid=%%P\"\r\n\\
+                 set /p \"release_started_pid=\"<\"%release_started_pid_file%\"\r\n\\
                  if not defined release_started_pid goto fail_6\r\n\\
+                 for /f \"delims=0123456789\" %%A in (\"%release_started_pid%\") do goto fail_6\r\n\\
                  set \"release_pid=%release_started_pid%\"\r\n\\
-                 set \"release_pid_valid=1\"\r\n",
+                 set \"release_pid_valid=1\"\r\n\\
+                 cmd /c exit 0\r\n",
                 path_value(current_executable),
                 path_value(current_directory),
+                path_value(started_pid_path.as_path()),
             )
         })
         .unwrap_or_default();
@@ -463,9 +482,11 @@ fn create_update_handoff_impl(
                  del /Q {} >nul 2>nul\r\n\\
                  del /Q {} >nul 2>nul\r\n\\
                  del /Q {} >nul 2>nul\r\n\\
+                 del /Q {} >nul 2>nul\r\n\\
                  exit /b 0\r\n",
                 quote(ready_marker_path),
                 quote(ready_marker_temp.as_path()),
+                quote(started_pid_path.as_path()),
                 quote(transaction_path),
                 quote(pending_path),
             )
@@ -584,9 +605,11 @@ fn create_update_handoff_impl(
                 "Template handoff update tidak memiliki akhir sukses yang diharapkan.".to_string(),
             );
         }
+        let started_pid = quote(&started_pid_path);
         let success = format!(
-            "{release_commit}del /Q {backup} >nul 2>nul\r\nrmdir /S /Q {staging} >nul 2>nul\r\ndel \"%~f0\" >nul 2>nul\r\nexit /b 0\r\n{failure_labels}{release_cleanup}{update_cleanup}",
+            "{release_commit}del /Q {started_pid} >nul 2>nul\r\ndel /Q {backup} >nul 2>nul\r\nrmdir /S /Q {staging} >nul 2>nul\r\ndel \"%~f0\" >nul 2>nul\r\nexit /b 0\r\n{failure_labels}{release_cleanup}{update_cleanup}",
             release_commit = release_commit,
+            started_pid = started_pid,
             backup = backup,
             staging = staging,
             failure_labels = failure_labels,
@@ -1053,7 +1076,8 @@ mod tests {
         assert!(script.contains("set \"release_tag=v2.10.0\""));
         assert!(script.contains("set \"WUWAID_LAUNCHER_UPDATE_READY=%release_ready_temp%\""));
         assert!(script.contains("Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE"));
-        assert!(script.contains("set \"release_started_pid=%%P\""));
+        assert!(script.contains("[IO.File]::WriteAllText($env:WUWAID_UPDATE_PID_FILE"));
+        assert!(script.contains("set /p \"release_started_pid=\"<\"%release_started_pid_file%\""));
         assert!(script.contains("if exist \"%release_ready_temp%\" goto fail_12"));
         assert!(script.contains("PID eq %release_pid%"));
         assert!(script.contains(":stop_released_launcher"));
