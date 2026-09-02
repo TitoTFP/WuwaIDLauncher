@@ -418,6 +418,13 @@ fn run_handoff_script(path: &Path) -> std::process::ExitStatus {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if let Some(status) = child.try_wait().unwrap() {
+            if !status.success() {
+                eprintln!(
+                    "update handoff script failed with {status}:\n{}",
+                    fs::read_to_string(path)
+                        .unwrap_or_else(|error| format!("<unreadable: {error}>"))
+                );
+            }
             return status;
         }
         assert!(Instant::now() < deadline, "update handoff script timed out");
