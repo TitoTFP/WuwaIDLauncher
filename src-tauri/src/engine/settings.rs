@@ -1,5 +1,6 @@
 use super::method::InstallMethod;
 use crate::engine::path::normalize_game_path;
+use crate::engine::validate_uid_text;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -10,7 +11,8 @@ pub struct LauncherSettings {
     pub install_method: InstallMethod,
     pub dx11: bool,
     pub csharp_environment: bool,
-    pub hide_uid: bool,
+    pub uid_mode: String,
+    pub uid_text: String,
     pub bgm_volume: f64,
     pub bgm_enabled: bool,
 }
@@ -22,7 +24,8 @@ impl Default for LauncherSettings {
             install_method: InstallMethod::ResourceMount,
             dx11: false,
             csharp_environment: false,
-            hide_uid: false,
+            uid_mode: "default".to_string(),
+            uid_text: String::new(),
             bgm_volume: 0.35,
             bgm_enabled: true,
         }
@@ -179,13 +182,53 @@ pub fn normalize_settings_json(raw: &str) -> SettingsLoadResult {
         &mut diagnostics,
         &mut repaired,
     );
-    read_bool(
-        object,
-        "hideUid",
-        &mut settings.hide_uid,
-        &mut diagnostics,
-        &mut repaired,
-    );
+    let mut uid_mode_valid = false;
+    if let Some(value) = object.get("uidMode") {
+        match value.as_str() {
+            Some(mode) if matches!(mode, "default" | "custom") => {
+                settings.uid_mode = mode.to_string();
+                uid_mode_valid = true;
+            }
+            _ => {
+                repaired = true;
+                diagnostic(&mut diagnostics, "Mode UID tidak valid; memakai DEFAULT.");
+            }
+        }
+    }
+    if let Some(value) = object.get("uidText") {
+        match value.as_str() {
+            Some(text) if validate_uid_text(text).is_ok() => {
+                settings.uid_text = text.to_string();
+            }
+            _ => {
+                repaired = true;
+                diagnostic(
+                    &mut diagnostics,
+                    "Teks UID custom tidak valid; memakai teks kosong.",
+                );
+            }
+        }
+    }
+    if let Some(value) = object.get("hideUid") {
+        match value.as_bool() {
+            Some(hide_uid) => {
+                if !uid_mode_valid {
+                    settings.uid_mode = if hide_uid { "custom" } else { "default" }.to_string();
+                }
+            }
+            None => {
+                diagnostic(
+                    &mut diagnostics,
+                    "Field settings hideUid tidak valid; memakai default.",
+                );
+            }
+        }
+        repaired = true;
+        diagnostic(
+            &mut diagnostics,
+            "Pengaturan hideUid lama dimigrasikan ke mode UID.",
+        );
+    }
     read_bool(
         object,
         "bgmEnabled",
@@ -228,19 +271,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn optional_launch_and_patch_flags_default_off_and_repair_invalid_values() {
+    fn uid_customization_settings_migrate_legacy_values_and_validate_text() {
         let defaults = normalize_settings_json(r#"{}"#);
         assert!(!defaults.settings.csharp_environment);
-        assert!(!defaults.settings.hide_uid);
+        assert_eq!(defaults.settings.uid_mode, "default");
+        assert!(defaults.settings.uid_text.is_empty());
 
         let enabled = normalize_settings_json(r#"{"csharpEnvironment":true,"hideUid":true}"#);
         assert!(enabled.settings.csharp_environment);
-        assert!(enabled.settings.hide_uid);
+        assert_eq!(enabled.settings.uid_mode, "custom");
+        assert!(enabled.settings.uid_text.is_empty());
+        assert!(enabled.repaired);
 
-        let invalid = normalize_settings_json(r#"{"csharpEnvironment":"yes","hideUid":1}"#);
+        let custom =
+            normalize_settings_json(r#"{"uidMode":"custom","uidText":"Halo Nozomi ✦ 2026!"}"#);
+        assert_eq!(custom.settings.uid_mode, "custom");
+        assert_eq!(custom.settings.uid_text, "Halo Nozomi ✦ 2026!");
+        assert!(!custom.repaired);
+
+        let invalid = normalize_settings_json(
+            r#"{"csharpEnvironment":"yes","uidMode":"custom","uidText":"bad\ntext"}"#,
+        );
         assert!(invalid.repaired);
         assert!(!invalid.settings.csharp_environment);
-        assert!(!invalid.settings.hide_uid);
+        assert_eq!(invalid.settings.uid_mode, "custom");
+        assert!(invalid.settings.uid_text.is_empty());
     }
 
     #[cfg(windows)]

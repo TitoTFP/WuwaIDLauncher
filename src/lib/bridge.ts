@@ -13,7 +13,13 @@ import type {
   ProgressPayload,
   ReleaseNotePayload,
   SettingsLoadResult,
+  UidMode,
 } from "./types";
+
+interface UidSelection {
+  uidMode: UidMode;
+  uidText: string;
+}
 
 export const bridge = {
   // Window controls
@@ -46,9 +52,10 @@ export const bridge = {
   checkPatchStatus: (
     gamePath: string,
     installMethod: InstallMethod,
-    hideUid: boolean,
+    uidMode: UidMode,
+    uidText: string,
   ): Promise<void> =>
-    invoke("check_patch_status", { gamePath, installMethod, hideUid }),
+    invoke("check_patch_status", { gamePath, installMethod, uidMode, uidText }),
   switchMethod: (
     gamePath: string,
     newMethod: InstallMethod,
@@ -57,9 +64,14 @@ export const bridge = {
     gamePath: string,
     vhMode: string,
     installMethod: InstallMethod,
-    hideUid: boolean,
+    uidSelection: UidSelection,
   ): Promise<void> =>
-    invoke("start_installation", { gamePath, vhMode, installMethod, hideUid }),
+    invoke("start_installation", {
+      gamePath,
+      vhMode,
+      installMethod,
+      ...uidSelection,
+    }),
   checkGameFolderWriteAccess: (
     gamePath: string,
     installMethod: InstallMethod,

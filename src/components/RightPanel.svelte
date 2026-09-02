@@ -249,11 +249,13 @@
       appState.installing = true;
       appState.progressPercent = 0;
       appState.progressStatus = 'Memulai proses instalasi...';
+      const uidMode = appState.config.uidMode;
+      const uidText = appState.config.uidText;
       await bridge.startInstallation(
         appState.gamePath,
         'standard',
         appState.config.installMethod,
-        appState.config.hideUid,
+        { uidMode, uidText },
       );
     } catch (error) {
       appState.endOperation(token);

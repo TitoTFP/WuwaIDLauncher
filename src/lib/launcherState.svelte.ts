@@ -10,6 +10,7 @@ import { createPatchStatusWaiter } from "./patchStatusWait.js";
 import { samePath } from "./pathIdentity.js";
 import {
   DEFAULT_LAUNCHER_CONFIG,
+  isValidUidText,
   launcherReleaseNotesSeenStorageKey,
   normalizeLauncherConfig,
 } from "./types";
@@ -27,6 +28,7 @@ import type {
   ReleaseNotePayload,
   ToastKind,
   ToastMessage,
+  UidMode,
 } from "./types";
 
 interface ActiveOperation {
@@ -37,7 +39,8 @@ interface PatchStatusRequest {
   generation: number;
   gamePath: string;
   installMethod: InstallMethod;
-  hideUid: boolean;
+  uidMode: UidMode;
+  uidText: string;
   manualCheck: boolean;
 }
 
@@ -313,7 +316,8 @@ export class LauncherState implements ILauncherState {
     return (
       samePath(this.gamePath, request.gamePath) &&
       this.config.installMethod === request.installMethod &&
-      this.config.hideUid === request.hideUid
+      this.config.uidMode === request.uidMode &&
+      this.config.uidText === request.uidText
     );
   }
 
@@ -328,7 +332,8 @@ export class LauncherState implements ILauncherState {
       generation: ++this.patchStatusGeneration,
       gamePath,
       installMethod,
-      hideUid: this.config.hideUid,
+      uidMode: this.config.uidMode,
+      uidText: this.config.uidText,
       manualCheck,
     };
     this.latestPatchStatusRequest = request;
@@ -352,7 +357,8 @@ export class LauncherState implements ILauncherState {
         await bridge.checkPatchStatus(
           request.gamePath,
           request.installMethod,
-          request.hideUid,
+          request.uidMode,
+          request.uidText,
         );
         // The backend emits the result before the command completes. Waiting for
         // that event keeps a same-identity slow response from being attributed to
@@ -377,6 +383,34 @@ export class LauncherState implements ILauncherState {
       () => undefined,
     );
     return task;
+  }
+
+  async updateUidSelection(uidMode: UidMode, uidText: string): Promise<void> {
+    if (!isValidUidText(uidText)) {
+      throw new Error("Teks UID custom tidak valid.");
+    }
+    if (
+      this.gameRunning ||
+      this.launching ||
+      this.isOperationBlocked("folder") ||
+      this.isOperationBlocked("method-switch") ||
+      this.isOperationBlocked("install")
+    ) {
+      throw new Error(
+        "Identitas UID tidak dapat diubah saat operasi berjalan.",
+      );
+    }
+    if (this.config.uidMode === uidMode && this.config.uidText === uidText) {
+      return;
+    }
+
+    this.invalidatePatchStatus();
+    this.config.uidMode = uidMode;
+    this.config.uidText = uidText;
+    await this.saveConfig();
+    if (this.gamePath) {
+      await this.requestPatchStatus(this.gamePath, this.config.installMethod);
+    }
   }
 
   async selectGameFolder(): Promise<boolean> {
@@ -616,7 +650,8 @@ export class LauncherState implements ILauncherState {
           !request ||
           !samePath(payload.gamePath, request.gamePath) ||
           payload.installMethod !== request.installMethod ||
-          payload.hideUid !== request.hideUid
+          payload.uidMode !== request.uidMode ||
+          payload.uidText !== request.uidText
         ) {
           return;
         }

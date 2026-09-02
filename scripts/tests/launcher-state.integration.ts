@@ -1,5 +1,6 @@
 import { appState } from "../../src/lib/launcherState.svelte";
 import { isTauriRuntime } from "../../src/lib/runtime";
+import { isEffectivelyEmptyUidText, isValidUidText } from "../../src/lib/types";
 import {
   calls,
   fixtureReady,
@@ -72,7 +73,8 @@ export async function runLauncherStateScenario() {
     assert(
       startupStatusCalls[0].args.gamePath === paths.canonicalGamePath &&
         startupStatusCalls[0].args.installMethod === "resource_mount" &&
-        startupStatusCalls[0].args.hideUid === false,
+        startupStatusCalls[0].args.uidMode === "default" &&
+        startupStatusCalls[0].args.uidText === "",
       "real bridge sent the wrong startup IPC payload",
     );
     assert(
@@ -82,6 +84,68 @@ export async function runLauncherStateScenario() {
     assert(
       appState.patchState === "not_installed",
       "backend status event was not routed to LauncherState",
+    );
+    assert(
+      isValidUidText("x".repeat(64)) && !isValidUidText("x".repeat(65)),
+      "UID UI validator did not enforce the 64-character limit",
+    );
+    assert(
+      isEffectivelyEmptyUidText("\uFEFF") &&
+        isEffectivelyEmptyUidText(" \uFEFF ") &&
+        !isEffectivelyEmptyUidText("Halo\uFEFF"),
+      "UID UI empty-state handling did not match the backend rule",
+    );
+    for (const separator of [
+      "\n",
+      "\r",
+      "\u0000",
+      "\u0085",
+      "\u2028",
+      "\u2029",
+    ]) {
+      assert(
+        !isValidUidText(`Halo${separator}Nozomi`),
+        `UID UI validator accepted line/control separator U+${separator.codePointAt(0)!.toString(16).toUpperCase()}`,
+      );
+    }
+    let invalidUidRejected = false;
+    try {
+      await appState.updateUidSelection("custom", "Halo\u2028Nozomi");
+    } catch {
+      invalidUidRejected = true;
+    }
+    assert(
+      invalidUidRejected,
+      "LauncherState accepted a Unicode line separator",
+    );
+
+    const guardToken = appState.beginOperation("install");
+    assert(guardToken, "could not start the UID operation-guard test");
+    let guardedUidRejected = false;
+    try {
+      await appState.updateUidSelection("custom", "blocked");
+    } catch {
+      guardedUidRejected = true;
+    } finally {
+      appState.endOperation(guardToken);
+    }
+    assert(
+      guardedUidRejected,
+      "UID selection changed during an active operation",
+    );
+
+    await appState.updateUidSelection("custom", "Halo Nozomi ✦ 2026!");
+    const uidStatusCalls = callsFor("check_patch_status");
+    assert(
+      uidStatusCalls.length === 2 &&
+        uidStatusCalls[1].args.uidMode === "custom" &&
+        uidStatusCalls[1].args.uidText === "Halo Nozomi ✦ 2026!",
+      "custom UID selection was not sent to the backend",
+    );
+    assert(
+      appState.config.uidMode === "custom" &&
+        appState.config.uidText === "Halo Nozomi ✦ 2026!",
+      "custom UID selection was not persisted in LauncherState",
     );
 
     // The backend has already canonicalized persisted settings. Re-select the
@@ -94,9 +158,11 @@ export async function runLauncherStateScenario() {
     );
     const aliasStatusCalls = callsFor("check_patch_status");
     assert(
-      aliasStatusCalls.length === 2 &&
-        aliasStatusCalls[1].args.gamePath === paths.legacyGamePath,
-      "real bridge did not preserve the legacy path in the IPC request",
+      aliasStatusCalls.length === 3 &&
+        aliasStatusCalls[2].args.gamePath === paths.legacyGamePath &&
+        aliasStatusCalls[2].args.uidMode === "custom" &&
+        aliasStatusCalls[2].args.uidText === "Halo Nozomi ✦ 2026!",
+      "real bridge did not preserve the legacy path or UID selection in the IPC request",
     );
     assert(
       appState.patchStatusCheckPending === false,
@@ -120,14 +186,15 @@ export async function runLauncherStateScenario() {
     );
     const postSwitchStatusCalls = callsFor("check_patch_status");
     assert(
-      postSwitchStatusCalls.length === 3,
+      postSwitchStatusCalls.length === 4,
       "post-switch status was not requested",
     );
     assert(
-      postSwitchStatusCalls[2].args.gamePath === paths.legacyGamePath &&
-        postSwitchStatusCalls[2].args.installMethod === "loader" &&
-        postSwitchStatusCalls[2].args.hideUid === false,
-      "post-switch status request did not use the new method",
+      postSwitchStatusCalls[3].args.gamePath === paths.legacyGamePath &&
+        postSwitchStatusCalls[3].args.installMethod === "loader" &&
+        postSwitchStatusCalls[3].args.uidMode === "custom" &&
+        postSwitchStatusCalls[3].args.uidText === "Halo Nozomi ✦ 2026!",
+      "post-switch status request did not use the new method and UID selection",
     );
     const savedSettings = callsFor("save_settings");
     assert(
@@ -148,11 +215,22 @@ export async function runLauncherStateScenario() {
       appState.patchStatusCheckPending === false,
       "post-switch backend event did not resolve the waiter",
     );
+    await invoke("fixture_emit_patch_status", {
+      status: "ready",
+      gamePath: paths.canonicalGamePath,
+      installMethod: "loader",
+      uidMode: "custom",
+      uidText: "stale value",
+    });
+    assert(
+      appState.patchState === "not_installed",
+      "stale UID status event overwrote the active patch state",
+    );
     const patchEvents = deliveredEvents.filter(
       (event) => event.event === "onPatchStatus",
     );
     assert(
-      patchEvents.length === 3 &&
+      patchEvents.length === 5 &&
         patchEvents.every(
           (event) => event.payload.gamePath === paths.canonicalGamePath,
         ),
