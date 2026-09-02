@@ -405,8 +405,9 @@ fn run_handoff_script(path: &Path) -> std::process::ExitStatus {
         );
     }
     fs::write(path, &script).unwrap();
-    let debug_path = path.with_extension("debug.cmd");
+    let debug_path = path.with_extension("debug.txt");
     fs::write(&debug_path, &script).unwrap();
+    eprintln!("handoff debug script: {}", debug_path.display());
     let pid_file = launcher_fixture_pid_path(path.parent().unwrap());
     let mut command = Command::new(windows_system_executable("cmd.exe"));
     let mut child = command
