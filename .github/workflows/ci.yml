@@ -26,9 +26,16 @@ jobs:
     timeout-minutes: 20
     env:
       CARGOFLAGS: --locked
+      RUST_BACKTRACE: "1"
     steps:
+      - name: Initialize job evidence
+        shell: bash
+        run: mkdir -p "$RUNNER_TEMP/wuwaid-ci-evidence/frontend"
+
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -40,6 +47,11 @@ jobs:
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           toolchain: 1.97.1
+
+      - name: Install Linux Tauri dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
       - name: Cache Rust
         uses: swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
@@ -64,20 +76,53 @@ jobs:
       - name: Check release version consistency
         run: npm run test:version
 
+      - name: Capture job evidence
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          evidence="$RUNNER_TEMP/wuwaid-ci-evidence/frontend"
+          {
+            echo "job=frontend"
+            echo "sha=$GITHUB_SHA"
+            echo "event=$GITHUB_EVENT_NAME"
+            git status --short || true
+          } > "$evidence/summary.txt"
+
+      - name: Upload job evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-evidence-frontend-${{ github.run_number }}
+          path: ${{ runner.temp }}/wuwaid-ci-evidence/frontend
+          if-no-files-found: warn
+          retention-days: 14
+
   rust:
     name: Rust checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       CARGOFLAGS: --locked
+      RUST_BACKTRACE: "1"
     steps:
+      - name: Initialize job evidence
+        shell: bash
+        run: mkdir -p "$RUNNER_TEMP/wuwaid-ci-evidence/rust"
+
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           toolchain: 1.97.1
+
+      - name: Install Linux Tauri dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
       - name: Cache Rust
         uses: swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
@@ -93,15 +138,43 @@ jobs:
       - name: Lint backend
         run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
+      - name: Capture job evidence
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          evidence="$RUNNER_TEMP/wuwaid-ci-evidence/rust"
+          {
+            echo "job=rust"
+            echo "sha=$GITHUB_SHA"
+            echo "event=$GITHUB_EVENT_NAME"
+            git status --short || true
+          } > "$evidence/summary.txt"
+
+      - name: Upload job evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-evidence-rust-${{ github.run_number }}
+          path: ${{ runner.temp }}/wuwaid-ci-evidence/rust
+          if-no-files-found: warn
+          retention-days: 14
+
   windows:
     name: Windows regression and build
     runs-on: windows-latest
     timeout-minutes: 45
     env:
       CARGOFLAGS: --locked
+      RUST_BACKTRACE: "1"
     steps:
+      - name: Initialize job evidence
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP "wuwaid-ci-evidence\windows") | Out-Null
+
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -128,6 +201,9 @@ jobs:
 
       - name: Test Windows backend
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1
+
+      - name: Lint Windows backend
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: Run Windows static acceptance contracts
         shell: pwsh
@@ -167,3 +243,26 @@ jobs:
           path: src-tauri/target/release/WuwaIDLauncher.exe
           if-no-files-found: error
           retention-days: 7
+
+      - name: Capture job evidence
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          $evidence = Join-Path $env:RUNNER_TEMP "wuwaid-ci-evidence\windows"
+          @(
+            "job=windows",
+            "sha=$env:GITHUB_SHA",
+            "event=$env:GITHUB_EVENT_NAME"
+          ) | Set-Content -LiteralPath (Join-Path $evidence "summary.txt")
+          if (Test-Path -LiteralPath ".git") {
+            git status --short | Add-Content -LiteralPath (Join-Path $evidence "summary.txt")
+          }
+
+      - name: Upload job evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-evidence-windows-${{ github.run_number }}
+          path: ${{ runner.temp }}/wuwaid-ci-evidence/windows
+          if-no-files-found: warn
+          retention-days: 14

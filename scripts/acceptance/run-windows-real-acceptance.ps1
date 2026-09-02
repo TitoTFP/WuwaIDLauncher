@@ -83,6 +83,27 @@ function Get-GameProcesses {
     @(Get-Process -Name "Client-Win64-Shipping" -ErrorAction SilentlyContinue)
 }
 
+function Invoke-ElevationSmoke {
+    $probe = Start-Process `
+        -FilePath $env:ComSpec `
+        -ArgumentList "/d /c exit 0" `
+        -Verb RunAs `
+        -WindowStyle Hidden `
+        -PassThru
+    try {
+        if (-not $probe.WaitForExit(60000)) {
+            throw "UAC elevation smoke timed out waiting for the elevated probe."
+        }
+        if ($probe.ExitCode -ne 0) {
+            throw "UAC elevation smoke exited with code $($probe.ExitCode)."
+        }
+    } finally {
+        if (-not $probe.HasExited) {
+            Stop-Process -Id $probe.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Find-LaunchButton {
     param([Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process)
 
@@ -154,7 +175,10 @@ $launcher = $null
 $gamePid = $null
 $startedAt = [DateTime]::UtcNow
 $failure = $null
+$elevationSmokeVerified = $false
 $hiddenWindowVerified = $false
+$webviewVerified = $false
+$lifecycleRestored = $false
 $gameStarted = $false
 
 try {
@@ -164,6 +188,9 @@ try {
     if ((Get-GameProcesses).Count -gt 0) {
         throw "A Client-Win64-Shipping process is already running on the acceptance runner."
     }
+
+    Invoke-ElevationSmoke
+    $elevationSmokeVerified = $true
 
     if ($settingsExisted) {
         Copy-Item -LiteralPath $settingsPath -Destination $settingsBackup -Force
@@ -210,16 +237,27 @@ try {
         -DurationSeconds $ResourceDurationSeconds `
         -SampleIntervalSeconds 2 `
         -RequireHiddenWindow:$true `
+        -RequireWebView:$true `
         -OutputPath $resourcePath
     if ($LASTEXITCODE -ne 0) {
         throw "Launcher resource acceptance failed."
     }
+    $resourceRows = @(Import-Csv -LiteralPath $resourcePath)
+    if (@($resourceRows | Where-Object { [int]$_.WebViewCount -gt 0 }).Count -eq 0) {
+        throw "Real acceptance did not observe a WebView2 process."
+    }
+    $webviewVerified = $true
 
     Write-Host "Real game smoke completed; stopping the test game process tree."
     if ($null -ne $gamePid) {
         Stop-ProcessTree -RootPid ([int]$gamePid)
     }
     $gamePid = $null
+    [void](Wait-Until -TimeoutSeconds 60 -Description "launcher lifecycle restoration" -Condition {
+        $launcher.Refresh()
+        -not $launcher.HasExited -and [WuwaIdAcceptanceNative]::HasVisibleLauncherWindow([uint32]$launcher.Id)
+    })
+    $lifecycleRestored = $true
 } catch {
     $failure = $_.Exception.Message
 } finally {
@@ -249,8 +287,11 @@ try {
         finishedAt = [DateTime]::UtcNow.ToString("o")
         launcherPath = $resolvedLauncher
         gamePath = $resolvedGame
+        elevationSmokeVerified = $elevationSmokeVerified
         gameStarted = $gameStarted
         hiddenWindowVerified = $hiddenWindowVerified
+        webviewVerified = $webviewVerified
+        lifecycleRestored = $lifecycleRestored
         resourceSamples = if (Test-Path -LiteralPath $resourcePath -PathType Leaf) { $resourcePath } else { $null }
         error = $failure
     })
@@ -259,4 +300,4 @@ try {
 if ($null -ne $failure) {
     throw $failure
 }
-Write-Host "PASS: real launcher, tray, WebView2 resource, and game smoke acceptance"
+Write-Host "PASS: real UAC, launcher tray, WebView2 resource, lifecycle, and game smoke acceptance"

@@ -46,7 +46,7 @@ Kontrak utama launcher sudah diimplementasikan dan diverifikasi melalui test sui
 | Admin/read-only/offline/restart self-update acceptance | **Partial / manual** | Jalankan pada mesin release; kontrak ACL/lifecycle tetap diuji di CI |
 | Future features di luar WUT-5 sampai WUT-29 | **Planned** | Tidak menjadi bagian release gate ini |
 
-Acceptance game nyata, tray, WebView2, dan resource dijalankan pada runner Windows tepercaya. UAC interaktif, read-only, offline, dan restart self-update tetap memerlukan operator karena tidak aman untuk dipaksa pada runner CI.
+Acceptance game nyata, tray, WebView2, resource, lifecycle, dan probe elevasi UAC dijalankan pada runner Windows tepercaya yang interaktif. Read-only, offline, dan restart self-update tetap memerlukan operator karena tidak aman untuk dipaksa pada runner CI.
 
 ---
 
@@ -282,12 +282,12 @@ Checklist sebelum publish:
 ### CI/CD
 
 - Pull request, push `main`, dan push `feat/**` menjalankan job Ubuntu paralel untuk frontend/Rust serta job Windows untuk native regression, deterministic acceptance, dan binary build.
-- `windows-acceptance.yml` hanya berjalan terjadwal atau manual pada runner Windows self-hosted tepercaya. Set repository variable `WUWAID_ACCEPTANCE_GAME_PATH` ke instalasi game yang sudah ter-patch; workflow menyimpan evidence resource/tray dan memulihkan `settings.json`.
+- `windows-acceptance.yml` hanya berjalan terjadwal atau manual pada runner Windows self-hosted berlabel `wuwaid-trusted-windows`; label ini wajib dipasang hanya pada mesin tepercaya yang interaktif dan tidak pernah dipakai PR. Set repository variable `WUWAID_ACCEPTANCE_GAME_PATH` ke instalasi game yang sudah ter-patch; workflow menyimpan evidence resource/tray/lifecycle/UAC dan memulihkan `settings.json`.
 - Release memvalidasi checkout tepat pada tag `vX.Y.Z`, melakukan satu kompilasi Windows, membuat ZIP portable + `SHA256sums.txt`, lalu membuat provenance attestation. Publish menunggu approval environment `release-production`.
 - Distribusi tetap unsigned karena proyek belum memiliki sertifikat Authenticode. SHA-256 dan attestation menjadi bukti integritas/provenance; signing dapat ditambahkan bila sertifikat atau program OSS yang layak tersedia.
-- Aktifkan required checks `Frontend and JavaScript contracts`, `Rust checks`, dan `Windows regression and build` pada branch protection. Dependabot memeriksa npm, Cargo, dan GitHub Actions setiap minggu dengan cooldown tujuh hari.
+- Branch protection `main` mewajibkan review pull request, penyelesaian percakapan, dan required checks `Frontend and JavaScript contracts`, `Rust checks`, serta `Windows regression and build`. Dependabot memeriksa npm, Cargo, dan GitHub Actions setiap minggu dengan cooldown tujuh hari.
 
-Workflow release tidak membuat installer MSI/NSIS. UAC interaktif dan restart self-update tetap menjadi langkah operator pada mesin release.
+Workflow release tidak membuat installer MSI/NSIS. UAC interaktif pada runner acceptance dan restart self-update tetap menjadi langkah operator pada mesin release.
 
 ---
 

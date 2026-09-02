@@ -28,12 +28,20 @@ jobs:
     runs-on:
       - self-hosted
       - windows
+      - wuwaid-trusted-windows
     timeout-minutes: 120
     env:
       CARGOFLAGS: --locked
       ACCEPTANCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || 'main' }}
       ACCEPTANCE_GAME_PATH: ${{ inputs.game_path || vars.WUWAID_ACCEPTANCE_GAME_PATH }}
     steps:
+      - name: Initialize acceptance evidence
+        shell: pwsh
+        run: |
+          $evidence = Join-Path $env:RUNNER_TEMP "wuwaid-real-acceptance"
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+          "workflow=$env:GITHUB_WORKFLOW`nsha=$env:GITHUB_SHA" | Set-Content -LiteralPath (Join-Path $evidence "workflow-context.txt")
+
       - name: Validate trusted ref
         shell: pwsh
         run: |

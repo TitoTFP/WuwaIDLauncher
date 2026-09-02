@@ -7,6 +7,7 @@ param(
     [ValidateRange(0.1, 100)][double]$MaxWebViewCpuPercent = 1.0,
     [ValidateRange(1, 5000)][int]$MaxCadenceJitterMilliseconds = 1000,
     [bool]$RequireHiddenWindow = $true,
+    [bool]$RequireWebView = $true,
     [string]$OutputPath = ""
 )
 
@@ -363,6 +364,7 @@ $firstMemory = [double]$rows[0].LauncherPrivateMB
 $lastMemory = [double]$rows[$rows.Count - 1].LauncherPrivateMB
 $memoryGrowth = [Math]::Round($lastMemory - $firstMemory, 2)
 $visibleRows = @($rows | Where-Object { $_.WindowVisible -eq "true" })
+$webviewRows = @($rows | Where-Object { [int]$_.WebViewCount -gt 0 })
 $cadenceJitter = @($rows | ForEach-Object { [Math]::Abs(([double]$_.IntervalSeconds - $SampleIntervalSeconds) * 1000) })
 $maxCadenceJitter = ($cadenceJitter | Measure-Object -Maximum).Maximum
 $systemCpuAverage = [Math]::Round(($rows | Measure-Object -Property SystemCpuPercent -Average).Average, 2)
@@ -373,9 +375,12 @@ Write-Output ("launcherCpuP95={0}% launcherCpuMax={1}%" -f $launcherCpuP95, $lau
 Write-Output ("webviewCpuP95={0}% webviewCpuMax={1}%" -f $webviewCpuP95, $webviewCpuMax)
 Write-Output ("launcherPrivateMemoryStart={0}MB end={1}MB growth={2}MB" -f $firstMemory, $lastMemory, $memoryGrowth)
 Write-Output ("launcherReadBytes={0} launcherWriteBytes={1} webviewReadBytes={2} webviewWriteBytes={3}" -f $rows[$rows.Count - 1].LauncherReadBytes, $rows[$rows.Count - 1].LauncherWriteBytes, $rows[$rows.Count - 1].WebViewReadBytes, $rows[$rows.Count - 1].WebViewWriteBytes)
-Write-Output ("visibleWindowSamples={0} webviewPids={1} maxCadenceJitterMs={2} systemCpuAvg={3}% systemMemoryAvg={4}%" -f $visibleRows.Count, $webviewPids.Count, [Math]::Round($maxCadenceJitter, 2), $systemCpuAverage, $systemMemoryAverage)
+Write-Output ("visibleWindowSamples={0} webviewPids={1} webviewSamples={2} maxCadenceJitterMs={3} systemCpuAvg={4}% systemMemoryAvg={5}%" -f $visibleRows.Count, $webviewPids.Count, $webviewRows.Count, [Math]::Round($maxCadenceJitter, 2), $systemCpuAverage, $systemMemoryAverage)
 Write-Output ("rawSamples={0}" -f (Resolve-Path -LiteralPath $OutputPath))
 
+if ($RequireWebView -and $webviewRows.Count -eq 0) {
+    throw "Resource sampler did not observe a WebView2 process in the launcher process tree."
+}
 if ($RequireHiddenWindow -and $visibleRows.Count -gt 0) {
     throw "Launcher became visible during the tray sample."
 }

@@ -122,21 +122,28 @@ function Assert-WorkflowContract {
     $ciPath = Join-Path $workflowRoot "ci.yml"
     $releasePath = Join-Path $workflowRoot "release.yml"
     $acceptancePath = Join-Path $workflowRoot "windows-acceptance.yml"
+    $actionlintPath = Join-Path $workflowRoot "..\actionlint.yaml"
     $dependabotPath = Join-Path $workflowRoot "..\dependabot.yml"
     $gatePath = Join-Path $PSScriptRoot "windows-release-gate.ps1"
     $realAcceptancePath = Join-Path $PSScriptRoot "run-windows-real-acceptance.ps1"
+    $resourceAcceptancePath = Join-Path $PSScriptRoot "wut-launcher-resource.tests.ps1"
     Assert-True (Test-Path -LiteralPath $ciPath -PathType Leaf) "Professional CI workflow is required."
     Assert-True (Test-Path -LiteralPath $releasePath -PathType Leaf) "Professional release workflow is required."
     Assert-True (Test-Path -LiteralPath $acceptancePath -PathType Leaf) "Trusted Windows acceptance workflow is required."
+    Assert-True (Test-Path -LiteralPath $actionlintPath -PathType Leaf) "Custom runner labels must be declared for actionlint."
     Assert-True (Test-Path -LiteralPath $dependabotPath -PathType Leaf) "Dependabot configuration is required."
     Assert-True (Test-Path -LiteralPath $gatePath -PathType Leaf) "Windows release gate runner is required."
     Assert-True (Test-Path -LiteralPath $realAcceptancePath -PathType Leaf) "Real Windows acceptance runner is required."
+    Assert-True (Test-Path -LiteralPath $resourceAcceptancePath -PathType Leaf) "Resource acceptance runner is required."
 
     $ci = Get-Content -Raw -LiteralPath $ciPath
     $release = Get-Content -Raw -LiteralPath $releasePath
     $acceptance = Get-Content -Raw -LiteralPath $acceptancePath
+    $actionlint = Get-Content -Raw -LiteralPath $actionlintPath
     $dependabot = Get-Content -Raw -LiteralPath $dependabotPath
     $gate = Get-Content -Raw -LiteralPath $gatePath
+    $realAcceptance = Get-Content -Raw -LiteralPath $realAcceptancePath
+    $resourceAcceptance = Get-Content -Raw -LiteralPath $resourceAcceptancePath
     $allWorkflows = @(Get-ChildItem -LiteralPath $workflowRoot -Filter "*.yml" -File | Get-Content -Raw) -join "`n"
 
     Assert-True ($ci -match "permissions:\s*\r?\n\s+contents:\s+read") "CI must use read-only contents permission."
@@ -154,17 +161,25 @@ function Assert-WorkflowContract {
     Assert-True ($release -notmatch "RunCommandGate") "Release workflow must not rebuild through the optional command gate."
     Assert-True ($release -notmatch '\$hash  \*\$zipName') "Release checksum manifest must use sha256sum-compatible spacing."
     Assert-True ($ci -match "runs-on:\s+ubuntu-latest" -and $ci -match "runs-on:\s+windows-latest") "CI must keep hybrid Ubuntu and Windows jobs."
+    Assert-True ($ci -match "libwebkit2gtk-4\.1-dev") "Ubuntu jobs must install the Tauri GTK/WebKit development dependencies."
     Assert-True ($ci -match "node --test" -and $ci -match "wut-game-lifecycle") "CI must run JavaScript and Windows lifecycle regressions."
+    Assert-True ($ci -match "Lint Windows backend") "Windows CI must run clippy, not only Ubuntu."
+    Assert-True ($ci -match "ci-evidence-" -and $ci -match "always\(\)") "CI must upload bounded evidence after failures."
     Assert-True ($ci -match "test:patch-status") "CI must run the patch-status bridge regression."
     Assert-True ($ci -match "test:version") "CI must run the release version consistency regression."
     Assert-True ($acceptance -notmatch "pull_request") "Trusted acceptance must never run on pull requests."
-    Assert-True ($acceptance -match "self-hosted" -and $acceptance -match "schedule:" -and $acceptance -match "workflow_dispatch") "Trusted acceptance must be scheduled/manual on a self-hosted runner."
+    Assert-True ($actionlint -match "wuwaid-trusted-windows") "The trusted runner label must be allowlisted for actionlint."
+    Assert-True ($acceptance -match "self-hosted" -and $acceptance -match "wuwaid-trusted-windows" -and $acceptance -match "schedule:" -and $acceptance -match "workflow_dispatch") "Trusted acceptance must be uniquely targeted to a scheduled/manual self-hosted runner."
     Assert-True ($acceptance -match "WUWAID_ACCEPTANCE_GAME_PATH" -and $acceptance -match "run-windows-real-acceptance") "Trusted acceptance must run the real game smoke with a configured game path."
+    Assert-True ($realAcceptance -match "-Verb RunAs" -and $realAcceptance -match "Invoke-ElevationSmoke") "Real acceptance must exercise an explicit UAC elevation path."
+    Assert-True ($realAcceptance -match "RequireWebView" -and $realAcceptance -match "WebViewCount.*-gt 0" -and $realAcceptance -match "lifecycle restoration") "Real acceptance must require WebView2 and launcher lifecycle restoration."
+    Assert-True ($resourceAcceptance -match "RequireWebView" -and $resourceAcceptance -match "WebView2 process") "Resource acceptance must fail when WebView2 is not observed."
     Assert-True ($acceptance -match "if:\s+\$\{\{\s*always\(\)\s*\}\}") "Trusted acceptance must upload evidence after failures."
     Assert-True ($dependabot -match "package-ecosystem: npm" -and $dependabot -match "package-ecosystem: cargo" -and $dependabot -match "package-ecosystem: github-actions") "Dependabot must cover npm, Cargo, and Actions."
     Assert-True ($dependabot -match "cooldown:" -and $dependabot -match "default-days:\s+7") "Dependabot updates need a cooldown."
     Assert-True ($release -match "test:patch-status") "Release workflow must run the patch-status bridge regression."
     Assert-True ($release -match "test:version") "Release workflow must run the release version consistency regression."
+    Assert-True ($release -match "Initialize release evidence") "Release evidence must exist before checkout/build failures."
     Assert-True ($gate -match "test:patch-status") "Windows release gate must run the patch-status bridge regression."
     Assert-True ($gate -match "test:version") "Windows release gate must run the release version consistency regression."
     Assert-True ($gate -match "WUWAID_RELEASE_GATE_FIXTURE_ROOT") "Release commands must receive the run-owned fixture root."

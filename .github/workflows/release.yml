@@ -29,7 +29,15 @@ jobs:
       tag: ${{ steps.release.outputs.tag }}
     env:
       CARGOFLAGS: --locked
+      RUST_BACKTRACE: "1"
     steps:
+      - name: Initialize release evidence
+        shell: pwsh
+        run: |
+          $evidence = Join-Path $env:RUNNER_TEMP "wuwaid-release-gate-evidence"
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+          "workflow=$env:GITHUB_WORKFLOW`nsha=$env:GITHUB_SHA`nevent=$env:GITHUB_EVENT_NAME" | Set-Content -LiteralPath (Join-Path $evidence "workflow-context.txt")
+
       - name: Checkout exact release tag
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -211,6 +219,16 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Initialize publish evidence
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/wuwaid-release-publish-evidence"
+          {
+            echo "workflow=$GITHUB_WORKFLOW"
+            echo "sha=$GITHUB_SHA"
+            echo "event=$GITHUB_EVENT_NAME"
+          } > "$RUNNER_TEMP/wuwaid-release-publish-evidence/workflow-context.txt"
+
       - name: Download release payload
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -229,3 +247,24 @@ jobs:
             --notes-file release-payload/RELEASE_NOTES.md \
             "release-payload/WuwaIDLauncher-$RELEASE_TAG.zip" \
             release-payload/SHA256sums.txt
+
+      - name: Capture publish evidence
+        if: ${{ always() }}
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          evidence="$RUNNER_TEMP/wuwaid-release-publish-evidence"
+          {
+            echo "tag=$RELEASE_TAG"
+            echo "release_url=https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
+          } >> "$evidence/workflow-context.txt"
+
+      - name: Upload publish evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-publish-evidence-${{ github.run_number }}
+          path: ${{ runner.temp }}/wuwaid-release-publish-evidence
+          if-no-files-found: warn
+          retention-days: 30
