@@ -3028,6 +3028,29 @@ pub mod frontend_fixture {
         .map_err(|error| error.to_string())
     }
 
+    #[tauri::command(rename = "fixture_emit_game_exit")]
+    fn fixture_emit_game_exit<R: Runtime>(
+        app: AppHandle<R>,
+        id: String,
+        status: String,
+        reason: String,
+    ) -> Result<(), String> {
+        app.emit(
+            "onGameExit",
+            json!({"id": id, "status": status, "reason": reason}),
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    #[tauri::command(rename = "fixture_emit_launch_error")]
+    fn fixture_emit_launch_error<R: Runtime>(
+        app: AppHandle<R>,
+        error: String,
+    ) -> Result<(), String> {
+        app.emit("onLaunchError", error)
+            .map_err(|error| error.to_string())
+    }
+
     #[tauri::command(rename = "acknowledge_launcher_release_notes")]
     fn fixture_acknowledge_launcher_release_notes(_tag: String) {}
 
@@ -3073,6 +3096,8 @@ pub mod frontend_fixture {
                 fixture_get_launcher_release_notes,
                 fixture_emit_launcher_release_notes,
                 fixture_emit_patch_status,
+                fixture_emit_game_exit,
+                fixture_emit_launch_error,
                 fixture_acknowledge_launcher_release_notes,
                 fixture_check_launcher_update,
             ])
@@ -3083,7 +3108,13 @@ pub mod frontend_fixture {
             .unwrap();
 
         let mut listeners = Vec::new();
-        for event_name in ["onPatchStatus", "onMediaStatus", "onLauncherReleaseNotes"] {
+        for event_name in [
+            "onPatchStatus",
+            "onMediaStatus",
+            "onLauncherReleaseNotes",
+            "onGameExit",
+            "onLaunchError",
+        ] {
             let event_name = event_name.to_string();
             let listener_event_name = event_name.clone();
             let event_output = Arc::clone(&output);

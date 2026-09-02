@@ -385,6 +385,16 @@ export class LauncherState implements ILauncherState {
     return task;
   }
 
+  private refreshCurrentPatchStatus() {
+    if (!this.gamePath) return;
+    void this.requestPatchStatus(
+      this.gamePath,
+      this.config.installMethod,
+    ).catch(() => {
+      // Launch validation remains authoritative when this best-effort refresh fails.
+    });
+  }
+
   async updateUidSelection(uidMode: UidMode, uidText: string): Promise<void> {
     if (!isValidUidText(uidText)) {
       throw new Error("Teks UID custom tidak valid.");
@@ -752,6 +762,9 @@ export class LauncherState implements ILauncherState {
       onLaunchError: (err) => {
         this.endCurrentOperation("launch");
         this.launching = false;
+        if (/patch_not_ready/i.test(err || "")) {
+          this.refreshCurrentPatchStatus();
+        }
         this.clearStatus();
         const detail = compactText(err || "");
         this.showToast(
@@ -774,6 +787,7 @@ export class LauncherState implements ILauncherState {
         this.launching = false;
         this.gameRunning = false;
         this.clearStatus();
+        this.refreshCurrentPatchStatus();
         const toast = gameExitToast(payload);
         this.showToast(toast.message, toast.kind);
       },
