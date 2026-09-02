@@ -404,7 +404,9 @@ fn run_handoff_script(path: &Path) -> std::process::ExitStatus {
             "%SystemRoot%\\System32\\fc.exe",
         );
     }
-    fs::write(path, script).unwrap();
+    fs::write(path, &script).unwrap();
+    let debug_path = path.with_extension("debug.cmd");
+    fs::write(&debug_path, &script).unwrap();
     let pid_file = launcher_fixture_pid_path(path.parent().unwrap());
     let mut command = Command::new(windows_system_executable("cmd.exe"));
     let mut child = command
@@ -421,10 +423,11 @@ fn run_handoff_script(path: &Path) -> std::process::ExitStatus {
             if !status.success() {
                 eprintln!(
                     "update handoff script failed with {status}:\n{}",
-                    fs::read_to_string(path)
+                    fs::read_to_string(&debug_path)
                         .unwrap_or_else(|error| format!("<unreadable: {error}>"))
                 );
             }
+            let _ = fs::remove_file(&debug_path);
             return status;
         }
         assert!(Instant::now() < deadline, "update handoff script timed out");
