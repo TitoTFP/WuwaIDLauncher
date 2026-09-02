@@ -96,6 +96,16 @@ fn current_game_entry(object: &Map<String, Value>, key: &str) -> Option<Map<Stri
     migrate_legacy_entry(object, key)
 }
 
+fn valid_patch_variant(value: &str) -> bool {
+    if matches!(value, "normal" | "hide_uid") {
+        return true;
+    }
+    value
+        .strip_prefix("custom_uid_")
+        .map(|hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .unwrap_or(false)
+}
+
 pub fn read_game_field(
     path: &Path,
     game_path: &Path,
@@ -257,12 +267,12 @@ pub fn update_installation_with_variant(
         );
         let variant = patch_variant
             .map(str::trim)
-            .filter(|value| matches!(*value, "normal" | "hide_uid"))
+            .filter(|value| valid_patch_variant(value))
             .or_else(|| {
                 entry
                     .get("_patchVariant")
                     .and_then(Value::as_str)
-                    .filter(|value| matches!(*value, "normal" | "hide_uid"))
+                    .filter(|value| valid_patch_variant(value))
             })
             .unwrap_or("normal");
         entry.insert(
@@ -372,6 +382,30 @@ mod tests {
         assert_eq!(
             read_game_field(&path, &game, "_patchVariant").unwrap(),
             Some("hide_uid".to_string())
+        );
+    }
+
+    #[test]
+    fn uid_customization_metadata_accepts_text_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("versions.json");
+        let game = temp.path().join("game");
+        fs::create_dir_all(&game).unwrap();
+        let identity = format!("custom_uid_{}", "a".repeat(64));
+
+        update_installation_with_variant(
+            &path,
+            &game,
+            Some("v1"),
+            "resource_mount",
+            None,
+            Some(&identity),
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_game_field(&path, &game, "_patchVariant").unwrap(),
+            Some(identity)
         );
     }
 

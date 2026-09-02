@@ -1,7 +1,13 @@
 <script lang="ts">
+  import { slide } from 'svelte/transition';
   import { appState } from '../lib/launcherState.svelte.ts';
-  import { INSTALL_METHOD_OPTIONS } from '../lib/types';
-  import type { InstallMethod } from '../lib/types';
+  import {
+    INSTALL_METHOD_OPTIONS,
+    isEffectivelyEmptyUidText,
+    isValidUidText,
+    MAX_UID_TEXT_LENGTH,
+  } from '../lib/types.ts';
+  import type { InstallMethod, UidMode } from '../lib/types.ts';
 
   interface Props {
     open?: boolean;
@@ -9,6 +15,22 @@
   }
 
   let { open = false, onclose }: Props = $props();
+
+  let uidPreview = $derived(
+    appState.config.uidMode === 'default'
+      ? 'ID Pengguna: {0}'
+      : isEffectivelyEmptyUidText(appState.config.uidText)
+        ? 'UID disembunyikan'
+        : appState.config.uidText,
+  );
+
+  let uidDisabled = $derived(
+    appState.gameRunning ||
+      appState.launching ||
+      appState.isOperationBlocked('folder') ||
+      appState.isOperationBlocked('method-switch') ||
+      appState.isOperationBlocked('install'),
+  );
 
   let methodDisabled = $derived(
     appState.gameRunning ||
@@ -18,12 +40,6 @@
   );
 
   let dx11Disabled = $derived(
-    appState.isOperationBlocked('folder') ||
-      appState.isOperationBlocked('method-switch') ||
-      appState.isOperationBlocked('install'),
-  );
-
-  let hideUidDisabled = $derived(
     appState.isOperationBlocked('folder') ||
       appState.isOperationBlocked('method-switch') ||
       appState.isOperationBlocked('install'),
@@ -71,17 +87,30 @@
     }
   }
 
-  async function handleHideUidChange(event: Event) {
-    appState.config.hideUid = (event.currentTarget as HTMLInputElement).checked;
-    try {
-      await appState.saveConfig();
-      if (appState.gamePath) {
-        await appState.requestPatchStatus(appState.gamePath, appState.config.installMethod);
-      }
-      appState.setStatus('Pilihan sembunyikan UID diperbarui.');
-    } catch (error) {
-      appState.setStatus('Pilihan sembunyikan UID tidak dapat diterapkan.', errorMessage(error));
+  function applyUidSelection(mode: UidMode, text: string) {
+    if (uidDisabled) {
+      appState.setStatus('Identitas UID tidak dapat diubah saat operasi berjalan.');
+      return;
     }
+    void appState.updateUidSelection(mode, text).catch((error) => {
+      appState.setStatus('Identitas UID tidak dapat diterapkan.', errorMessage(error));
+    });
+  }
+
+  function selectUidMode(mode: UidMode) {
+    applyUidSelection(mode, appState.config.uidText);
+  }
+
+  function handleCustomUidInput(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    if (!isValidUidText(input.value)) {
+      input.value = appState.config.uidText;
+      appState.setStatus(
+        `Teks UID harus satu baris dan maksimal ${MAX_UID_TEXT_LENGTH} karakter.`,
+      );
+      return;
+    }
+    applyUidSelection('custom', input.value);
   }
 
   function handleKeydown(event: KeyboardEvent) {
@@ -145,23 +174,65 @@
         </div>
       </section>
 
-      <section class="settings-section" aria-labelledby="privacyHeading">
-        <h2 class="section-title" id="privacyHeading">PRIVASI</h2>
-        <div class="option-list">
-          <label class="option-row" for="settingsHideUid">
-            <span class="option-name">Sembunyikan UID</span>
-            <span class="settings-switch">
-              <input
-                id="settingsHideUid"
-                type="checkbox"
-                checked={!!appState.config.hideUid}
-                disabled={hideUidDisabled}
-                onchange={handleHideUidChange}
-              />
-              <span class="switch-track" aria-hidden="true"></span>
-            </span>
-          </label>
+      <section class="settings-section" aria-labelledby="uidHeading">
+        <h2 class="section-title" id="uidHeading">IDENTITAS UID</h2>
+        <div class="uid-editor">
+          <div class="uid-mode-grid" role="group" aria-label="Mode tampilan UID">
+            <button
+              class="uid-mode-card"
+              class:active={appState.config.uidMode === 'default'}
+              aria-pressed={appState.config.uidMode === 'default'}
+              disabled={uidDisabled}
+              onclick={() => selectUidMode('default')}
+              type="button"
+            >
+              <span class="uid-mode-card__top">
+                <span class="uid-mode-card__title">DEFAULT</span>
+                <span class="uid-mode-card__mark" aria-hidden="true">✓</span>
+              </span>
+            </button>
+            <button
+              class="uid-mode-card"
+              class:active={appState.config.uidMode === 'custom'}
+              aria-pressed={appState.config.uidMode === 'custom'}
+              disabled={uidDisabled}
+              onclick={() => selectUidMode('custom')}
+              type="button"
+            >
+              <span class="uid-mode-card__top">
+                <span class="uid-mode-card__title">CUSTOM</span>
+                <span class="uid-mode-card__mark" aria-hidden="true">✓</span>
+              </span>
+            </button>
+          </div>
+
+          {#if appState.config.uidMode === 'custom'}
+            <div class="uid-input-field" transition:slide={{ duration: 180 }}>
+              <label class="uid-input-label" for="settingsCustomUid">TEKS CUSTOM</label>
+              <div class="uid-input-shell">
+                <input
+                  id="settingsCustomUid"
+                  class="uid-input"
+                  type="text"
+                  value={appState.config.uidText}
+                  autocomplete="off"
+                  placeholder={'ID Pengguna: {0}'}
+                  disabled={uidDisabled}
+                  oninput={handleCustomUidInput}
+                />
+              </div>
+            </div>
+          {/if}
+
+          <div class="uid-preview">
+            <div class="uid-preview__copy">
+              <span class="uid-preview__label">PREVIEW DI GAME</span>
+              <strong>{uidPreview}</strong>
+            </div>
+          </div>
+
         </div>
+        <p class="uid-note"><span aria-hidden="true">i</span> Perubahan tersimpan otomatis dan berlaku saat patch dipasang ulang.</p>
       </section>
 
       <section class="settings-section" aria-labelledby="optimizationHeading">
@@ -293,6 +364,179 @@
     color: var(--accent-gold);
     font-size: 10px;
     letter-spacing: 0.17em;
+    font-weight: 900;
+  }
+
+  .uid-editor {
+    padding: 14px;
+    background: rgba(255, 255, 255, 0.025);
+    border: 1px solid rgba(212, 176, 108, 0.24);
+    clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+  }
+
+  .uid-preview {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .uid-input-label,
+  .uid-preview__label {
+    color: var(--text-1);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 0.11em;
+  }
+
+  .uid-mode-grid {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  .uid-mode-card {
+    min-height: 0;
+    flex: 0 0 auto;
+    padding: 8px 10px;
+    color: var(--text-2);
+    text-align: left;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(212, 176, 108, 0.2);
+    clip-path: polygon(7px 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%, 0 7px);
+    transition: background var(--dur), border-color var(--dur), color var(--dur), transform var(--dur);
+  }
+
+  .uid-mode-card:hover:not(:disabled) {
+    color: var(--text-1);
+    background: rgba(212, 176, 108, 0.07);
+    border-color: rgba(212, 176, 108, 0.5);
+    transform: translateY(-1px);
+  }
+
+  .uid-mode-card:disabled {
+    cursor: default;
+    opacity: 0.58;
+  }
+
+  .uid-mode-card.active {
+    color: #111;
+    background: linear-gradient(135deg, #aad6d9, #e7d394);
+    border-color: var(--accent-gold);
+    box-shadow: 0 8px 20px rgba(244, 212, 138, 0.12);
+  }
+
+  .uid-mode-card__top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .uid-mode-card__title {
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: 0.06em;
+  }
+
+  .uid-mode-card__mark {
+    display: grid;
+    place-items: center;
+    width: 15px;
+    height: 15px;
+    color: transparent;
+    border: 1px solid currentColor;
+    font-size: 10px;
+  }
+
+  .uid-mode-card.active .uid-mode-card__mark {
+    color: #111;
+    background: rgba(255, 255, 255, 0.28);
+  }
+
+  .uid-input-field {
+    margin-top: 12px;
+  }
+
+  .uid-input-shell {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    height: 40px;
+    margin-top: 6px;
+    padding: 0 11px;
+    background: rgba(4, 12, 17, 0.5);
+    border: 1px solid rgba(212, 176, 108, 0.38);
+    transition: border-color var(--dur), box-shadow var(--dur);
+  }
+
+  .uid-input-shell:focus-within {
+    border-color: var(--accent-gold);
+    box-shadow: 0 0 14px rgba(244, 212, 138, 0.1);
+  }
+
+  .uid-input {
+    min-width: 0;
+    flex: 1;
+    height: 100%;
+    padding: 0;
+    color: var(--text-1);
+    background: transparent;
+    border: 0;
+    outline: 0;
+    user-select: text;
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+  }
+
+  .uid-input::placeholder {
+    color: var(--text-3);
+  }
+
+  .uid-preview {
+    margin-top: 12px;
+    padding: 10px 11px;
+    background: rgba(121, 203, 208, 0.07);
+    border-left: 2px solid var(--accent-orange);
+  }
+
+  .uid-preview__copy {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+  }
+
+  .uid-preview__label {
+    color: var(--accent-orange);
+    font-size: 8px;
+  }
+
+  .uid-preview strong {
+    overflow: hidden;
+    color: var(--text-1);
+    font-size: 13px;
+    letter-spacing: 0.04em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .uid-note {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 8px 2px 0;
+    color: var(--text-3);
+    font-size: 9px;
+  }
+
+  .uid-note span {
+    display: grid;
+    place-items: center;
+    width: 13px;
+    height: 13px;
+    color: var(--accent-orange);
+    border: 1px solid currentColor;
+    font-size: 8px;
     font-weight: 900;
   }
 
@@ -514,5 +758,14 @@
     .method-grid {
       grid-template-columns: 1fr;
     }
+
+    .uid-mode-grid {
+      flex-direction: column;
+    }
+
+    .uid-mode-card {
+      width: 100%;
+    }
+
   }
 </style>

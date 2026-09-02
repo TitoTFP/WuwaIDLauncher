@@ -1848,7 +1848,8 @@ async fn check_patch_status<R: Runtime>(
     app: AppHandle<R>,
     game_path: String,
     install_method: String,
-    hide_uid: bool,
+    uid_mode: String,
+    uid_text: String,
 ) -> Result<(), String> {
     let method = match engine::method::InstallMethod::parse(&install_method) {
         Ok(method) => method,
@@ -1859,13 +1860,33 @@ async fn check_patch_status<R: Runtime>(
                     "status": "invalid",
                     "gamePath": game_path,
                     "installMethod": install_method,
-                    "hideUid": hide_uid,
+                    "uidMode": uid_mode,
+                    "uidText": uid_text,
                     "message": error
                 }),
             );
             return Ok(());
         }
     };
+
+    let desired_variant =
+        match engine::patch_asset::PatchVariant::from_uid_selection(&uid_mode, &uid_text) {
+            Ok(variant) => variant,
+            Err(error) => {
+                let _ = app.emit(
+                    "onPatchStatus",
+                    serde_json::json!({
+                        "status": "invalid",
+                        "gamePath": game_path,
+                        "installMethod": method.as_str(),
+                        "uidMode": uid_mode,
+                        "uidText": uid_text,
+                        "message": error
+                    }),
+                );
+                return Ok(());
+            }
+        };
 
     let normalized_path = match normalized_regular_game_path(&game_path) {
         Some(path) => path,
@@ -1876,7 +1897,8 @@ async fn check_patch_status<R: Runtime>(
                     "status": "invalid",
                     "gamePath": game_path,
                     "installMethod": method.as_str(),
-                    "hideUid": hide_uid,
+                    "uidMode": uid_mode,
+                    "uidText": uid_text,
                     "message": "Folder game tidak valid atau executable game tidak ditemukan."
                 }),
             );
@@ -1892,7 +1914,6 @@ async fn check_patch_status<R: Runtime>(
     {
         local = engine::patch_status::LocalPatchState::Invalid;
     }
-    let desired_variant = engine::patch_asset::PatchVariant::from_hide_uid(hide_uid);
     if matches!(local, engine::patch_status::LocalPatchState::Ready) {
         let metadata_path = get_appdata_dir().join("versions.json");
         let installed_variant =
@@ -1923,7 +1944,8 @@ async fn check_patch_status<R: Runtime>(
             "status": status.as_str(),
             "gamePath": normalized_path,
             "installMethod": method.as_str(),
-            "hideUid": hide_uid,
+            "uidMode": uid_mode,
+            "uidText": uid_text,
             "currentVersion": current_version,
             "latestVersion": latest_version
         }),
@@ -2030,6 +2052,14 @@ fn prepare_cached_patch_asset(
         engine::patch_asset::PatchVariant::HideUid => {
             engine::patch_asset::prepare_hide_uid_pak(pak_path, expected_hash, cache_dir)
         }
+        engine::patch_asset::PatchVariant::Custom(uid_text) => {
+            engine::patch_asset::prepare_custom_uid_pak(
+                pak_path,
+                expected_hash,
+                cache_dir,
+                &uid_text,
+            )
+        }
     }
 }
 
@@ -2050,12 +2080,12 @@ async fn prepare_patch_asset<R: Runtime>(
     let pak_path = cache_dir.join(asset_name);
     ensure_cached_patch_asset(app, asset_name, &pak_path, &expected_hash).await?;
 
-    if variant == engine::patch_asset::PatchVariant::HideUid {
+    if !matches!(&variant, engine::patch_asset::PatchVariant::Normal) {
         let _ = app.emit(
             "onProgressUpdate",
             serde_json::json!({
                 "percent": 88,
-                "status": "Membuat PAK Hide UID..."
+                "status": "Membuat PAK UID custom..."
             }),
         );
     }
@@ -2074,7 +2104,8 @@ fn start_installation<R: Runtime>(
     game_path: String,
     _vh_mode: String,
     install_method: String,
-    hide_uid: bool,
+    uid_mode: String,
+    uid_text: String,
 ) -> Result<(), String> {
     let method = match engine::method::InstallMethod::parse(&install_method) {
         Ok(method) => method,
@@ -2083,6 +2114,14 @@ fn start_installation<R: Runtime>(
             return Ok(());
         }
     };
+    let patch_variant =
+        match engine::patch_asset::PatchVariant::from_uid_selection(&uid_mode, &uid_text) {
+            Ok(variant) => variant,
+            Err(error) => {
+                let _ = app.emit("onInstallError", error);
+                return Ok(());
+            }
+        };
     let operation = engine::operations::global()
         .try_acquire(engine::operations::OperationKind::PatchInstall)?;
     let normalized_game_path =
@@ -2102,12 +2141,12 @@ fn start_installation<R: Runtime>(
         return Err(error);
     }
     let canonical_method = method.as_str().to_string();
-    let patch_variant = engine::patch_asset::PatchVariant::from_hide_uid(hide_uid);
+    let patch_variant_id = patch_variant.identity();
     log::info!(
         "Start installation: path={}, method={}, variant={}",
         normalized_game_path,
         canonical_method,
-        patch_variant.as_str()
+        patch_variant_id
     );
 
     let app_handle = app.clone();
@@ -2154,13 +2193,14 @@ fn start_installation<R: Runtime>(
             .or_else(|| known_patch_version(&versions_path, p))
             .unwrap_or_else(|| "unknown".to_string());
 
-        let cache_pak = match prepare_patch_asset(&app_handle, &checksums, patch_variant).await {
-            Ok(path) => path,
-            Err(error) => {
-                let _ = app_handle.emit("onInstallError", error);
-                return;
-            }
-        };
+        let cache_pak =
+            match prepare_patch_asset(&app_handle, &checksums, patch_variant.clone()).await {
+                Ok(path) => path,
+                Err(error) => {
+                    let _ = app_handle.emit("onInstallError", error);
+                    return;
+                }
+            };
 
         let loader_cache = if method == engine::method::InstallMethod::Loader {
             let loader_cache = get_appdata_dir().join("Cache").join("winhttp.dll");
@@ -2266,7 +2306,7 @@ fn start_installation<R: Runtime>(
                     Some(&patch_version),
                     &canonical_method,
                     loader_sha256.as_deref(),
-                    Some(patch_variant.as_str()),
+                    Some(&patch_variant_id),
                 )
             },
         ) {
@@ -2966,6 +3006,28 @@ pub mod frontend_fixture {
         .map_err(|error| error.to_string())
     }
 
+    #[tauri::command(rename = "fixture_emit_patch_status")]
+    fn fixture_emit_patch_status<R: Runtime>(
+        app: AppHandle<R>,
+        status: String,
+        game_path: String,
+        install_method: String,
+        uid_mode: String,
+        uid_text: String,
+    ) -> Result<(), String> {
+        app.emit(
+            "onPatchStatus",
+            json!({
+                "status": status,
+                "gamePath": game_path,
+                "installMethod": install_method,
+                "uidMode": uid_mode,
+                "uidText": uid_text
+            }),
+        )
+        .map_err(|error| error.to_string())
+    }
+
     #[tauri::command(rename = "acknowledge_launcher_release_notes")]
     fn fixture_acknowledge_launcher_release_notes(_tag: String) {}
 
@@ -3010,6 +3072,7 @@ pub mod frontend_fixture {
                 fixture_get_vh_release_notes,
                 fixture_get_launcher_release_notes,
                 fixture_emit_launcher_release_notes,
+                fixture_emit_patch_status,
                 fixture_acknowledge_launcher_release_notes,
                 fixture_check_launcher_update,
             ])
@@ -3214,6 +3277,37 @@ mod tests {
             &temp.path().join("invalid-source-cache"),
         );
         assert!(invalid_pak_error.contains("Struktur PAK rilis tidak valid"));
+    }
+
+    #[test]
+    fn uid_customization_custom_preparation_never_falls_back_to_normal_pak() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source, hash) = create_local_patch_source(temp.path(), false, "normal-only");
+        let cache = temp.path().join("custom-cache");
+        let source_before = std::fs::read(&source).unwrap();
+
+        let error = prepare_cached_patch_asset(
+            &source,
+            &hash,
+            &cache,
+            engine::patch_asset::PatchVariant::Custom("Halo Nozomi".to_string()),
+        )
+        .unwrap_err();
+
+        assert_eq!(std::fs::read(&source).unwrap(), source_before);
+        assert!(error.contains("hide_uid_database_missing"));
+        let has_pak_output = std::fs::read_dir(&cache)
+            .map(|entries| {
+                entries.flatten().any(|entry| {
+                    entry
+                        .path()
+                        .extension()
+                        .map(|extension| extension == "pak")
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+        assert!(!has_pak_output, "custom failure produced a fallback PAK");
     }
 
     #[test]
@@ -4331,7 +4425,8 @@ mod tests {
             app.handle().clone(),
             legacy_game_path.to_string_lossy().to_string(),
             "loader".to_string(),
-            false,
+            "default".to_string(),
+            String::new(),
         )
         .await
         .unwrap();
@@ -4400,7 +4495,8 @@ mod tests {
             app.handle().clone(),
             String::new(),
             "bogus".to_string(),
-            false,
+            "default".to_string(),
+            String::new(),
         )
         .await
         .unwrap();
@@ -4762,7 +4858,8 @@ mod tests {
                     "gamePath": game.path().to_string_lossy(),
                     "vhMode": "standard",
                     "installMethod": "unknown",
-                    "hideUid": false,
+                    "uidMode": "default",
+                    "uidText": "",
                 }),
             ),
             Ok(()),
@@ -4781,7 +4878,12 @@ mod tests {
             &window,
             ipc_request(
                 "check_patch_status",
-                serde_json::json!({"gamePath": "", "installMethod": "unknown", "hideUid": false}),
+                serde_json::json!({
+                    "gamePath": "",
+                    "installMethod": "unknown",
+                    "uidMode": "default",
+                    "uidText": ""
+                }),
             ),
             Ok(()),
         );

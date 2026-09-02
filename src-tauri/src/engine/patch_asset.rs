@@ -1,5 +1,8 @@
-use crate::engine::{downloader, installer, repak};
+use crate::engine::{
+    downloader, installer, is_effectively_empty_uid_text, repak, validate_uid_text,
+};
 use rusqlite::{params, Connection};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,10 +19,11 @@ const UID_TARGET_IDS: [&str; 3] = [
 ];
 const MAX_PAK_BYTES: u64 = 128 * 1024 * 1024;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PatchVariant {
     Normal,
     HideUid,
+    Custom(String),
 }
 
 impl PatchVariant {
@@ -31,16 +35,47 @@ impl PatchVariant {
         }
     }
 
-    pub const fn as_str(self) -> &'static str {
+    pub fn from_uid_selection(uid_mode: &str, uid_text: &str) -> Result<Self, String> {
+        validate_uid_text(uid_text)?;
+        match uid_mode {
+            "default" => Ok(Self::Normal),
+            "custom" if is_effectively_empty_uid_text(uid_text) => Ok(Self::HideUid),
+            "custom" => Ok(Self::Custom(uid_text.to_string())),
+            _ => Err("uid_mode_invalid: mode UID harus DEFAULT atau CUSTOM".to_string()),
+        }
+    }
+
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Normal => "normal",
             Self::HideUid => "hide_uid",
+            Self::Custom(_) => "custom_uid",
+        }
+    }
+
+    pub fn identity(&self) -> String {
+        match self {
+            Self::Normal => "normal".to_string(),
+            Self::HideUid => "hide_uid".to_string(),
+            Self::Custom(text) => format!("custom_uid_{}", uid_text_hash(text)),
+        }
+    }
+
+    pub fn cache_version(&self) -> String {
+        match self {
+            Self::Normal => "normal".to_string(),
+            Self::HideUid => HIDE_UID_PATCH_VERSION.to_string(),
+            Self::Custom(_) => self.identity(),
         }
     }
 }
 
+fn uid_text_hash(value: &str) -> String {
+    hex::encode(Sha256::digest(value.as_bytes()))
+}
+
 pub fn installed_variant_matches(installed: Option<&str>, desired: PatchVariant) -> bool {
-    installed.unwrap_or("normal") == desired.as_str()
+    installed.unwrap_or("normal") == desired.identity()
 }
 
 fn valid_sha256(value: &str) -> bool {
@@ -121,7 +156,7 @@ fn write_derived_hash(pak_path: &Path, hash: &str) -> Result<(), String> {
         .map_err(|error| format!("hide_uid_hash_activate_failed: {error}"))
 }
 
-fn patch_uid_database(database: &Path) -> Result<(), String> {
+fn patch_uid_database(database: &Path, replacement: &str) -> Result<(), String> {
     if !database.is_file() {
         return Err(format!("hide_uid_database_missing: {}", database.display()));
     }
@@ -152,7 +187,7 @@ fn patch_uid_database(database: &Path) -> Result<(), String> {
         let changed = transaction
             .execute(
                 &format!("UPDATE {UID_TABLE_NAME} SET Content = ?1 WHERE Id = ?2"),
-                params![HIDE_UID_REPLACEMENT, id],
+                params![replacement, id],
             )
             .map_err(|error| format!("hide_uid_database_update_failed:{id}: {error}"))?;
         if changed != 1 {
@@ -184,9 +219,9 @@ fn patch_uid_database(database: &Path) -> Result<(), String> {
                 |row| row.get(0),
             )
             .map_err(|error| format!("hide_uid_database_verify_query_failed:{id}: {error}"))?;
-        if content != HIDE_UID_REPLACEMENT {
+        if content != replacement {
             return Err(format!(
-                "hide_uid_database_verify_failed: {id} bukan karakter pengganti"
+                "hide_uid_database_verify_failed: {id} hasil patch tidak sesuai"
             ));
         }
     }
@@ -202,12 +237,49 @@ pub fn prepare_hide_uid_pak(
     prepare_hide_uid_pak_with_version(source_pak, source_hash, cache_dir, HIDE_UID_PATCH_VERSION)
 }
 
+pub fn prepare_custom_uid_pak(
+    source_pak: &Path,
+    source_hash: &str,
+    cache_dir: &Path,
+    uid_text: &str,
+) -> Result<PathBuf, String> {
+    let variant = PatchVariant::from_uid_selection("custom", uid_text)?;
+    prepare_uid_pak_with_version(
+        source_pak,
+        source_hash,
+        cache_dir,
+        if is_effectively_empty_uid_text(uid_text) {
+            HIDE_UID_REPLACEMENT
+        } else {
+            uid_text
+        },
+        &variant.cache_version(),
+    )
+}
+
 pub(crate) fn prepare_hide_uid_pak_with_version(
     source_pak: &Path,
     source_hash: &str,
     cache_dir: &Path,
     patch_version: &str,
 ) -> Result<PathBuf, String> {
+    prepare_uid_pak_with_version(
+        source_pak,
+        source_hash,
+        cache_dir,
+        HIDE_UID_REPLACEMENT,
+        patch_version,
+    )
+}
+
+fn prepare_uid_pak_with_version(
+    source_pak: &Path,
+    source_hash: &str,
+    cache_dir: &Path,
+    replacement: &str,
+    patch_version: &str,
+) -> Result<PathBuf, String> {
+    validate_uid_text(replacement)?;
     if !valid_patch_version(patch_version) {
         return Err("hide_uid_patch_version_invalid: versi patch tidak valid".to_string());
     }
@@ -233,7 +305,7 @@ pub(crate) fn prepare_hide_uid_pak_with_version(
         let unpacked = work.join("unpacked");
         let temporary = work.join("hide_uid.pak");
         repak::unpack_v12(source_pak, &unpacked)?;
-        patch_uid_database(&unpacked.join(UID_DATABASE_RELATIVE_PATH))?;
+        patch_uid_database(&unpacked.join(UID_DATABASE_RELATIVE_PATH), replacement)?;
         repak::pack_v12(&unpacked, &temporary)?;
 
         let size = fs::metadata(&temporary)
@@ -330,13 +402,40 @@ mod tests {
     }
 
     #[test]
+    fn uid_customization_variants_use_text_identity_and_validate_input() {
+        assert_eq!(
+            PatchVariant::from_uid_selection("default", "Halo").unwrap(),
+            PatchVariant::Normal
+        );
+        assert_eq!(
+            PatchVariant::from_uid_selection("custom", "\u{FEFF}").unwrap(),
+            PatchVariant::HideUid
+        );
+        assert_eq!(
+            PatchVariant::from_uid_selection("custom", " \u{FEFF} ").unwrap(),
+            PatchVariant::HideUid
+        );
+
+        let halo = PatchVariant::from_uid_selection("custom", "Halo").unwrap();
+        let nozomi = PatchVariant::from_uid_selection("custom", "Nozomi").unwrap();
+        assert_ne!(halo.identity(), nozomi.identity());
+        assert_ne!(halo.cache_version(), nozomi.cache_version());
+        let halo_identity = halo.identity();
+        assert!(installed_variant_matches(Some(&halo_identity), halo));
+
+        assert!(PatchVariant::from_uid_selection("unknown", "Halo").is_err());
+        assert!(PatchVariant::from_uid_selection("custom", &"x".repeat(65)).is_err());
+        assert!(PatchVariant::from_uid_selection("custom", "bad\ntext").is_err());
+    }
+
+    #[test]
     fn patches_only_uid_records() {
         let temp = tempfile::tempdir().unwrap();
         let database = temp.path().join("lang_multi_text.db");
         create_database(&database, false);
         assert_eq!(HIDE_UID_REPLACEMENT, "\u{3164}");
 
-        patch_uid_database(&database).unwrap();
+        patch_uid_database(&database, HIDE_UID_REPLACEMENT).unwrap();
         let connection = Connection::open(database).unwrap();
         for id in UID_TARGET_IDS {
             let content: String = connection
@@ -370,13 +469,13 @@ mod tests {
             )
             .unwrap();
         drop(connection);
-        assert!(patch_uid_database(&missing)
+        assert!(patch_uid_database(&missing, HIDE_UID_REPLACEMENT)
             .unwrap_err()
             .contains("hide_uid_target_count_invalid"));
 
         let duplicate = temp.path().join("duplicate.db");
         create_database(&duplicate, true);
-        assert!(patch_uid_database(&duplicate)
+        assert!(patch_uid_database(&duplicate, HIDE_UID_REPLACEMENT)
             .unwrap_err()
             .contains("hide_uid_target_count_invalid"));
     }
@@ -446,5 +545,51 @@ mod tests {
                 .unwrap();
         assert_ne!(regenerated, new_algorithm);
         assert!(installer::validate_pak_file(&new_algorithm).unwrap());
+    }
+
+    #[test]
+    fn uid_customization_patches_exact_text_and_rekeys_cache() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join(NORMAL_PAK_FILE_NAME);
+        let cache = temp.path().join("cache");
+        let uid_text = "Halo Nozomi ✦ 2026!";
+        create_source_pak(&source);
+        let source_hash = downloader::compute_sha256(&source).unwrap();
+
+        let generated = prepare_custom_uid_pak(&source, &source_hash, &cache, uid_text).unwrap();
+        let unpacked = temp.path().join("verified-custom");
+        repak_tools::unpack_v12(&generated, &unpacked).unwrap();
+        let connection = Connection::open(unpacked.join(UID_DATABASE_RELATIVE_PATH)).unwrap();
+        for id in UID_TARGET_IDS {
+            let content: String = connection
+                .query_row(
+                    "SELECT Content FROM MultiText WHERE Id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(content, uid_text);
+        }
+
+        let second = prepare_custom_uid_pak(&source, &source_hash, &cache, uid_text).unwrap();
+        assert_eq!(generated, second);
+        let other = prepare_custom_uid_pak(&source, &source_hash, &cache, "Nozomi").unwrap();
+        assert_ne!(generated, other);
+
+        let hidden = prepare_custom_uid_pak(&source, &source_hash, &cache, "\u{FEFF}").unwrap();
+        let hidden_unpacked = temp.path().join("verified-hidden");
+        repak_tools::unpack_v12(&hidden, &hidden_unpacked).unwrap();
+        let hidden_connection =
+            Connection::open(hidden_unpacked.join(UID_DATABASE_RELATIVE_PATH)).unwrap();
+        for id in UID_TARGET_IDS {
+            let content: String = hidden_connection
+                .query_row(
+                    "SELECT Content FROM MultiText WHERE Id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(content, HIDE_UID_REPLACEMENT);
+        }
     }
 }

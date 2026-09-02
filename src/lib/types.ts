@@ -59,12 +59,34 @@ export type PatchState =
   | "invalid"
   | "error";
 
+export type UidMode = "default" | "custom";
+
+export const MAX_UID_TEXT_LENGTH = 64;
+
+export function isValidUidText(value: string): boolean {
+  const characters = [...value];
+  return (
+    characters.length <= MAX_UID_TEXT_LENGTH &&
+    characters.every(
+      (character) =>
+        !/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(character),
+    )
+  );
+}
+
+export function isEffectivelyEmptyUidText(value: string): boolean {
+  return [...value].every(
+    (character) => character === "\uFEFF" || /\s/u.test(character),
+  );
+}
+
 export interface LauncherConfig {
   gamePath: string;
   installMethod: InstallMethod;
   dx11: boolean;
   csharpEnvironment: boolean;
-  hideUid: boolean;
+  uidMode: UidMode;
+  uidText: string;
   bgmVolume: number;
   bgmEnabled: boolean;
 }
@@ -74,7 +96,8 @@ export const DEFAULT_LAUNCHER_CONFIG: LauncherConfig = {
   installMethod: "resource_mount",
   dx11: false,
   csharpEnvironment: false,
-  hideUid: false,
+  uidMode: "default",
+  uidText: "",
   bgmVolume: 0.35,
   bgmEnabled: true,
 };
@@ -146,7 +169,6 @@ export function normalizeLauncherConfig(raw: unknown): NormalizedConfigResult {
   for (const [key, fallback] of [
     ["dx11", config.dx11],
     ["csharpEnvironment", config.csharpEnvironment],
-    ["hideUid", config.hideUid],
     ["bgmEnabled", config.bgmEnabled],
   ] as const) {
     if (typeof value[key] === "boolean") config[key] = value[key] as boolean;
@@ -155,6 +177,35 @@ export function normalizeLauncherConfig(raw: unknown): NormalizedConfigResult {
       repaired = true;
       diagnostics.push(`Field settings ${key} tidak valid; memakai default.`);
     }
+  }
+
+  let uidModeValid = false;
+  if ("uidMode" in value) {
+    if (value.uidMode === "default" || value.uidMode === "custom") {
+      config.uidMode = value.uidMode;
+      uidModeValid = true;
+    } else {
+      repaired = true;
+      diagnostics.push("Mode UID tidak valid; memakai DEFAULT.");
+    }
+  }
+
+  if (typeof value.uidText === "string" && isValidUidText(value.uidText)) {
+    config.uidText = value.uidText;
+  } else if ("uidText" in value) {
+    repaired = true;
+    diagnostics.push("Teks UID custom tidak valid; memakai teks kosong.");
+  }
+
+  if ("hideUid" in value) {
+    if (typeof value.hideUid === "boolean") {
+      if (!uidModeValid) config.uidMode = value.hideUid ? "custom" : "default";
+    } else {
+      repaired = true;
+      diagnostics.push("Field settings hideUid tidak valid; memakai default.");
+    }
+    repaired = true;
+    diagnostics.push("Pengaturan hideUid lama dimigrasikan ke mode UID.");
   }
 
   if (typeof value.bgmVolume === "number" && Number.isFinite(value.bgmVolume)) {
@@ -183,7 +234,8 @@ export interface PatchStatusPayload {
   status: PatchState;
   gamePath: string;
   installMethod: InstallMethod;
-  hideUid: boolean;
+  uidMode: UidMode;
+  uidText: string;
   currentVersion?: string;
   latestVersion?: string;
   message?: string;
@@ -296,6 +348,7 @@ export interface ILauncherState {
     installMethod: InstallMethod,
     manualCheck?: boolean,
   ): Promise<void>;
+  updateUidSelection(uidMode: UidMode, uidText: string): Promise<void>;
   invalidatePatchStatus(): void;
   startMediaSync(): Promise<void>;
   forceQuitGame(): Promise<boolean>;
