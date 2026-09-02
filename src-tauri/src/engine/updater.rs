@@ -334,6 +334,7 @@ fn create_update_handoff_impl(
     let quote = |path: &Path| format!("\"{}\"", path_value(path));
     let sleep_one = "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 1\" >nul 2>nul\r\n";
     let sleep_two = "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 2\" >nul 2>nul\r\n";
+    let delete_self = "start \"\" /b \"%ComSpec%\" /d /c del /q \"%~f0\" >nul 2>nul\r\n";
     let release_setup = release_state
         .map(
             |(transaction_path, pending_path, ready_marker_path, release_tag)| {
@@ -500,8 +501,9 @@ fn create_update_handoff_impl(
          del /Q {replacement} >nul 2>nul\r\n\\
          del /Q {backup} >nul 2>nul\r\n\\
          rmdir /S /Q {staging} >nul 2>nul\r\n\\
-         del \"%~f0\" >nul 2>nul\r\n\\
+         {delete_self}\\
          exit /b 0\r\n",
+        delete_self = delete_self,
         replacement = quote(&replacement_executable),
         backup = quote(&backup_executable),
         staging = quote(staging_dir),
@@ -549,7 +551,8 @@ fn create_update_handoff_impl(
           )\r\n\
           del /Q {backup} >nul 2>nul\r\n\
           rmdir /S /Q {staging} >nul 2>nul\r\n\
-         del \"%~f0\"\r\n",
+         {delete_self}\
+         exit /b 0\r\n",
         current = quote(current_executable),
         staged = quote(&staged_executable),
         backup = quote(&backup_executable),
@@ -601,7 +604,7 @@ fn create_update_handoff_impl(
         script = script.replace(health_anchor, &release_health_check);
         let staging = quote(staging_dir);
         let success_anchor = format!(
-            "del /Q {backup} >nul 2>nul\r\nrmdir /S /Q {staging} >nul 2>nul\r\ndel \"%~f0\"\r\n",
+            "del /Q {backup} >nul 2>nul\r\nrmdir /S /Q {staging} >nul 2>nul\r\nstart \"\" /b \"%ComSpec%\" /d /c del /q \"%~f0\" >nul 2>nul\r\nexit /b 0\r\n",
             backup = backup,
             staging = staging,
         );
@@ -612,11 +615,12 @@ fn create_update_handoff_impl(
         }
         let started_pid = quote(&started_pid_path);
         let success = format!(
-            "{release_commit}del /Q {started_pid} >nul 2>nul\r\ndel /Q {backup} >nul 2>nul\r\nrmdir /S /Q {staging} >nul 2>nul\r\ndel \"%~f0\" >nul 2>nul\r\nexit /b 0\r\n{failure_labels}{release_cleanup}{update_cleanup}",
+            "{release_commit}del /Q {started_pid} >nul 2>nul\r\ndel /Q {backup} >nul 2>nul\r\nrmdir /S /Q {staging} >nul 2>nul\r\n{delete_self}exit /b 0\r\n{failure_labels}{release_cleanup}{update_cleanup}",
             release_commit = release_commit,
             started_pid = started_pid,
             backup = backup,
             staging = staging,
+            delete_self = delete_self,
             failure_labels = failure_labels,
             release_cleanup = release_cleanup,
             update_cleanup = update_cleanup,
@@ -1081,6 +1085,7 @@ mod tests {
         assert!(script.contains("set \"release_tag=v2.10.0\""));
         assert!(script.contains("Start-Sleep -Seconds 2"));
         assert!(!script.contains("timeout.exe"));
+        assert!(script.contains("start \"\" /b \"%ComSpec%\" /d /c del /q \"%~f0\""));
         assert!(script.contains("set \"WUWAID_LAUNCHER_UPDATE_READY=%release_ready_temp%\""));
         assert!(script.contains("Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE"));
         assert!(script.contains("[IO.File]::WriteAllText($env:WUWAID_UPDATE_PID_FILE"));
