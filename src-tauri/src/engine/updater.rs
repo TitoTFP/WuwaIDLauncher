@@ -385,7 +385,7 @@ fn create_update_handoff_impl(
                  set \"WUWAID_UPDATE_PID_FILE={}\"\r\n\\
                  set \"release_started_pid=\"\r\n\\
                  set \"release_start_ok=\"\r\n\\
-                 start \"\" /wait /b \"%WUWAID_POWERSHELL_PATH%\" -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; $process=$null; $pidTemp=$env:WUWAID_UPDATE_PID_FILE + '.tmp'; try {{ $process=Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE -WorkingDirectory $env:WUWAID_UPDATE_DIRECTORY -PassThru -RedirectStandardOutput 'NUL' -RedirectStandardError 'NUL'; $pidText=[string]$process.Id; Write-Output ('WUWAID_UPDATE_PID=' + $pidText); [IO.File]::WriteAllText($pidTemp, $pidText); Move-Item -LiteralPath $pidTemp -Destination $env:WUWAID_UPDATE_PID_FILE -Force; $readback=[IO.File]::ReadAllText($env:WUWAID_UPDATE_PID_FILE).Trim(); if ($readback -cne $pidText) {{ throw 'PID sidecar verification failed' }}; Write-Output 'WUWAID_UPDATE_START_OK=1' }} catch {{ if ($null -ne $process) {{ try {{ $process.Kill() }} catch {{ }} }}; Remove-Item -LiteralPath $pidTemp -Force -ErrorAction SilentlyContinue; exit 1 }}\" >nul 2>nul\r\n\\
+                 start \"\" /wait /b \"%WUWAID_POWERSHELL_PATH%\" -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; $process=$null; $pidTemp=$env:WUWAID_UPDATE_PID_FILE + '.tmp'; try {{ $process=Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE -WorkingDirectory $env:WUWAID_UPDATE_DIRECTORY -PassThru; $pidText=[string]$process.Id; Write-Output ('WUWAID_UPDATE_PID=' + $pidText); [IO.File]::WriteAllText($pidTemp, $pidText); Move-Item -LiteralPath $pidTemp -Destination $env:WUWAID_UPDATE_PID_FILE -Force; $readback=[IO.File]::ReadAllText($env:WUWAID_UPDATE_PID_FILE).Trim(); if ($readback -cne $pidText) {{ throw 'PID sidecar verification failed' }}; Write-Output 'WUWAID_UPDATE_START_OK=1' }} catch {{ if ($null -ne $process) {{ try {{ $process.Kill() }} catch {{ }} }}; Remove-Item -LiteralPath $pidTemp -Force -ErrorAction SilentlyContinue; exit 1 }}\" >nul 2>nul\r\n\\
 
 
                   for /f \"delims=\" %%A in ('type \"%WUWAID_UPDATE_PID_FILE%\"') do set \"release_started_pid=%%A\"\r\n\\
@@ -1121,6 +1121,7 @@ mod tests {
         assert!(script.contains("start \"\" /b \"%ComSpec%\" /d /c del /q \"%~f0\""));
         assert!(script.contains("set \"WUWAID_LAUNCHER_UPDATE_READY=%release_ready_temp%\""));
         assert!(script.contains("Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE"));
+        assert!(!script.contains("RedirectStandardOutput"));
         assert!(script.contains("[IO.File]::WriteAllText($pidTemp, $pidText)"));
         assert!(script.contains(
             "Move-Item -LiteralPath $pidTemp -Destination $env:WUWAID_UPDATE_PID_FILE -Force"
