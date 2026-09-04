@@ -525,9 +525,9 @@ fn create_update_handoff_impl(
     );
     let script = format!(
         "@echo off\r\n\
-         set \"WUWAID_POWERSHELL=powershell.exe\"\r\n\
-         where.exe /Q powershell.exe >nul 2>nul\r\n\
-         if errorlevel 1 set \"WUWAID_POWERSHELL=pwsh.exe\"\r\n\
+         set \"WUWAID_POWERSHELL=pwsh.exe\"\r\n\
+         where.exe /Q pwsh.exe >nul 2>nul\r\n\
+         if errorlevel 1 set \"WUWAID_POWERSHELL=%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\"\r\n\
          setlocal DisableDelayedExpansion\r\n\
          rem WuwaID updater handoff with a verified backup and rollback\r\n\
          {sleep_one}\r\n\
@@ -1105,8 +1105,11 @@ mod tests {
         assert!(script.contains("move /Y \"%release_transaction%\" \"%release_pending%\""));
         assert!(script.contains("set \"release_tag=v2.10.0\""));
         assert!(script.contains("Start-Sleep -Seconds 2"));
-        assert!(script.contains("where.exe /Q powershell.exe"));
+        assert!(script.contains("where.exe /Q pwsh.exe"));
         assert!(script.contains("set \"WUWAID_POWERSHELL=pwsh.exe\""));
+        assert!(script.contains(
+            "set \"WUWAID_POWERSHELL=%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\""
+        ));
         assert!(!script.contains("timeout.exe"));
         assert!(script.contains("start \"\" /b \"%ComSpec%\" /d /c del /q \"%~f0\""));
         assert!(script.contains("set \"WUWAID_LAUNCHER_UPDATE_READY=%release_ready_temp%\""));
