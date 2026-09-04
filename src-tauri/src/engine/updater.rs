@@ -525,7 +525,8 @@ fn create_update_handoff_impl(
     );
     let script = format!(
         "@echo off\r\n\
-         set \"WUWAID_POWERSHELL_PATH=%ProgramFiles%\\PowerShell\\7\\pwsh.exe\"\r\n\
+         set \"WUWAID_POWERSHELL_PATH=%ProgramW6432%\\PowerShell\\7\\pwsh.exe\"\r\n\
+         if not exist \"%WUWAID_POWERSHELL_PATH%\" set \"WUWAID_POWERSHELL_PATH=%ProgramFiles%\\PowerShell\\7\\pwsh.exe\"\r\n\
          if not exist \"%WUWAID_POWERSHELL_PATH%\" set \"WUWAID_POWERSHELL_PATH=%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\"\r\n\
          setlocal DisableDelayedExpansion\r\n\
          rem WuwaID updater handoff with a verified backup and rollback\r\n\
@@ -1105,7 +1106,10 @@ mod tests {
         assert!(script.contains("set \"release_tag=v2.10.0\""));
         assert!(script.contains("Start-Sleep -Seconds 2"));
         assert!(script
-            .contains("set \"WUWAID_POWERSHELL_PATH=%ProgramFiles%\\PowerShell\\7\\pwsh.exe\""));
+            .contains("set \"WUWAID_POWERSHELL_PATH=%ProgramW6432%\\PowerShell\\7\\pwsh.exe\""));
+        assert!(script.contains(
+            "if not exist \"%WUWAID_POWERSHELL_PATH%\" set \"WUWAID_POWERSHELL_PATH=%ProgramFiles%\\PowerShell\\7\\pwsh.exe\""
+        ));
         assert!(script.contains(
             "if not exist \"%WUWAID_POWERSHELL_PATH%\" set \"WUWAID_POWERSHELL_PATH=%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\""
         ));
