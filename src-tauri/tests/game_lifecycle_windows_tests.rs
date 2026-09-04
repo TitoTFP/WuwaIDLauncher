@@ -335,6 +335,31 @@ fn launcher_fixture_pid_path(root: &Path) -> PathBuf {
     root.join("launcher-fixture.pid")
 }
 
+fn launcher_fixture_child_pid_path(root: &Path) -> PathBuf {
+    root.join("launcher-fixture-child.pid")
+}
+
+fn launcher_update_pid_path(handoff: &Path) -> PathBuf {
+    handoff.with_file_name(format!(
+        "{}.wuwaid-started.pid",
+        handoff
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("update-handoff.cmd")
+    ))
+}
+
+fn launcher_update_pid_temp_path(handoff: &Path) -> PathBuf {
+    PathBuf::from(format!(
+        "{}.tmp",
+        launcher_update_pid_path(handoff).display()
+    ))
+}
+
+fn launcher_handoff_powershell_path(handoff: &Path) -> PathBuf {
+    handoff.with_extension("ps1")
+}
+
 struct LauncherFixtureCleanup {
     pid_file: PathBuf,
 }
@@ -395,6 +420,35 @@ fn write_committed_release_note(root: &Path, tag: &str) -> (PathBuf, PathBuf, Pa
     (transaction, pending, ready)
 }
 
+fn wait_for_path_absent(path: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while path.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "handoff artifact did not disappear: {path:?}"
+        );
+        sleep(Duration::from_millis(100));
+    }
+}
+
+fn assert_handoff_runtime_artifacts_clean(handoff: &Path) {
+    assert!(!handoff.exists());
+    assert!(!launcher_handoff_powershell_path(handoff).exists());
+    assert!(!launcher_update_pid_path(handoff).exists());
+    assert!(!launcher_update_pid_temp_path(handoff).exists());
+}
+
+fn assert_update_file_artifacts_clean(current: &Path, staging: &Path) {
+    let file_name = current.file_name().and_then(|name| name.to_str()).unwrap();
+    assert!(!staging.exists());
+    assert!(!current
+        .with_file_name(format!("{file_name}.wuwaid-backup"))
+        .exists());
+    assert!(!current
+        .with_file_name(format!("{file_name}.wuwaid-new"))
+        .exists());
+}
+
 fn run_handoff_script(path: &Path) -> std::process::ExitStatus {
     run_handoff_script_with_options(path, None, false, None)
 }
@@ -417,8 +471,10 @@ fn run_handoff_script_with_options(
     let debug_path = path.with_extension("debug.txt");
     fs::write(&debug_path, &script).unwrap();
     let pid_file = launcher_fixture_pid_path(path.parent().unwrap());
+    let child_pid_file = launcher_fixture_child_pid_path(path.parent().unwrap());
     let mut command = Command::new(windows_system_executable("cmd.exe"));
     command.env("WUWAID_LAUNCHER_UPDATE_PID_FILE", &pid_file);
+    command.env("WUWAID_LAUNCHER_UPDATE_CHILD_PID_FILE", &child_pid_file);
     if skip_ready {
         command.env("WUWAID_LAUNCHER_UPDATE_SKIP_READY", "1");
     }
@@ -445,6 +501,8 @@ fn run_handoff_script_with_options(
                         .unwrap_or_else(|error| format!("<unreadable: {error}>"))
                 );
             }
+            wait_for_path_absent(path);
+            wait_for_path_absent(&launcher_handoff_powershell_path(path));
             let _ = fs::remove_file(&debug_path);
             return status;
         }
@@ -453,12 +511,7 @@ fn run_handoff_script_with_options(
     }
 }
 
-fn wait_for_launcher_pid_exit(pid_file: &Path) {
-    let pid = fs::read_to_string(pid_file)
-        .unwrap()
-        .trim()
-        .parse::<u32>()
-        .unwrap();
+fn wait_for_process_exit(pid: u32) {
     let filter = format!("PID eq {pid}");
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -472,10 +525,29 @@ fn wait_for_launcher_pid_exit(pid_file: &Path) {
         }
         assert!(
             Instant::now() < deadline,
-            "failed launcher process did not exit"
+            "launcher process did not exit: {pid}"
         );
         sleep(Duration::from_millis(100));
     }
+}
+
+fn wait_for_launcher_pid_exit(pid_file: &Path) {
+    let pid = fs::read_to_string(pid_file)
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+    wait_for_process_exit(pid);
+}
+
+fn wait_for_launcher_tree_exit(root_pid_file: &Path, child_pid_file: &Path) {
+    let child_pid = fs::read_to_string(child_pid_file)
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+    wait_for_launcher_pid_exit(root_pid_file);
+    wait_for_process_exit(child_pid);
 }
 
 fn wait_for_launcher_image_exit(image_name: &str) {
@@ -522,11 +594,13 @@ fn windows_handoff_commits_whats_new_after_successful_restart() {
         "v2.10.0",
     )
     .unwrap();
+    fs::write(launcher_update_pid_path(&handoff), "1 & echo PWNED\n").unwrap();
+    fs::write(launcher_update_pid_temp_path(&handoff), "stale\n").unwrap();
     let status = run_handoff_script(&handoff);
 
     assert!(status.success(), "handoff failed with {status}");
-    assert!(!handoff.exists());
-    assert!(!staging.exists());
+    assert_handoff_runtime_artifacts_clean(&handoff);
+    assert_update_file_artifacts_clean(&current, &staging);
     assert!(!transaction.exists());
     assert!(!ready_temp.exists());
     assert!(pending.exists());
@@ -596,8 +670,8 @@ fn windows_missing_transaction_rejects_handoff_without_display() {
     .unwrap();
     let _status = run_handoff_script(&handoff);
 
-    assert!(!handoff.exists());
-    assert!(!staging.exists());
+    assert_handoff_runtime_artifacts_clean(&handoff);
+    assert_update_file_artifacts_clean(&current, &staging);
     assert_eq!(fs::read(&current).unwrap(), current_bytes);
     assert!(!transaction.exists());
     assert!(!pending.exists());
@@ -654,7 +728,8 @@ fn windows_failed_update_does_not_display_whats_new() {
     .unwrap();
     let _status = run_handoff_script(&handoff);
 
-    assert!(!handoff.exists());
+    assert_handoff_runtime_artifacts_clean(&handoff);
+    assert_update_file_artifacts_clean(&current, &staging);
     assert_eq!(fs::read(&current).unwrap(), current_bytes);
     assert!(launcher_update_state::read_committed_release_note(
         &transaction,
@@ -710,8 +785,8 @@ fn windows_health_check_failure_rolls_back_and_discards_whats_new() {
     .unwrap();
     let _status = run_handoff_script(&handoff);
 
-    assert!(!handoff.exists());
-    assert!(!staging.exists());
+    assert_handoff_runtime_artifacts_clean(&handoff);
+    assert_update_file_artifacts_clean(&current, &staging);
     assert_eq!(fs::read(&current).unwrap(), current_bytes);
     assert!(!transaction.exists());
     assert!(!pending.exists());
@@ -783,7 +858,12 @@ fn windows_mismatched_ready_pid_does_not_stop_unrelated_launcher() {
         !status.success(),
         "mismatched marker unexpectedly succeeded"
     );
-    wait_for_launcher_pid_exit(&launcher_fixture_pid_path(temp.path()));
+    wait_for_launcher_tree_exit(
+        &launcher_fixture_pid_path(temp.path()),
+        &launcher_fixture_child_pid_path(temp.path()),
+    );
+    assert_handoff_runtime_artifacts_clean(&handoff);
+    assert_update_file_artifacts_clean(&current, &staging);
     assert!(runtime::process_identity(unrelated_pid).is_some());
     assert_eq!(fs::read(&current).unwrap(), current_bytes);
     assert!(!transaction.exists());
@@ -821,12 +901,91 @@ fn windows_malicious_ready_marker_is_not_interpreted_by_cmd() {
     let status = run_handoff_script_with_options(&handoff, None, false, Some(&malicious_marker));
 
     assert!(!status.success(), "malicious marker unexpectedly succeeded");
-    wait_for_launcher_pid_exit(&launcher_fixture_pid_path(temp.path()));
+    wait_for_launcher_tree_exit(
+        &launcher_fixture_pid_path(temp.path()),
+        &launcher_fixture_child_pid_path(temp.path()),
+    );
+    assert_handoff_runtime_artifacts_clean(&handoff);
+    assert_update_file_artifacts_clean(&current, &staging);
     assert!(!sentinel.exists());
     assert_eq!(fs::read(&current).unwrap(), current_bytes);
     assert!(!transaction.exists());
     assert!(!pending.exists());
     assert!(!ready.exists());
+    assert!(!ready_temp.exists());
+}
+
+#[test]
+fn windows_malicious_pid_sidecar_is_not_interpreted_by_cmd() {
+    let temp = tempdir().unwrap();
+    let _launcher_cleanup = LauncherFixtureCleanup::new(temp.path());
+    let current = temp.path().join("WuwaIDLauncher.exe");
+    let staging = temp.path().join("staging");
+    let handoff = temp.path().join("update-handoff.cmd");
+    let sentinel = temp.path().join("pid-sidecar-command-injected.txt");
+    fs::create_dir_all(&staging).unwrap();
+    fs::copy(windows_system_executable("wscript.exe"), &current).unwrap();
+    fs::copy(fixture_binary(), staging.join("WuwaIDLauncher.exe")).unwrap();
+
+    let unrelated_dir = temp.path().join("unrelated");
+    fs::create_dir_all(&unrelated_dir).unwrap();
+    let unrelated_launcher = unrelated_dir.join("WuwaIDLauncher.exe");
+    fs::copy(fixture_binary(), &unrelated_launcher).unwrap();
+    let unrelated_ready = temp.path().join("unrelated-ready.tag");
+    let unrelated_pid_file = temp.path().join("unrelated.pid");
+    let unrelated_child_pid_file = temp.path().join("unrelated-child.pid");
+    let unrelated = Command::new(&unrelated_launcher)
+        .env("WUWAID_LAUNCHER_UPDATE_READY", &unrelated_ready)
+        .env("WUWAID_LAUNCHER_UPDATE_PID_FILE", &unrelated_pid_file)
+        .env(
+            "WUWAID_LAUNCHER_UPDATE_CHILD_PID_FILE",
+            &unrelated_child_pid_file,
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let unrelated_pid = unrelated.id();
+    let _unrelated_cleanup = ChildCleanup(unrelated);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !unrelated_pid_file.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "unrelated launcher did not start"
+        );
+        sleep(Duration::from_millis(100));
+    }
+
+    let (transaction, pending, ready, ready_temp) = release_state_paths(temp.path());
+    write_release_note(&transaction, &launcher_release_note("v2.10.0"));
+    updater::create_update_handoff_with_release_state(
+        &staging,
+        &current,
+        &handoff,
+        &transaction,
+        &pending,
+        &ready,
+        "v2.10.0",
+    )
+    .unwrap();
+    fs::write(
+        launcher_update_pid_path(&handoff),
+        format!("1\" & echo PWNED > \"{}\" & rem\n", sentinel.display()),
+    )
+    .unwrap();
+    fs::write(launcher_update_pid_temp_path(&handoff), "stale\n").unwrap();
+
+    let status = run_handoff_script(&handoff);
+
+    assert!(status.success(), "handoff failed with {status}");
+    assert_handoff_runtime_artifacts_clean(&handoff);
+    assert_update_file_artifacts_clean(&current, &staging);
+    assert!(!sentinel.exists());
+    assert!(runtime::process_identity(unrelated_pid).is_some());
+    assert!(!transaction.exists());
+    assert!(pending.exists());
+    assert_eq!(fs::read_to_string(&ready).unwrap().trim(), "v2.10.0");
     assert!(!ready_temp.exists());
 }
 
@@ -860,9 +1019,12 @@ fn windows_health_failure_stops_launched_process_before_rollback() {
     let status = run_handoff_script_with_options(&handoff, None, true, None);
 
     assert!(!status.success(), "health failure unexpectedly succeeded");
-    wait_for_launcher_pid_exit(&launcher_fixture_pid_path(temp.path()));
-    assert!(!handoff.exists());
-    assert!(!staging.exists());
+    wait_for_launcher_tree_exit(
+        &launcher_fixture_pid_path(temp.path()),
+        &launcher_fixture_child_pid_path(temp.path()),
+    );
+    assert_handoff_runtime_artifacts_clean(&handoff);
+    assert_update_file_artifacts_clean(&current, &staging);
     assert_eq!(fs::read(&current).unwrap(), current_bytes);
     assert!(!transaction.exists());
     assert!(pending.is_dir());
@@ -904,13 +1066,17 @@ fn windows_pid_sidecar_failure_stops_process_before_rollback() {
         "PID sidecar failure unexpectedly succeeded"
     );
     let fixture_pid_file = launcher_fixture_pid_path(temp.path());
-    if fixture_pid_file.exists() {
-        wait_for_launcher_pid_exit(&fixture_pid_file);
-    } else {
+    let fixture_child_pid_file = launcher_fixture_child_pid_path(temp.path());
+    if fixture_pid_file.exists() && fixture_child_pid_file.exists() {
+        wait_for_launcher_tree_exit(&fixture_pid_file, &fixture_child_pid_file);
+    } else if fixture_pid_file.exists() {
         wait_for_launcher_image_exit("FakeLauncherSidecar.exe");
     }
     assert!(!handoff.exists());
-    assert!(!staging.exists());
+    assert!(!launcher_handoff_powershell_path(&handoff).exists());
+    assert!(!launcher_update_pid_temp_path(&handoff).exists());
+    assert!(sidecar.is_dir());
+    assert_update_file_artifacts_clean(&current, &staging);
     assert_eq!(fs::read(&current).unwrap(), current_bytes);
     assert!(!transaction.exists());
     assert!(!pending.exists());

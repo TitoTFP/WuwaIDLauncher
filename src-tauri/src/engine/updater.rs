@@ -214,10 +214,11 @@ pub fn create_update_handoff(
 
 /// Creates a handoff which commits the release-notes transaction only after
 /// the replacement executable is running and passes the process health check.
-/// The started PID is captured from the process launcher, while the PID
-/// sidecar is written and read back in PowerShell before the handoff proceeds.
-/// Failed copy, rollback, launch, or health-check paths remove all release-note
-/// state so a failed update cannot surface as What's New later.
+/// The release-state handoff is a tiny CMD bootstrap plus a sibling PowerShell
+/// transaction. PowerShell retains the launched process identity, owns all PID
+/// and readiness-marker reads, and performs identity-checked tree cleanup before
+/// rollback. Failed copy, rollback, launch, or health-check paths remove all
+/// release-note state so a failed update cannot surface as What's New later.
 pub fn create_update_handoff_with_release_state(
     staging_dir: &Path,
     current_executable: &Path,
@@ -248,14 +249,423 @@ fn release_note_marker_temp_path(path: &Path) -> PathBuf {
     path.with_file_name(format!("{name}.tmp"))
 }
 
-fn normalize_batch_fragment(fragment: &str) -> String {
-    let normalized = fragment.replace("\\\n", "").replace('\r', "");
-    let lines = normalized.lines().map(str::trim_start).collect::<Vec<_>>();
-    if lines.is_empty() {
-        String::new()
-    } else {
-        format!("{}\r\n", lines.join("\r\n"))
+const RELEASE_HANDOFF_POWERSHELL: &str = r#"
+# WUWAID_HANDOFF_TOKEN=__HANDOFF_TOKEN__
+$ErrorActionPreference = 'Stop'
+$staging = __STAGING__
+$staged = __STAGED__
+$current = __CURRENT__
+$backup = __BACKUP__
+$replacement = __REPLACEMENT__
+$directory = __DIRECTORY__
+$transaction = __TRANSACTION__
+$pending = __PENDING__
+$ready = __READY__
+$readyTemp = __READY_TEMP__
+$pidFile = __PID_FILE__
+$handoffCmd = __HANDOFF_CMD__
+$handoffPs1 = __HANDOFF_PS1__
+$handoffToken = __HANDOFF_TOKEN_LITERAL__
+$powerShell = $env:WUWAID_POWERSHELL_PATH
+$rootProcess = $null
+$rootIdentity = $null
+$pidTemp = $null
+$backupCreated = $false
+$rollbackSucceeded = $false
+$committed = $false
+$exitCode = 1
+
+function Read-StrictPid([string]$Path) {
+    if (-not [IO.File]::Exists($Path)) { throw 'PID sidecar missing' }
+    $text = [IO.File]::ReadAllText($Path).Trim()
+    if ($text -notmatch '\A[1-9][0-9]{0,9}\z') { throw 'PID sidecar invalid' }
+    try { return [Convert]::ToUInt32($text, 10) } catch { throw 'PID sidecar out of range' }
+}
+
+function Capture-ProcessIdentity([Diagnostics.Process]$Process, [switch]$NeedPath) {
+    $Process.Refresh()
+    $null = $Process.Handle
+    $startTime = $Process.StartTime.ToUniversalTime()
+    $path = $null
+    try { $path = [IO.Path]::GetFullPath($Process.MainModule.FileName) }
+    catch { if ($NeedPath) { throw } }
+    [pscustomobject]@{
+        Pid = [uint32]$Process.Id
+        StartTimeUtc = $startTime
+        Path = $path
+        Process = $Process
     }
+}
+
+function Test-SameProcessIdentity($Expected, $Actual, [switch]$NeedPath) {
+    if ($null -eq $Expected -or $null -eq $Actual) { return $false }
+    if ($Expected.Pid -ne $Actual.Pid -or $Expected.StartTimeUtc -ne $Actual.StartTimeUtc) { return $false }
+    if ($NeedPath -and -not [String]::Equals($Expected.Path, $Actual.Path, [StringComparison]::OrdinalIgnoreCase)) { return $false }
+    return $true
+}
+
+function Get-ProcessTreePids([uint32]$RootPid) {
+    $snapshot = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
+    $pids = @([uint32]$RootPid)
+    $changed = $true
+    while ($changed) {
+        $changed = $false
+        foreach ($item in $snapshot) {
+            [uint32]$childPid = $item.ProcessId
+            if (($pids -contains [uint32]$item.ParentProcessId) -and -not ($pids -contains $childPid)) {
+                $pids += $childPid
+                $changed = $true
+            }
+        }
+    }
+    return $pids
+}
+
+function Stop-VerifiedTree($Identity) {
+    if ($null -eq $Identity) { return $true }
+    $root = $Identity.Process
+    try {
+        $live = Capture-ProcessIdentity $root -NeedPath
+        if (-not (Test-SameProcessIdentity $Identity $live -NeedPath)) { return $false }
+    } catch {
+        try {
+            if (-not $root.HasExited) { return $false }
+            $replacement = Get-Process -Id $Identity.Pid -ErrorAction SilentlyContinue
+            if ($null -ne $replacement) { return $false }
+        } catch { return $false }
+    }
+
+    $killTreeMethod = [Diagnostics.Process].GetMethod('Kill', [Type[]]@([bool]))
+    $treeKillIssued = $false
+    if ($null -ne $killTreeMethod) {
+        try {
+            [void]$killTreeMethod.Invoke($root, [object[]]@($true))
+            $treeKillIssued = $true
+        } catch { }
+    }
+
+    if (-not $treeKillIssued) {
+        $snapshot = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
+        $records = @()
+        $known = @([uint32]$Identity.Pid)
+        $depth = 0
+        $changed = $true
+        while ($changed -and $depth -lt $snapshot.Count) {
+            $changed = $false
+            $depth++
+            foreach ($item in $snapshot) {
+                [uint32]$childPid = $item.ProcessId
+                if (($known -contains [uint32]$item.ParentProcessId) -and -not ($known -contains $childPid)) {
+                    $known += $childPid
+                    try {
+                        $child = Get-Process -Id $childPid -ErrorAction Stop
+                        $childIdentity = Capture-ProcessIdentity $child
+                        $records += [pscustomobject]@{ Depth = $depth; Identity = $childIdentity }
+                    } catch { }
+                    $changed = $true
+                }
+            }
+        }
+        foreach ($record in ($records | Sort-Object Depth -Descending)) {
+            try {
+                $liveChild = Capture-ProcessIdentity $record.Identity.Process
+                if (Test-SameProcessIdentity $record.Identity $liveChild) { $record.Identity.Process.Kill() }
+            } catch { }
+        }
+        if (-not $root.HasExited) {
+            try {
+                $live = Capture-ProcessIdentity $root -NeedPath
+                if (-not (Test-SameProcessIdentity $Identity $live -NeedPath)) { return $false }
+                $root.Kill()
+            } catch { return $false }
+        }
+    }
+
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        $currentTreePids = @(Get-ProcessTreePids $Identity.Pid)
+        $remaining = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | Where-Object { $currentTreePids -contains [uint32]$_.ProcessId })
+        if ($remaining.Count -eq 0) { return $true }
+        if ($null -ne $killTreeMethod) {
+            $rootRemaining = @($remaining | Where-Object { [uint32]$_.ProcessId -eq $Identity.Pid }).Count -gt 0
+            if ($rootRemaining) {
+                try {
+                    $live = Capture-ProcessIdentity $root -NeedPath
+                    if (-not (Test-SameProcessIdentity $Identity $live -NeedPath)) { return $false }
+                    [void]$killTreeMethod.Invoke($root, [object[]]@($true))
+                } catch { return $false }
+            }
+        } else {
+            foreach ($record in ($records | Sort-Object Depth -Descending)) {
+                try {
+                    $liveChild = Capture-ProcessIdentity $record.Identity.Process
+                    if (Test-SameProcessIdentity $record.Identity $liveChild) { $record.Identity.Process.Kill() }
+                } catch { }
+            }
+            $rootRemaining = @($remaining | Where-Object { [uint32]$_.ProcessId -eq $Identity.Pid }).Count -gt 0
+            if ($rootRemaining) {
+                try {
+                    $live = Capture-ProcessIdentity $root -NeedPath
+                    if (-not (Test-SameProcessIdentity $Identity $live -NeedPath)) { return $false }
+                    $root.Kill()
+                } catch { return $false }
+            }
+        }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    return $false
+}
+
+function Remove-FileWithRetry([string]$Path) {
+    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        if (-not (Test-Path -LiteralPath $Path)) { return $true }
+        try {
+            $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+            if ($item.PSIsContainer) { return $false }
+            Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+            if (-not (Test-Path -LiteralPath $Path)) { return $true }
+        } catch { }
+        Start-Sleep -Milliseconds 100
+    }
+    return (-not (Test-Path -LiteralPath $Path))
+}
+
+function Remove-DirectoryWithRetry([string]$Path) {
+    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        if (-not (Test-Path -LiteralPath $Path)) { return $true }
+        try { Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop } catch { }
+        if (-not (Test-Path -LiteralPath $Path)) { return $true }
+        Start-Sleep -Milliseconds 100
+    }
+    return (-not (Test-Path -LiteralPath $Path))
+}
+
+function Start-DeferredSelfCleanup {
+    $cleanup = @'
+$ErrorActionPreference = 'SilentlyContinue'
+$targets = @(__HANDOFF_CMD__, __HANDOFF_PS1__)
+$token = __HANDOFF_TOKEN_LITERAL__
+$until = [DateTime]::UtcNow.AddSeconds(30)
+do {
+    foreach ($target in $targets) {
+        try {
+            $item = Get-Item -LiteralPath $target -Force -ErrorAction Stop
+            if (-not $item.PSIsContainer -and [IO.File]::ReadAllText($target).Contains($token)) {
+                Remove-Item -LiteralPath $target -Force -ErrorAction Stop
+            }
+        } catch { }
+    }
+    if (@($targets | Where-Object { Test-Path -LiteralPath $_ }).Count -eq 0) { exit 0 }
+    Start-Sleep -Milliseconds 100
+} while ([DateTime]::UtcNow -lt $until)
+exit 1
+'@
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cleanup))
+    Start-Process -FilePath $powerShell -WindowStyle Hidden -ArgumentList @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded) | Out-Null
+}
+
+try {
+    if (Test-Path -LiteralPath $pidFile -PathType Container) { throw 'PID sidecar path is a directory' }
+    if (Test-Path -LiteralPath ($pidFile + '.tmp') -PathType Container) { throw 'PID temp path is a directory' }
+    if (-not (Remove-FileWithRetry $pidFile) -or -not (Remove-FileWithRetry ($pidFile + '.tmp'))) { throw 'PID sidecar cleanup failed' }
+    if (-not (Remove-FileWithRetry $readyTemp)) { throw 'readiness marker cleanup failed' }
+    if (-not [IO.File]::Exists($staged)) { throw 'staging executable missing' }
+    if (-not [IO.File]::Exists($current)) { throw 'current executable missing' }
+    if (-not [IO.File]::Exists($transaction)) { throw 'release transaction missing' }
+
+    if (-not (Remove-FileWithRetry $replacement)) { throw 'replacement cleanup failed' }
+    if (-not (Remove-FileWithRetry $backup)) { throw 'backup cleanup failed' }
+    Copy-Item -LiteralPath $current -Destination $backup -Force
+    $backupCreated = $true
+    Copy-Item -LiteralPath $staged -Destination $replacement -Force
+    Move-Item -LiteralPath $replacement -Destination $current -Force
+    $stagedHash = (Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash
+    $currentHash = (Get-FileHash -LiteralPath $current -Algorithm SHA256).Hash
+    if (-not [String]::Equals($stagedHash, $currentHash, [StringComparison]::OrdinalIgnoreCase)) { throw 'replacement verification failed' }
+
+    $env:WUWAID_LAUNCHER_UPDATE_READY = $readyTemp
+    $rootProcess = Start-Process -FilePath $current -WorkingDirectory $directory -NoNewWindow -PassThru
+    $rootIdentity = Capture-ProcessIdentity $rootProcess -NeedPath
+    $pidTemp = $pidFile + '.tmp.' + [Guid]::NewGuid().ToString('N')
+    [IO.File]::WriteAllText($pidTemp, "$($rootIdentity.Pid)`r`n")
+    Move-Item -LiteralPath $pidTemp -Destination $pidFile -Force
+    if ((Read-StrictPid $pidFile) -ne $rootIdentity.Pid) { throw 'PID sidecar verification failed' }
+
+    $healthy = $false
+    $readyDeadline = [DateTime]::UtcNow.AddSeconds(15)
+    do {
+        if ([IO.File]::Exists($readyTemp)) {
+            if ((Read-StrictPid $readyTemp) -ne $rootIdentity.Pid) { throw 'readiness PID verification failed' }
+            $healthy = $true
+            break
+        }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $readyDeadline)
+    if (-not $healthy) { throw 'readiness marker timeout' }
+    if ((Read-StrictPid $pidFile) -ne $rootIdentity.Pid) { throw 'PID sidecar changed' }
+    $live = Capture-ProcessIdentity (Get-Process -Id $rootIdentity.Pid -ErrorAction Stop) -NeedPath
+    if (-not (Test-SameProcessIdentity $rootIdentity $live -NeedPath)) { throw 'update process identity changed' }
+
+    if (Test-Path -LiteralPath $pending -PathType Container) { throw 'pending release path is a directory' }
+    Move-Item -LiteralPath $transaction -Destination $pending -Force
+    if (-not [IO.File]::Exists($pending)) { throw 'pending release move failed' }
+    if (-not (Remove-FileWithRetry $readyTemp)) { throw 'ready marker temp cleanup failed' }
+    [IO.File]::WriteAllText($readyTemp, __RELEASE_TAG__ + "`r`n")
+    Move-Item -LiteralPath $readyTemp -Destination $ready -Force
+    if (-not [IO.File]::Exists($ready)) { throw 'ready marker move failed' }
+    $committed = $true
+    $exitCode = 0
+} catch {
+    $stopped = $true
+    if ($null -ne $rootIdentity) { $stopped = Stop-VerifiedTree $rootIdentity }
+    elseif ($null -ne $rootProcess) {
+        try {
+            $killTreeMethod = [Diagnostics.Process].GetMethod('Kill', [Type[]]@([bool]))
+            if ($null -eq $killTreeMethod) {
+                $stopped = $false
+            } else {
+                [void]$killTreeMethod.Invoke($rootProcess, [object[]]@($true))
+                $rootProcess.WaitForExit(10000)
+                $stopped = $rootProcess.HasExited
+            }
+        } catch { $stopped = $false }
+    }
+    if ($backupCreated -and $stopped) {
+        try {
+            Copy-Item -LiteralPath $backup -Destination $current -Force
+            $rollbackSucceeded = $true
+        } catch { $stopped = $false }
+    }
+    if (-not $stopped) { $exitCode = 98 }
+} finally {
+    if ($null -ne $pidTemp) { [void](Remove-FileWithRetry $pidTemp) }
+    [void](Remove-FileWithRetry ($pidFile + '.tmp'))
+    [void](Remove-FileWithRetry $pidFile)
+    [void](Remove-FileWithRetry $replacement)
+    if ($committed) {
+        [void](Remove-FileWithRetry $backup)
+        [void](Remove-DirectoryWithRetry $staging)
+    } else {
+        [void](Remove-FileWithRetry $readyTemp)
+        [void](Remove-FileWithRetry $transaction)
+        [void](Remove-FileWithRetry $pending)
+        [void](Remove-FileWithRetry $ready)
+        if ($rollbackSucceeded -or -not $backupCreated) { [void](Remove-FileWithRetry $backup) }
+        [void](Remove-DirectoryWithRetry $staging)
+    }
+    Start-DeferredSelfCleanup
+}
+exit $exitCode
+"#;
+
+fn powershell_literal(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "''"))
+}
+
+fn handoff_token() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("WUWAID-HANDOFF-{}-{nanos}", std::process::id())
+}
+
+struct ReleaseHandoffSpec<'a> {
+    staging_dir: &'a Path,
+    staged_executable: &'a Path,
+    current_executable: &'a Path,
+    handoff_path: &'a Path,
+    transaction_path: &'a Path,
+    pending_path: &'a Path,
+    ready_marker_path: &'a Path,
+    release_tag: &'a str,
+    backup_executable: &'a Path,
+    replacement_executable: &'a Path,
+    current_directory: &'a Path,
+    started_pid_path: &'a Path,
+}
+
+fn create_release_update_handoff(spec: ReleaseHandoffSpec<'_>) -> Result<PathBuf, String> {
+    let ReleaseHandoffSpec {
+        staging_dir,
+        staged_executable,
+        current_executable,
+        handoff_path,
+        transaction_path,
+        pending_path,
+        ready_marker_path,
+        release_tag,
+        backup_executable,
+        replacement_executable,
+        current_directory,
+        started_pid_path,
+    } = spec;
+    let handoff_ps1 = handoff_path.with_extension("ps1");
+    let paths = [
+        staging_dir,
+        staged_executable,
+        current_executable,
+        handoff_path,
+        &handoff_ps1,
+        transaction_path,
+        pending_path,
+        ready_marker_path,
+        &release_note_marker_temp_path(ready_marker_path),
+        backup_executable,
+        replacement_executable,
+        current_directory,
+        started_pid_path,
+    ];
+    if paths.iter().any(|path| {
+        let value = path.to_string_lossy();
+        value.contains('\0') || value.contains('\r') || value.contains('\n')
+    }) {
+        return Err("Path handoff update mengandung karakter yang tidak valid.".to_string());
+    }
+    let token = handoff_token();
+    let mut powershell = RELEASE_HANDOFF_POWERSHELL.to_string();
+    let replacements = [
+        ("__HANDOFF_TOKEN__", format!("'{}'", token)),
+        ("__HANDOFF_TOKEN_LITERAL__", format!("'{}'", token)),
+        ("__STAGING__", powershell_literal(staging_dir)),
+        ("__STAGED__", powershell_literal(staged_executable)),
+        ("__CURRENT__", powershell_literal(current_executable)),
+        ("__BACKUP__", powershell_literal(backup_executable)),
+        (
+            "__REPLACEMENT__",
+            powershell_literal(replacement_executable),
+        ),
+        ("__DIRECTORY__", powershell_literal(current_directory)),
+        ("__TRANSACTION__", powershell_literal(transaction_path)),
+        ("__PENDING__", powershell_literal(pending_path)),
+        ("__READY__", powershell_literal(ready_marker_path)),
+        (
+            "__READY_TEMP__",
+            powershell_literal(&release_note_marker_temp_path(ready_marker_path)),
+        ),
+        ("__PID_FILE__", powershell_literal(started_pid_path)),
+        ("__HANDOFF_CMD__", powershell_literal(handoff_path)),
+        ("__HANDOFF_PS1__", powershell_literal(&handoff_ps1)),
+        (
+            "__RELEASE_TAG__",
+            powershell_literal(Path::new(release_tag)),
+        ),
+    ];
+    for (placeholder, value) in replacements {
+        powershell = powershell.replace(placeholder, &value);
+    }
+    let bootstrap = format!(
+        "@echo off\r\nrem WUWAID_HANDOFF_TOKEN={token}\r\nsetlocal DisableDelayedExpansion\r\nset \"WUWAID_POWERSHELL_PATH=%ProgramW6432%\\PowerShell\\7\\pwsh.exe\"\r\nif not exist \"%WUWAID_POWERSHELL_PATH%\" set \"WUWAID_POWERSHELL_PATH=%ProgramFiles%\\PowerShell\\7\\pwsh.exe\"\r\nif not exist \"%WUWAID_POWERSHELL_PATH%\" set \"WUWAID_POWERSHELL_PATH=%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\"\r\nif not exist \"%WUWAID_POWERSHELL_PATH%\" exit /b 90\r\n\"%WUWAID_POWERSHELL_PATH%\" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%~dpn0.ps1\"\r\nset \"WUWAID_RC=%ERRORLEVEL%\"\r\nexit /b %WUWAID_RC%\r\n",
+    );
+    if let Some(parent) = handoff_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("Gagal membuat folder handoff update: {error}"))?;
+    }
+    fs::write(&handoff_ps1, powershell)
+        .map_err(|error| format!("Gagal menulis PowerShell handoff update: {error}"))?;
+    fs::write(handoff_path, bootstrap)
+        .map_err(|error| format!("Gagal menulis handoff update: {error}"))?;
+    Ok(handoff_path.to_path_buf())
 }
 
 fn create_update_handoff_impl(
@@ -306,7 +716,7 @@ fn create_update_handoff_impl(
     ];
     if paths.iter().any(|path| {
         let value = path.to_string_lossy();
-        value.contains('"') || value.contains('\r') || value.contains('\n')
+        value.contains('\0') || value.contains('"') || value.contains('\r') || value.contains('\n')
     }) {
         return Err("Path handoff update mengandung karakter yang tidak valid.".to_string());
     }
@@ -321,7 +731,10 @@ fn create_update_handoff_impl(
         ];
         if release_paths.iter().any(|path| {
             let value = path.to_string_lossy();
-            value.contains('"') || value.contains('\r') || value.contains('\n')
+            value.contains('\0')
+                || value.contains('"')
+                || value.contains('\r')
+                || value.contains('\n')
         }) || release_tag.is_empty()
             || !release_tag
                 .bytes()
@@ -332,197 +745,31 @@ fn create_update_handoff_impl(
             );
         }
     }
+    if let Some((transaction_path, pending_path, ready_marker_path, release_tag)) = release_state {
+        return create_release_update_handoff(ReleaseHandoffSpec {
+            staging_dir,
+            staged_executable: &staged_executable,
+            current_executable,
+            handoff_path,
+            transaction_path,
+            pending_path,
+            ready_marker_path,
+            release_tag,
+            backup_executable: &backup_executable,
+            replacement_executable: &replacement_executable,
+            current_directory,
+            started_pid_path: &started_pid_path,
+        });
+    }
     let path_value = |path: &Path| path.to_string_lossy().replace('%', "%%");
     let quote = |path: &Path| format!("\"{}\"", path_value(path));
     let sleep_one = "start \"\" /wait /b \"%WUWAID_POWERSHELL_PATH%\" -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 1\" >nul 2>nul\r\n";
     let sleep_two = "start \"\" /wait /b \"%WUWAID_POWERSHELL_PATH%\" -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 2\" >nul 2>nul\r\n";
-    let delete_self = "start \"\" /b \"%ComSpec%\" /d /c del /q \"%~f0\" >nul 2>nul\r\n";
-    let release_setup = release_state
-        .map(
-            |(transaction_path, pending_path, ready_marker_path, release_tag)| {
-                let ready_marker_temp = release_note_marker_temp_path(ready_marker_path);
-                format!(
-                    "         set \"release_transaction={}\"\r\n\\
-                 set \"release_pending={}\"\r\n\\
-                 set \"release_ready={}\"\r\n\\
-                 set \"release_ready_temp={}\"\r\n\\
-                 set \"release_started_pid_file={}\"\r\n\\
-                 set \"release_tag={}\"\r\n\\
-                 del /Q \"%release_ready_temp%\" >nul 2>nul\r\n\\
-                 del /Q \"%release_started_pid_file%\" >nul 2>nul\r\n\\
-                 del /Q \"%release_started_pid_file%.tmp\" >nul 2>nul\r\n\\
-                 if exist \"%release_ready_temp%\" goto fail_12\r\n\\
-                 set \"WUWAID_LAUNCHER_UPDATE_READY=%release_ready_temp%\"\r\n",
-                    path_value(transaction_path),
-                    path_value(pending_path),
-                    path_value(ready_marker_path),
-                    path_value(ready_marker_temp.as_path()),
-                    path_value(started_pid_path.as_path()),
-                    release_tag,
-                )
-            },
-        )
-        .unwrap_or_default();
-    let release_precondition = release_state
-        .map(|(_transaction_path, _, _, _)| {
-            "         if not exist \"%release_transaction%\" goto fail_11\r\n".to_string()
-        })
-        .unwrap_or_default();
-    let release_health_check = release_state
-        .map(|_| {
-            "         if not exist \"%release_ready_temp%\" goto release_health_failure\r\n\\
-                 set \"WUWAID_RELEASE_PID=%release_pid%\"\r\n\\
-                 start \"\" /wait /b \"%WUWAID_POWERSHELL_PATH%\" -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; try { $markerText=[IO.File]::ReadAllText($env:WUWAID_LAUNCHER_UPDATE_READY).Trim(); if ($markerText -notmatch '^[1-9][0-9]*$') { exit 1 }; [uint32]$markerPid=[uint32]$markerText; [uint32]$startedPid=[uint32]$env:WUWAID_RELEASE_PID; if ($markerPid -ne $startedPid) { exit 1 }; $process=Get-Process -Id $startedPid -ErrorAction Stop; $expected=[IO.Path]::GetFullPath($env:WUWAID_UPDATE_EXECUTABLE); $actual=[IO.Path]::GetFullPath($process.Path); if (-not [String]::Equals($actual,$expected,[StringComparison]::OrdinalIgnoreCase)) { exit 1 }; exit 0 } catch { exit 1 }\"\r\n\\
-                 if errorlevel 1 goto release_health_failure\r\n"
-                .to_string()
-        })
-        .unwrap_or_default();
-    let release_start = release_state
-        .map(|_| {
-            format!(
-                "         set \"WUWAID_UPDATE_EXECUTABLE={}\"\r\n\\
-                 set \"WUWAID_UPDATE_DIRECTORY={}\"\r\n\\
-                 set \"WUWAID_UPDATE_PID_FILE={}\"\r\n\\
-                 set \"release_started_pid=\"\r\n\\
-                 set \"release_start_ok=\"\r\n\\
-                 start \"\" /wait /b \"%WUWAID_POWERSHELL_PATH%\" -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; $process=$null; $pidTemp=$env:WUWAID_UPDATE_PID_FILE + '.tmp'; try {{ $process=Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE -WorkingDirectory $env:WUWAID_UPDATE_DIRECTORY -PassThru; $pidText=[string]$process.Id; Write-Output ('WUWAID_UPDATE_PID=' + $pidText); [IO.File]::WriteAllText($pidTemp, $pidText); Move-Item -LiteralPath $pidTemp -Destination $env:WUWAID_UPDATE_PID_FILE -Force; $readback=[IO.File]::ReadAllText($env:WUWAID_UPDATE_PID_FILE).Trim(); if ($readback -cne $pidText) {{ throw 'PID sidecar verification failed' }}; Write-Output 'WUWAID_UPDATE_START_OK=1' }} catch {{ if ($null -ne $process) {{ try {{ $process.Kill() }} catch {{ }} }}; Remove-Item -LiteralPath $pidTemp -Force -ErrorAction SilentlyContinue; exit 1 }}\" >nul 2>nul\r\n\\
-
-
-                  for /f \"delims=\" %%A in ('type \"%WUWAID_UPDATE_PID_FILE%\"') do set \"release_started_pid=%%A\"\r\n\\
-                  if not defined release_started_pid goto fail_6\r\n\\
-                  for /f \"delims=0123456789\" %%A in (\"%release_started_pid%\") do goto fail_6\r\n\\
-                  if \"%release_started_pid%\"==\"0\" goto fail_6\r\n\\
-                  set \"release_pid=%release_started_pid%\"\r\n\\
-                   set \"release_pid_valid=1\"\r\n\\
-                 set \"release_start_ok=1\"\r\n\\
-                 cmd /c exit 0\r\n",
-                path_value(current_executable),
-                path_value(current_directory),
-                path_value(started_pid_path.as_path()),
-            )
-        })
-        .unwrap_or_default();
-    let release_rollback = |failure: &str| {
-        format!(
-            "                 if defined release_pid_valid call :stop_released_launcher\r\n\\
-                 copy /Y {backup} {current} >nul\r\n\\
-                 if errorlevel 1 goto fail_8\r\n\\
-                 goto {failure}\r\n",
-            current = quote(current_executable),
-            backup = quote(&backup_executable),
-            failure = failure,
-        )
-    };
-    let release_commit = release_state
-        .map(|(_, _, _, _)| {
-            let pending_rollback = release_rollback("fail_11");
-            let marker_rollback = release_rollback("fail_12");
-            let ready_rollback = release_rollback("fail_13");
-            format!(
-                "         move /Y \"%release_transaction%\" \"%release_pending%\" >nul\r\n\\
-                 if errorlevel 1 (\r\n\\
-                 {pending_rollback}                 )\r\n\\
-                 del /Q \"%release_ready_temp%\" >nul 2>nul\r\n\\
-                 >\"%release_ready_temp%\" echo %release_tag%\r\n\\
-                 if not exist \"%release_ready_temp%\" (\r\n\\
-                 {marker_rollback}                 )\r\n\\
-                 move /Y \"%release_ready_temp%\" \"%release_ready%\" >nul\r\n\\
-                 if errorlevel 1 (\r\n\\
-                 {ready_rollback}                 )\r\n",
-                pending_rollback = pending_rollback,
-                marker_rollback = marker_rollback,
-                ready_rollback = ready_rollback,
-            )
-        })
-        .unwrap_or_default();
-    let failure_state_cleanup = if release_state.is_some() {
-        "         call :cleanup_release_state\r\n"
-    } else {
-        ""
-    };
-    let release_process_cleanup = release_state
-        .map(|_| {
-            format!(
-                "         :stop_released_launcher\r\n\\
-                 %SystemRoot%\\System32\\taskkill.exe /PID %release_pid% /T /F >nul 2>nul\r\n\\
-                 for /L %%W in (1,1,10) do (\r\n\\
-                     %SystemRoot%\\System32\\tasklist.exe /FI \"PID eq %release_pid%\" /FO CSV /NH | %SystemRoot%\\System32\\findstr.exe /I /C:\"%release_pid%\" >nul\r\n\\
-                     if errorlevel 1 exit /b 0\r\n\\
-                     {sleep_one}                 )\r\n\\
-                 exit /b 0\r\n",
-                sleep_one = sleep_one,
-            )
-        })
-        .unwrap_or_default();
-    let release_health_failure = release_state
-        .map(|_| {
-            format!(
-                ":release_health_failure\r\n{rollback}",
-                rollback = release_rollback("fail_7"),
-            )
-        })
-        .unwrap_or_default();
-    let release_fail_6 = if release_state.is_some() {
-        let rollback = release_rollback("fail_6_after_rollback");
-        format!(
-            ":fail_6\r\n{rollback}:fail_6_after_rollback\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 6\r\n",
-            rollback = rollback,
-            failure_state_cleanup = failure_state_cleanup,
-        )
-    } else {
-        format!(
-            ":fail_6\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 6\r\n",
-            failure_state_cleanup = failure_state_cleanup,
-        )
-    };
-    let failure_labels = format!(
-        "{release_process_cleanup}{release_health_failure}:fail_1\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 1\r\n\\
-         :fail_2\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 2\r\n\\
-         :fail_3\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 3\r\n\\
-         :fail_4\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 4\r\n\\
-         :fail_5\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 5\r\n\\
-         {release_fail_6}\\
-         :fail_7\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 7\r\n\\
-         :fail_8\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 8\r\n\\
-         :fail_9\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 9\r\n\\
-         :fail_10\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 10\r\n\\
-         :fail_11\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 11\r\n\\
-         :fail_12\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 12\r\n\\
-         :fail_13\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 13\r\n",
-    );
-    let release_cleanup = release_state
-        .map(|(transaction_path, pending_path, ready_marker_path, _)| {
-            let ready_marker_temp = release_note_marker_temp_path(ready_marker_path);
-            format!(
-                ":cleanup_release_state\r\n\\
-                 rem Remove the visibility marker before payload files.\r\n\\
-                 del /Q \"%release_started_pid_file%.tmp\" >nul 2>nul\r\n\\
-                 del /Q {} >nul 2>nul\r\n\\
-                 del /Q {} >nul 2>nul\r\n\\
-                 del /Q {} >nul 2>nul\r\n\\
-                 del /Q {} >nul 2>nul\r\n\\
-                 del /Q {} >nul 2>nul\r\n\\
-                 exit /b 0\r\n",
-                quote(ready_marker_path),
-                quote(ready_marker_temp.as_path()),
-                quote(started_pid_path.as_path()),
-                quote(transaction_path),
-                quote(pending_path),
-            )
-        })
-        .unwrap_or_default();
-    let update_cleanup = format!(
-        ":cleanup_update_files\r\n\\
-         del /Q {replacement} >nul 2>nul\r\n\\
-         del /Q {backup} >nul 2>nul\r\n\\
-         rmdir /S /Q {staging} >nul 2>nul\r\n\\
-         {delete_self}\\
-         exit /b 0\r\n",
-        delete_self = delete_self,
-        replacement = quote(&replacement_executable),
-        backup = quote(&backup_executable),
-        staging = quote(staging_dir),
-    );
+    let delete_self = "set \"WUWAID_HANDOFF_DELETE=%~f0.wuwaid-delete-%RANDOM%-%RANDOM%\"\r\n\
+                  if exist \"%WUWAID_HANDOFF_DELETE%\" exit /b 0\r\n\
+                  move /Y \"%~f0\" \"%WUWAID_HANDOFF_DELETE%\" >nul 2>nul\r\n\
+                  if errorlevel 1 exit /b 0\r\n\
+                  start \"\" /b \"%ComSpec%\" /d /c del /q \"%WUWAID_HANDOFF_DELETE%\" >nul 2>nul\r\n";
     let script = format!(
         "@echo off\r\n\
          set \"WUWAID_POWERSHELL_PATH=%ProgramW6432%\\PowerShell\\7\\pwsh.exe\"\r\n\
@@ -579,77 +826,6 @@ fn create_update_handoff_impl(
         sleep_one = sleep_one,
         sleep_two = sleep_two,
     );
-    let script = if release_state.is_some() {
-        let release_setup = normalize_batch_fragment(&release_setup);
-        let release_precondition = normalize_batch_fragment(&release_precondition);
-        let release_health_check = normalize_batch_fragment(&release_health_check);
-        let release_start = normalize_batch_fragment(&release_start);
-        let release_commit = normalize_batch_fragment(&release_commit);
-        let failure_labels = normalize_batch_fragment(&failure_labels);
-        let release_cleanup = normalize_batch_fragment(&release_cleanup);
-        let update_cleanup = normalize_batch_fragment(&update_cleanup);
-        let mut script = script;
-        script = script.replace(
-            "setlocal DisableDelayedExpansion\r\n",
-            &format!("setlocal DisableDelayedExpansion\r\n{release_setup}"),
-        );
-        for code in 1..=8 {
-            script = script.replace(
-                &format!("exit /b {code}\r\n"),
-                &format!("goto fail_{code}\r\n"),
-            );
-        }
-        let replacement = quote(&replacement_executable);
-        let replacement_anchor =
-            format!("if exist {replacement} del /Q {replacement} >nul 2>nul\r\n");
-        script = script.replace(
-            &replacement_anchor,
-            &format!("{release_precondition}{replacement_anchor}"),
-        );
-        let start_anchor = format!("start \"\" {}\r\n", quote(current_executable));
-        if !script.contains(&start_anchor) {
-            return Err(
-                "Template handoff update tidak memiliki awal proses yang diharapkan.".to_string(),
-            );
-        }
-        script = script.replace(&start_anchor, &release_start);
-        let backup = quote(&backup_executable);
-        let health_anchor =
-            "%SystemRoot%\\System32\\tasklist.exe /FI \"IMAGENAME eq WuwaIDLauncher.exe\" | %SystemRoot%\\System32\\findstr.exe /I /C:\"WuwaIDLauncher.exe\" >nul\r\n";
-        if !script.contains(health_anchor) {
-            return Err(
-                "Template handoff update tidak memiliki pemeriksaan kesehatan yang diharapkan."
-                    .to_string(),
-            );
-        }
-        script = script.replace(health_anchor, &release_health_check);
-        let staging = quote(staging_dir);
-        let success_anchor = format!(
-            "del /Q {backup} >nul 2>nul\r\nrmdir /S /Q {staging} >nul 2>nul\r\nstart \"\" /b \"%ComSpec%\" /d /c del /q \"%~f0\" >nul 2>nul\r\nexit /b 0\r\n",
-            backup = backup,
-            staging = staging,
-        );
-        if !script.contains(&success_anchor) {
-            return Err(
-                "Template handoff update tidak memiliki akhir sukses yang diharapkan.".to_string(),
-            );
-        }
-        let started_pid = quote(&started_pid_path);
-        let success = format!(
-            "{release_commit}del /Q {started_pid} >nul 2>nul\r\ndel /Q {backup} >nul 2>nul\r\nrmdir /S /Q {staging} >nul 2>nul\r\n{delete_self}exit /b 0\r\n{failure_labels}{release_cleanup}{update_cleanup}",
-            release_commit = release_commit,
-            started_pid = started_pid,
-            backup = backup,
-            staging = staging,
-            delete_self = delete_self,
-            failure_labels = failure_labels,
-            release_cleanup = release_cleanup,
-            update_cleanup = update_cleanup,
-        );
-        script.replace(&success_anchor, &success)
-    } else {
-        script
-    };
     if let Some(parent) = handoff_path.parent() {
         fs::create_dir_all(parent)
             .map_err(|error| format!("Gagal membuat folder handoff update: {error}"))?;
@@ -1099,12 +1275,12 @@ mod tests {
             "v2.10.0",
         )
         .unwrap();
-        let script = std::fs::read_to_string(handoff).unwrap();
+        let script = std::fs::read_to_string(&handoff).unwrap();
+        let powershell_path = handoff.with_extension("ps1");
+        let powershell = std::fs::read_to_string(&powershell_path).unwrap();
 
-        assert!(script.contains("if not exist \"%release_transaction%\" goto fail_11"));
-        assert!(script.contains("move /Y \"%release_transaction%\" \"%release_pending%\""));
-        assert!(script.contains("set \"release_tag=v2.10.0\""));
-        assert!(script.contains("Start-Sleep -Seconds 2"));
+        assert!(script.contains("@echo off"));
+        assert!(script.contains("setlocal DisableDelayedExpansion"));
         assert!(script
             .contains("set \"WUWAID_POWERSHELL_PATH=%ProgramW6432%\\PowerShell\\7\\pwsh.exe\""));
         assert!(script.contains(
@@ -1113,45 +1289,46 @@ mod tests {
         assert!(script.contains(
             "if not exist \"%WUWAID_POWERSHELL_PATH%\" set \"WUWAID_POWERSHELL_PATH=%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\""
         ));
-        assert!(script.contains("start \"\" /wait /b \"%WUWAID_POWERSHELL_PATH%\" -NoProfile"));
-        assert!(script.contains(
-            "for /f \"delims=\" %%A in ('type \"%WUWAID_UPDATE_PID_FILE%\"') do set \"release_started_pid=%%A\""
-        ));
-        assert!(!script.contains("timeout.exe"));
-        assert!(script.contains("start \"\" /b \"%ComSpec%\" /d /c del /q \"%~f0\""));
-        assert!(script.contains("set \"WUWAID_LAUNCHER_UPDATE_READY=%release_ready_temp%\""));
-        assert!(script.contains("Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE"));
-        assert!(!script.contains("RedirectStandardOutput"));
-        assert!(script.contains("[IO.File]::WriteAllText($pidTemp, $pidText)"));
-        assert!(script.contains(
-            "Move-Item -LiteralPath $pidTemp -Destination $env:WUWAID_UPDATE_PID_FILE -Force"
-        ));
-        assert!(script.contains("[IO.File]::ReadAllText($env:WUWAID_UPDATE_PID_FILE)"));
-        assert!(script.contains("WUWAID_UPDATE_PID="));
-        assert!(script.contains("set \"release_start_ok=1\""));
-        assert!(script.contains("$markerPid -ne $startedPid"));
-        assert!(script.contains("$env:WUWAID_LAUNCHER_UPDATE_READY"));
+        assert!(script.contains("-ExecutionPolicy Bypass -File \"%~dpn0.ps1\""));
+        assert!(!script.contains("type "));
+        assert!(!script.contains("for /f"));
         assert!(!script.contains("set /p "));
-        assert!(!script.contains("release_marker_pid"));
-        assert!(!script.contains("release_pid=%release_marker_pid%"));
-        assert!(script.contains("if exist \"%release_ready_temp%\" goto fail_12"));
-        assert!(script.contains("PID eq %release_pid%"));
-        assert!(script.contains(":stop_released_launcher"));
-        assert!(script.contains("taskkill.exe /PID %release_pid% /T /F"));
-        let health_failure = &script[script.find(":release_health_failure").unwrap()..];
-        assert!(
-            health_failure.find("call :stop_released_launcher").unwrap()
-                < health_failure.find("copy /Y").unwrap()
-        );
-        let fail_6 = &script[script.find(":fail_6\r\n").unwrap()..];
-        assert!(
-            fail_6.find("call :stop_released_launcher").unwrap() < fail_6.find("copy /Y").unwrap()
-        );
-        assert!(!script.contains("tasklist.exe /FI \"IMAGENAME eq WuwaIDLauncher.exe\" |"));
-        assert!(script.contains("goto fail_7"));
-        assert!(script.contains("if not exist \"%release_ready_temp%\""));
-        assert!(script.contains(":cleanup_release_state"));
-        assert!(!script.lines().any(|line| line.trim_end().ends_with('\\')));
-        assert!(script.contains(&format!("del /Q \"{}\"", pending.to_string_lossy())));
+        assert!(!script.contains("taskkill"));
+        assert!(!script.contains("release_pid"));
+        assert!(!script.contains("del /q"));
+        assert!(!script.contains("rmdir"));
+
+        assert!(powershell.contains("function Read-StrictPid"));
+        assert!(powershell.contains("[IO.File]::ReadAllText($Path).Trim()"));
+        assert!(powershell.contains("'\\A[1-9][0-9]{0,9}\\z'"));
+        assert!(powershell.contains("[Convert]::ToUInt32($text, 10)"));
+        assert!(powershell.contains("Start-Process -FilePath $current"));
+        assert!(powershell.contains("if (-not [IO.File]::Exists($staged))"));
+        assert!(powershell.contains("WriteAllText($readyTemp, 'v2.10.0' +"));
+        assert!(powershell.contains("-NoNewWindow -PassThru"));
+        assert!(powershell.contains("$null = $Process.Handle"));
+        assert!(powershell.contains("StartTimeUtc"));
+        assert!(powershell.contains("function Stop-VerifiedTree"));
+        assert!(powershell.contains("ParentProcessId"));
+        assert!(powershell.contains("Kill', [Type[]]@([bool])"));
+        assert!(powershell.contains("$Identity.Process"));
+        assert!(powershell.contains("(Read-StrictPid $readyTemp) -ne $rootIdentity.Pid"));
+        assert!(powershell.contains("Test-SameProcessIdentity $rootIdentity $live -NeedPath"));
+        assert!(powershell.contains("Move-Item -LiteralPath $pidTemp -Destination $pidFile -Force"));
+        assert!(powershell.contains("Remove-FileWithRetry ($pidFile + '.tmp')"));
+        assert!(powershell.contains("function Start-DeferredSelfCleanup"));
+        assert!(powershell.contains("$encoded = [Convert]::ToBase64String"));
+        assert!(powershell.contains("$handoffToken"));
+        assert!(!powershell.contains("RedirectStandardOutput"));
+        assert!(!powershell.contains("$process.Kill()"));
+        assert!(powershell.contains("$root.Kill()"));
+        assert!(powershell.contains("Copy-Item -LiteralPath $backup -Destination $current -Force"));
+        assert!(powershell.contains("$rollbackSucceeded = $false"));
+        assert!(powershell.contains("$rollbackSucceeded -or -not $backupCreated"));
+        assert!(powershell.contains("$committed = $true"));
+        assert!(!powershell.contains("__HANDOFF_TOKEN__"));
+        assert!(!powershell
+            .lines()
+            .any(|line| line.trim_end().ends_with('\\')));
     }
 }

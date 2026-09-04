@@ -1602,9 +1602,29 @@ fn get_vh_release_notes<R: Runtime>(app: AppHandle<R>) {
 }
 
 fn cleanup_update_artifacts(temp_zip: &Path, staging: &Path, handoff: &Path) {
+    let started_pid = handoff.with_file_name(format!(
+        "{}.wuwaid-started.pid",
+        handoff
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("update-handoff.cmd")
+    ));
     let _ = std::fs::remove_file(temp_zip);
     let _ = std::fs::remove_dir_all(staging);
     let _ = std::fs::remove_file(handoff);
+    let _ = std::fs::remove_file(handoff.with_extension("ps1"));
+    let _ = std::fs::remove_file(&started_pid);
+    let _ = std::fs::remove_file(format!("{}.tmp", started_pid.to_string_lossy()));
+    if let (Some(parent), Some(name)) = (started_pid.parent(), started_pid.file_name()) {
+        let prefix = format!("{}.tmp.", name.to_string_lossy());
+        if let Ok(entries) = std::fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
 }
 
 fn launcher_update_tag(version: &str) -> String {
@@ -2724,7 +2744,19 @@ fn signal_launcher_update_ready() {
     let Some(path) = std::env::var_os(LAUNCHER_UPDATE_READY_ENV) else {
         return;
     };
-    if let Err(error) = std::fs::write(path, format!("{}\n", std::process::id())) {
+    let marker_path = std::path::PathBuf::from(path);
+    let marker_name = marker_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("launcher-update-ready.tag.tmp");
+    let marker_temp =
+        marker_path.with_file_name(format!(".{marker_name}.write-{}.tmp", std::process::id()));
+    let write_result = (|| -> std::io::Result<()> {
+        std::fs::write(&marker_temp, format!("{}\n", std::process::id()))?;
+        std::fs::rename(&marker_temp, &marker_path)
+    })();
+    let _ = std::fs::remove_file(&marker_temp);
+    if let Err(error) = write_result {
         log::error!("Tidak dapat menulis marker launcher update: {error}");
         // A handoff without a readiness marker cannot safely prove which
         // process to stop before rollback. Exit so the handoff can restore the
