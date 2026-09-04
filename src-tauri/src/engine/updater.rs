@@ -334,8 +334,8 @@ fn create_update_handoff_impl(
     }
     let path_value = |path: &Path| path.to_string_lossy().replace('%', "%%");
     let quote = |path: &Path| format!("\"{}\"", path_value(path));
-    let sleep_one = "%WUWAID_POWERSHELL% -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 1\" >nul 2>nul\r\n";
-    let sleep_two = "%WUWAID_POWERSHELL% -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 2\" >nul 2>nul\r\n";
+    let sleep_one = "\"%WUWAID_POWERSHELL_PATH%\" -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 1\" >nul 2>nul\r\n";
+    let sleep_two = "\"%WUWAID_POWERSHELL_PATH%\" -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 2\" >nul 2>nul\r\n";
     let delete_self = "start \"\" /b \"%ComSpec%\" /d /c del /q \"%~f0\" >nul 2>nul\r\n";
     let release_setup = release_state
         .map(
@@ -372,7 +372,7 @@ fn create_update_handoff_impl(
         .map(|_| {
             "         if not exist \"%release_ready_temp%\" goto release_health_failure\r\n\\
                  set \"WUWAID_RELEASE_PID=%release_pid%\"\r\n\\
-                 %WUWAID_POWERSHELL% -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; try { $markerText=[IO.File]::ReadAllText($env:WUWAID_LAUNCHER_UPDATE_READY).Trim(); if ($markerText -notmatch '^[1-9][0-9]*$') { exit 1 }; [uint32]$markerPid=[uint32]$markerText; [uint32]$startedPid=[uint32]$env:WUWAID_RELEASE_PID; if ($markerPid -ne $startedPid) { exit 1 }; $process=Get-Process -Id $startedPid -ErrorAction Stop; $expected=[IO.Path]::GetFullPath($env:WUWAID_UPDATE_EXECUTABLE); $actual=[IO.Path]::GetFullPath($process.Path); if (-not [String]::Equals($actual,$expected,[StringComparison]::OrdinalIgnoreCase)) { exit 1 }; exit 0 } catch { exit 1 }\"\r\n\\
+                 \"%WUWAID_POWERSHELL_PATH%\" -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; try { $markerText=[IO.File]::ReadAllText($env:WUWAID_LAUNCHER_UPDATE_READY).Trim(); if ($markerText -notmatch '^[1-9][0-9]*$') { exit 1 }; [uint32]$markerPid=[uint32]$markerText; [uint32]$startedPid=[uint32]$env:WUWAID_RELEASE_PID; if ($markerPid -ne $startedPid) { exit 1 }; $process=Get-Process -Id $startedPid -ErrorAction Stop; $expected=[IO.Path]::GetFullPath($env:WUWAID_UPDATE_EXECUTABLE); $actual=[IO.Path]::GetFullPath($process.Path); if (-not [String]::Equals($actual,$expected,[StringComparison]::OrdinalIgnoreCase)) { exit 1 }; exit 0 } catch { exit 1 }\"\r\n\\
                  if errorlevel 1 goto release_health_failure\r\n"
                 .to_string()
         })
@@ -385,7 +385,7 @@ fn create_update_handoff_impl(
                  set \"WUWAID_UPDATE_PID_FILE={}\"\r\n\\
                  set \"release_started_pid=\"\r\n\\
                  set \"release_start_ok=\"\r\n\\
-                 for /f \"tokens=1,2 delims==\" %%A in (`%WUWAID_POWERSHELL% -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; $process=$null; $pidTemp=$env:WUWAID_UPDATE_PID_FILE + '.tmp'; try {{ $process=Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE -WorkingDirectory $env:WUWAID_UPDATE_DIRECTORY -PassThru -RedirectStandardOutput 'NUL' -RedirectStandardError 'NUL'; $pidText=[string]$process.Id; Write-Output ('WUWAID_UPDATE_PID=' + $pidText); [IO.File]::WriteAllText($pidTemp, $pidText); Move-Item -LiteralPath $pidTemp -Destination $env:WUWAID_UPDATE_PID_FILE -Force; $readback=[IO.File]::ReadAllText($env:WUWAID_UPDATE_PID_FILE).Trim(); if ($readback -cne $pidText) {{ throw 'PID sidecar verification failed' }}; Write-Output 'WUWAID_UPDATE_START_OK=1' }} catch {{ if ($null -ne $process) {{ try {{ $process.Kill() }} catch {{ }} }}; Remove-Item -LiteralPath $pidTemp -Force -ErrorAction SilentlyContinue; exit 1 }}\"`) do (\r\n\\
+                 for /f \"tokens=1,2 delims==\" %%A in (`\"%WUWAID_POWERSHELL_PATH%\" -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; $process=$null; $pidTemp=$env:WUWAID_UPDATE_PID_FILE + '.tmp'; try {{ $process=Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE -WorkingDirectory $env:WUWAID_UPDATE_DIRECTORY -PassThru -RedirectStandardOutput 'NUL' -RedirectStandardError 'NUL'; $pidText=[string]$process.Id; Write-Output ('WUWAID_UPDATE_PID=' + $pidText); [IO.File]::WriteAllText($pidTemp, $pidText); Move-Item -LiteralPath $pidTemp -Destination $env:WUWAID_UPDATE_PID_FILE -Force; $readback=[IO.File]::ReadAllText($env:WUWAID_UPDATE_PID_FILE).Trim(); if ($readback -cne $pidText) {{ throw 'PID sidecar verification failed' }}; Write-Output 'WUWAID_UPDATE_START_OK=1' }} catch {{ if ($null -ne $process) {{ try {{ $process.Kill() }} catch {{ }} }}; Remove-Item -LiteralPath $pidTemp -Force -ErrorAction SilentlyContinue; exit 1 }}\"`) do (\r\n\\
                      if \"%%A\"==\"WUWAID_UPDATE_PID\" set \"release_started_pid=%%B\"\r\n\\
                      if \"%%A\"==\"WUWAID_UPDATE_START_OK\" set \"release_start_ok=%%B\"\r\n\\
                  )\r\n\\
@@ -525,9 +525,8 @@ fn create_update_handoff_impl(
     );
     let script = format!(
         "@echo off\r\n\
-         set \"WUWAID_POWERSHELL=pwsh.exe\"\r\n\
-         where.exe /Q pwsh.exe >nul 2>nul\r\n\
-         if errorlevel 1 set \"WUWAID_POWERSHELL=%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\"\r\n\
+         set \"WUWAID_POWERSHELL_PATH=%ProgramFiles%\\PowerShell\\7\\pwsh.exe\"\r\n\
+         if not exist \"%WUWAID_POWERSHELL_PATH%\" set \"WUWAID_POWERSHELL_PATH=%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\"\r\n\
          setlocal DisableDelayedExpansion\r\n\
          rem WuwaID updater handoff with a verified backup and rollback\r\n\
          {sleep_one}\r\n\
@@ -1105,10 +1104,10 @@ mod tests {
         assert!(script.contains("move /Y \"%release_transaction%\" \"%release_pending%\""));
         assert!(script.contains("set \"release_tag=v2.10.0\""));
         assert!(script.contains("Start-Sleep -Seconds 2"));
-        assert!(script.contains("where.exe /Q pwsh.exe"));
-        assert!(script.contains("set \"WUWAID_POWERSHELL=pwsh.exe\""));
+        assert!(script
+            .contains("set \"WUWAID_POWERSHELL_PATH=%ProgramFiles%\\PowerShell\\7\\pwsh.exe\""));
         assert!(script.contains(
-            "set \"WUWAID_POWERSHELL=%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\""
+            "if not exist \"%WUWAID_POWERSHELL_PATH%\" set \"WUWAID_POWERSHELL_PATH=%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\""
         ));
         assert!(!script.contains("timeout.exe"));
         assert!(script.contains("start \"\" /b \"%ComSpec%\" /d /c del /q \"%~f0\""));
