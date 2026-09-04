@@ -11,9 +11,18 @@ fn signal_launcher_update_ready() -> bool {
         return false;
     };
     let pid = std::process::id();
-    fs::write(path, format!("{pid}\n")).expect("update ready marker");
+    let skip_ready = std::env::var_os("WUWAID_LAUNCHER_UPDATE_SKIP_READY").is_some();
+    let marker_pid = std::env::var("WUWAID_LAUNCHER_UPDATE_READY_PID")
+        .ok()
+        .map(|value| value.parse::<u32>().expect("update ready PID"))
+        .unwrap_or(pid);
     if let Some(pid_path) = std::env::var_os("WUWAID_LAUNCHER_UPDATE_PID_FILE") {
         fs::write(pid_path, format!("{pid}\n")).expect("update fixture pid");
+    }
+    if !skip_ready {
+        let marker = std::env::var("WUWAID_LAUNCHER_UPDATE_READY_TEXT")
+            .unwrap_or_else(|_| format!("{marker_pid}\n"));
+        fs::write(path, marker).expect("update ready marker");
     }
     true
 }

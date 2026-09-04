@@ -214,6 +214,8 @@ pub fn create_update_handoff(
 
 /// Creates a handoff which commits the release-notes transaction only after
 /// the replacement executable is running and passes the process health check.
+/// The started PID is captured from the process launcher, while the PID
+/// sidecar is written and read back in PowerShell before the handoff proceeds.
 /// Failed copy, rollback, launch, or health-check paths remove all release-note
 /// state so a failed update cannot surface as What's New later.
 pub fn create_update_handoff_with_release_state(
@@ -348,6 +350,7 @@ fn create_update_handoff_impl(
                  set \"release_tag={}\"\r\n\\
                  del /Q \"%release_ready_temp%\" >nul 2>nul\r\n\\
                  del /Q \"%release_started_pid_file%\" >nul 2>nul\r\n\\
+                 del /Q \"%release_started_pid_file%.tmp\" >nul 2>nul\r\n\\
                  if exist \"%release_ready_temp%\" goto fail_12\r\n\\
                  set \"WUWAID_LAUNCHER_UPDATE_READY=%release_ready_temp%\"\r\n",
                     path_value(transaction_path),
@@ -368,13 +371,8 @@ fn create_update_handoff_impl(
     let release_health_check = release_state
         .map(|_| {
             "         if not exist \"%release_ready_temp%\" goto release_health_failure\r\n\\
-                 set \"release_marker_pid=\"\r\n\\
-                 set /p \"release_marker_pid=\"<\"%release_ready_temp%\"\r\n\\
-                 if not defined release_marker_pid goto release_health_failure\r\n\\
-                 for /f \"delims=0123456789\" %%A in (\"%release_marker_pid%\") do goto release_health_failure\r\n\\
-                 set \"release_pid=%release_marker_pid%\"\r\n\\
-                 set \"release_pid_valid=1\"\r\n\\
-                 %SystemRoot%\\System32\\tasklist.exe /FI \"PID eq %release_pid%\" /FI \"IMAGENAME eq WuwaIDLauncher.exe\" | %SystemRoot%\\System32\\findstr.exe /I /C:\"WuwaIDLauncher.exe\" >nul\r\n\\
+                 set \"WUWAID_RELEASE_PID=%release_pid%\"\r\n\\
+                 %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; try { $markerText=[IO.File]::ReadAllText($env:WUWAID_LAUNCHER_UPDATE_READY).Trim(); if ($markerText -notmatch '^[1-9][0-9]*$') { exit 1 }; [uint32]$markerPid=[uint32]$markerText; [uint32]$startedPid=[uint32]$env:WUWAID_RELEASE_PID; if ($markerPid -ne $startedPid) { exit 1 }; $process=Get-Process -Id $startedPid -ErrorAction Stop; $expected=[IO.Path]::GetFullPath($env:WUWAID_UPDATE_EXECUTABLE); $actual=[IO.Path]::GetFullPath($process.Path); if (-not [String]::Equals($actual,$expected,[StringComparison]::OrdinalIgnoreCase)) { exit 1 }; exit 0 } catch { exit 1 }\"\r\n\\
                  if errorlevel 1 goto release_health_failure\r\n"
                 .to_string()
         })
@@ -385,15 +383,18 @@ fn create_update_handoff_impl(
                 "         set \"WUWAID_UPDATE_EXECUTABLE={}\"\r\n\\
                  set \"WUWAID_UPDATE_DIRECTORY={}\"\r\n\\
                  set \"WUWAID_UPDATE_PID_FILE={}\"\r\n\\
-                 %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"$process = Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE -WorkingDirectory $env:WUWAID_UPDATE_DIRECTORY -PassThru; [IO.File]::WriteAllText($env:WUWAID_UPDATE_PID_FILE, [string]$process.Id)\"\r\n\\
-                 if errorlevel 1 goto fail_6\r\n\\
-                 if not exist \"%release_started_pid_file%\" goto fail_6\r\n\\
                  set \"release_started_pid=\"\r\n\\
-                 set /p \"release_started_pid=\"<\"%release_started_pid_file%\"\r\n\\
+                 set \"release_start_ok=\"\r\n\\
+                 for /f \"tokens=1,2 delims==\" %%A in (`%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; $process=$null; $pidTemp=$env:WUWAID_UPDATE_PID_FILE + '.tmp'; try {{ $process=Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE -WorkingDirectory $env:WUWAID_UPDATE_DIRECTORY -PassThru -RedirectStandardOutput 'NUL' -RedirectStandardError 'NUL'; $pidText=[string]$process.Id; Write-Output ('WUWAID_UPDATE_PID=' + $pidText); [IO.File]::WriteAllText($pidTemp, $pidText); Move-Item -LiteralPath $pidTemp -Destination $env:WUWAID_UPDATE_PID_FILE -Force; $readback=[IO.File]::ReadAllText($env:WUWAID_UPDATE_PID_FILE).Trim(); if ($readback -cne $pidText) {{ throw 'PID sidecar verification failed' }}; Write-Output 'WUWAID_UPDATE_START_OK=1' }} catch {{ if ($null -ne $process) {{ try {{ $process.Kill() }} catch {{ }} }}; Remove-Item -LiteralPath $pidTemp -Force -ErrorAction SilentlyContinue; exit 1 }}\"`) do (\r\n\\
+                     if \"%%A\"==\"WUWAID_UPDATE_PID\" set \"release_started_pid=%%B\"\r\n\\
+                     if \"%%A\"==\"WUWAID_UPDATE_START_OK\" set \"release_start_ok=%%B\"\r\n\\
+                 )\r\n\\
                  if not defined release_started_pid goto fail_6\r\n\\
-                 for /f \"delims=0123456789\" %%A in (\"%release_started_pid%\") do goto fail_6\r\n\\
-                 set \"release_pid=%release_started_pid%\"\r\n\\
-                 set \"release_pid_valid=1\"\r\n\\
+                  for /f \"delims=0123456789\" %%A in (\"%release_started_pid%\") do goto fail_6\r\n\\
+                  if \"%release_started_pid%\"==\"0\" goto fail_6\r\n\\
+                  set \"release_pid=%release_started_pid%\"\r\n\\
+                   set \"release_pid_valid=1\"\r\n\\
+                 if not \"%release_start_ok%\"==\"1\" goto fail_6\r\n\\
                  cmd /c exit 0\r\n",
                 path_value(current_executable),
                 path_value(current_directory),
@@ -461,13 +462,26 @@ fn create_update_handoff_impl(
             )
         })
         .unwrap_or_default();
+    let release_fail_6 = if release_state.is_some() {
+        let rollback = release_rollback("fail_6_after_rollback");
+        format!(
+            ":fail_6\r\n{rollback}:fail_6_after_rollback\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 6\r\n",
+            rollback = rollback,
+            failure_state_cleanup = failure_state_cleanup,
+        )
+    } else {
+        format!(
+            ":fail_6\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 6\r\n",
+            failure_state_cleanup = failure_state_cleanup,
+        )
+    };
     let failure_labels = format!(
         "{release_process_cleanup}{release_health_failure}:fail_1\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 1\r\n\\
          :fail_2\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 2\r\n\\
          :fail_3\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 3\r\n\\
          :fail_4\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 4\r\n\\
          :fail_5\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 5\r\n\\
-         :fail_6\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 6\r\n\\
+         {release_fail_6}\\
          :fail_7\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 7\r\n\\
          :fail_8\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 8\r\n\\
          :fail_9\r\n{failure_state_cleanup}         call :cleanup_update_files\r\n         exit /b 9\r\n\\
@@ -482,6 +496,7 @@ fn create_update_handoff_impl(
             format!(
                 ":cleanup_release_state\r\n\\
                  rem Remove the visibility marker before payload files.\r\n\\
+                 del /Q \"%release_started_pid_file%.tmp\" >nul 2>nul\r\n\\
                  del /Q {} >nul 2>nul\r\n\\
                  del /Q {} >nul 2>nul\r\n\\
                  del /Q {} >nul 2>nul\r\n\\
@@ -510,7 +525,7 @@ fn create_update_handoff_impl(
     );
     let script = format!(
         "@echo off\r\n\
-         setlocal\r\n\
+         setlocal DisableDelayedExpansion\r\n\
          rem WuwaID updater handoff with a verified backup and rollback\r\n\
          {sleep_one}\r\n\
          if not exist {staged} exit /b 1\r\n\
@@ -571,7 +586,10 @@ fn create_update_handoff_impl(
         let release_cleanup = normalize_batch_fragment(&release_cleanup);
         let update_cleanup = normalize_batch_fragment(&update_cleanup);
         let mut script = script;
-        script = script.replace("setlocal\r\n", &format!("setlocal\r\n{release_setup}"));
+        script = script.replace(
+            "setlocal DisableDelayedExpansion\r\n",
+            &format!("setlocal DisableDelayedExpansion\r\n{release_setup}"),
+        );
         for code in 1..=8 {
             script = script.replace(
                 &format!("exit /b {code}\r\n"),
@@ -1088,8 +1106,19 @@ mod tests {
         assert!(script.contains("start \"\" /b \"%ComSpec%\" /d /c del /q \"%~f0\""));
         assert!(script.contains("set \"WUWAID_LAUNCHER_UPDATE_READY=%release_ready_temp%\""));
         assert!(script.contains("Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE"));
-        assert!(script.contains("[IO.File]::WriteAllText($env:WUWAID_UPDATE_PID_FILE"));
-        assert!(script.contains("set /p \"release_started_pid=\"<\"%release_started_pid_file%\""));
+        assert!(script.contains("[IO.File]::WriteAllText($pidTemp, $pidText)"));
+        assert!(script.contains(
+            "Move-Item -LiteralPath $pidTemp -Destination $env:WUWAID_UPDATE_PID_FILE -Force"
+        ));
+        assert!(script.contains("[IO.File]::ReadAllText($env:WUWAID_UPDATE_PID_FILE)"));
+        assert!(script.contains("WUWAID_UPDATE_PID="));
+        assert!(script.contains("release_started_pid=%%B"));
+        assert!(script.contains("if not \"%release_start_ok%\"==\"1\" goto fail_6"));
+        assert!(script.contains("$markerPid -ne $startedPid"));
+        assert!(script.contains("$env:WUWAID_LAUNCHER_UPDATE_READY"));
+        assert!(!script.contains("set /p "));
+        assert!(!script.contains("release_marker_pid"));
+        assert!(!script.contains("release_pid=%release_marker_pid%"));
         assert!(script.contains("if exist \"%release_ready_temp%\" goto fail_12"));
         assert!(script.contains("PID eq %release_pid%"));
         assert!(script.contains(":stop_released_launcher"));
@@ -1098,6 +1127,10 @@ mod tests {
         assert!(
             health_failure.find("call :stop_released_launcher").unwrap()
                 < health_failure.find("copy /Y").unwrap()
+        );
+        let fail_6 = &script[script.find(":fail_6\r\n").unwrap()..];
+        assert!(
+            fail_6.find("call :stop_released_launcher").unwrap() < fail_6.find("copy /Y").unwrap()
         );
         assert!(!script.contains("tasklist.exe /FI \"IMAGENAME eq WuwaIDLauncher.exe\" |"));
         assert!(script.contains("goto fail_7"));
