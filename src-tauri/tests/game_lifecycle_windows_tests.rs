@@ -396,15 +396,6 @@ fn write_committed_release_note(root: &Path, tag: &str) -> (PathBuf, PathBuf, Pa
 }
 
 fn run_handoff_script(path: &Path) -> std::process::ExitStatus {
-    let mut script = fs::read_to_string(path).unwrap();
-    if std::env::var_os("WINE_HOST_HOME").is_some() {
-        // Wine's bundled fc does not implement /B; native Windows runs the exact script.
-        script = script.replace(
-            "%SystemRoot%\\System32\\fc.exe /B",
-            "%SystemRoot%\\System32\\fc.exe",
-        );
-    }
-    fs::write(path, script).unwrap();
     let pid_file = launcher_fixture_pid_path(path.parent().unwrap());
     let mut command = Command::new(windows_system_executable("cmd.exe"));
     let mut child = command

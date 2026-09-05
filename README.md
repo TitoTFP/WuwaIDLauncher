@@ -237,7 +237,7 @@ pwsh -NoProfile -File scripts/acceptance/run-windows-real-acceptance.ps1 `
   -OutputRoot .\real-acceptance-evidence
 ```
 
-Test ini tidak dapat digantikan oleh fixture Linux atau Wine untuk bukti release Windows.
+Acceptance ini harus dijalankan di Windows; fixture Linux tidak menjadi bukti release Windows.
 
 ### Kompilasi Rilis Distribusi (Windows MSVC)
 
