@@ -6,6 +6,7 @@ node_modules/
 release-artifacts/
 release-gate-evidence/
 release-gate-fixture/
+real-acceptance-evidence/
 *.exe
 *.zip
 SHA256sums.txt
@@ -32,3 +33,4 @@ Desktop.ini
 CLAUDE.md
 AGENTS.md
 docs/agents/
+.pi/tasks/

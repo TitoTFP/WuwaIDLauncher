@@ -42,11 +42,11 @@ Kontrak utama launcher sudah diimplementasikan dan diverifikasi melalui test sui
 | Self-update checksum, ZIP validation, staging, rollback handoff, cleanup | **Implemented + manual restart smoke** | Checksum/ZIP/handoff tests; valid release asset diperlukan untuk restart end-to-end |
 | Local runtime diagnostics tanpa upload log | **Implemented** | Isi diagnostics tetap lokal; heartbeat active-player hanya mengirim payload minimal |
 | Distribusi ZIP updater dan SHA256 manifest | **Implemented** | Artifact gate dan workflow release; executable tersedia di dalam ZIP; MSI/NSIS sengaja tidak dibuat |
-| Real game/tray/WebView2/resource acceptance | **Automated on trusted Windows** | Workflow manual/nightly memerlukan runner self-hosted dan game yang sudah ter-patch |
+| Real game/tray/WebView2/resource acceptance | **Automated on trusted Windows** | `windows-acceptance.yml` menjalankan `run-windows-real-acceptance.ps1` dengan game yang sudah ter-patch |
 | Admin/read-only/offline/restart self-update acceptance | **Partial / manual** | Jalankan pada mesin release; kontrak ACL/lifecycle tetap diuji di CI |
 | Future features di luar WUT-5 sampai WUT-29 | **Planned** | Tidak menjadi bagian release gate ini |
 
-Acceptance game nyata, tray, WebView2, resource, lifecycle, dan probe elevasi UAC dijalankan pada runner Windows tepercaya yang interaktif. Read-only, offline, dan restart self-update tetap memerlukan operator karena tidak aman untuk dipaksa pada runner CI.
+Test deterministik Rust dan `wut-game-lifecycle.tests.ps1` memakai fixture game disposable, bukan instalasi Wuthering Waves nyata. Acceptance otomatis yang benar-benar menjalankan game adalah `scripts/acceptance/run-windows-real-acceptance.ps1`, melalui workflow `windows-acceptance.yml`; keduanya membutuhkan runner Windows tepercaya yang interaktif dan game yang sudah ter-patch. `windows-release-gate.ps1 -GamePath` sendiri hanya memvalidasi prerequisite. Read-only, offline, dan restart self-update tetap memerlukan operator karena tidak aman untuk dipaksa pada runner CI.
 
 ---
 
@@ -225,6 +225,19 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets -- --test
 cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
+
+### Acceptance Game Nyata (Windows Tepercaya)
+
+Acceptance ini benar-benar menjalankan launcher dan `Client-Win64-Shipping.exe`, lalu memeriksa UAC, tray, WebView2, resource, proses game, dan pemulihan lifecycle launcher. Game harus sudah terpasang dan ter-patch.
+
+```powershell
+pwsh -NoProfile -File scripts/acceptance/run-windows-real-acceptance.ps1 `
+  -LauncherPath .\src-tauri\target\release\WuwaIDLauncher.exe `
+  -GamePath "C:\path\to\Wuthering Waves" `
+  -OutputRoot .\real-acceptance-evidence
+```
+
+Test ini tidak dapat digantikan oleh fixture Linux atau Wine untuk bukti release Windows.
 
 ### Kompilasi Rilis Distribusi (Windows MSVC)
 
