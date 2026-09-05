@@ -287,7 +287,7 @@ Checklist sebelum publish:
     -FixtureRoot .\release-gate-fixture
   ```
 
-- [ ] Jalankan acceptance manual/nightly pada Windows tepercaya:
+- [ ] Jalankan acceptance manual pada Windows tepercaya:
   `pwsh -NoProfile -File scripts/acceptance/run-windows-real-acceptance.ps1 -LauncherPath .\src-tauri\target\release\WuwaIDLauncher.exe -GamePath <game-path>`.
 - [ ] Uji read-only/admin, offline media, dan self-update restart pada mesin release.
 - [ ] Tinjau diagnostics lokal sebelum membagikannya secara manual.
@@ -295,7 +295,7 @@ Checklist sebelum publish:
 ### CI/CD
 
 - Pull request, push `main`, dan push `feat/**` menjalankan job Ubuntu paralel untuk frontend/Rust serta job Windows untuk native regression, deterministic acceptance, dan binary build.
-- `windows-acceptance.yml` hanya berjalan terjadwal atau manual pada runner Windows self-hosted berlabel `wuwaid-trusted-windows`; label ini wajib dipasang hanya pada mesin tepercaya yang interaktif dan tidak pernah dipakai PR. Set repository variable `WUWAID_ACCEPTANCE_GAME_PATH` ke instalasi game yang sudah ter-patch; workflow menyimpan evidence resource/tray/lifecycle/UAC dan memulihkan `settings.json`.
+- `windows-acceptance.yml` hanya berjalan manual pada runner Windows self-hosted berlabel `wuwaid-trusted-windows`; label ini wajib dipasang hanya pada mesin tepercaya yang interaktif dan tidak pernah dipakai PR. Set repository variable `WUWAID_ACCEPTANCE_GAME_PATH` ke instalasi game yang sudah ter-patch; workflow menyimpan evidence resource/tray/lifecycle/UAC dan memulihkan `settings.json`.
 - Release memvalidasi checkout tepat pada tag `vX.Y.Z`, melakukan satu kompilasi Windows, membuat ZIP portable + `SHA256sums.txt`, lalu membuat provenance attestation. Publish menunggu approval environment `release-production`.
 - Distribusi tetap unsigned karena proyek belum memiliki sertifikat Authenticode. SHA-256 dan attestation menjadi bukti integritas/provenance; signing dapat ditambahkan bila sertifikat atau program OSS yang layak tersedia.
 - Branch protection `main` mewajibkan review pull request, penyelesaian percakapan, dan required checks `Frontend and JavaScript contracts`, `Rust checks`, serta `Windows regression and build`. Dependabot memeriksa npm, Cargo, dan GitHub Actions setiap minggu dengan cooldown tujuh hari.
