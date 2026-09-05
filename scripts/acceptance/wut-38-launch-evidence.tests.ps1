@@ -24,7 +24,8 @@ $runtimeMarkers = @(
 $libMarkers = @(
     "fn save_launch_evidence",
     "Diagnostics",
-    "wait_for_launch_detection",
+    "wait_for_launcher_process_tree",
+    "PROCESS_HANDOFF_GRACE",
     "onLaunchError",
     "onGameLaunchFinished",
     "finish_launch_lifecycle",

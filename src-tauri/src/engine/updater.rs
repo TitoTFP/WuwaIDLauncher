@@ -282,6 +282,9 @@ fn create_update_handoff_impl(
             .and_then(|name| name.to_str())
             .unwrap_or(RELEASE_EXECUTABLE_NAME)
     ));
+    let current_directory = current_executable
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
     let paths = [
         staging_dir,
         &staged_executable,
@@ -289,6 +292,7 @@ fn create_update_handoff_impl(
         &backup_executable,
         &replacement_executable,
         handoff_path,
+        current_directory,
     ];
     if paths.iter().any(|path| {
         let value = path.to_string_lossy();
@@ -349,15 +353,30 @@ fn create_update_handoff_impl(
     let release_health_check = release_state
         .map(|_| {
             "         if not exist \"%release_ready_temp%\" goto release_health_failure\r\n\\
-                 set \"release_pid=\"\r\n\\
-                 set \"release_pid_valid=\"\r\n\\
-                 set /p \"release_pid=\"<\"%release_ready_temp%\"\r\n\\
-                 if not defined release_pid goto release_health_failure\r\n\\
-                 for /f \"delims=0123456789\" %%A in (\"%release_pid%\") do goto release_health_failure\r\n\\
+                 set \"release_marker_pid=\"\r\n\\
+                 set /p \"release_marker_pid=\"<\"%release_ready_temp%\"\r\n\\
+                 if not defined release_marker_pid goto release_health_failure\r\n\\
+                 for /f \"delims=0123456789\" %%A in (\"%release_marker_pid%\") do goto release_health_failure\r\n\\
+                 set \"release_pid=%release_marker_pid%\"\r\n\\
                  set \"release_pid_valid=1\"\r\n\\
-                 %SystemRoot%\\System32\\tasklist.exe /FI \"PID eq %release_pid%\" /FI \"IMAGENAME eq WuwaIDLauncher.exe\" | %SystemRoot%\\System32\\findstr.exe /I /C:\"WuwaIDLauncher.exe\" >nul\r\n\\
+                 cmd /c exit 0\r\n                 %SystemRoot%\\System32\\tasklist.exe /FI \"PID eq %release_pid%\" /FI \"IMAGENAME eq WuwaIDLauncher.exe\" | %SystemRoot%\\System32\\findstr.exe /I /C:\"WuwaIDLauncher.exe\" >nul\r\n\\
                  if errorlevel 1 goto release_health_failure\r\n"
                 .to_string()
+        })
+        .unwrap_or_default();
+    let release_start = release_state
+        .map(|_| {
+            format!(
+                "         set \"WUWAID_UPDATE_EXECUTABLE={}\"\r\n\\
+                 set \"WUWAID_UPDATE_DIRECTORY={}\"\r\n\\
+                 set \"release_started_pid=\"\r\n\\
+                 for /f \"usebackq delims=\" %%P in (`%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"$process = Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE -WorkingDirectory $env:WUWAID_UPDATE_DIRECTORY -PassThru; $process.Id\"`) do set \"release_started_pid=%%P\"\r\n\\
+                 if not defined release_started_pid goto fail_6\r\n\\
+                 set \"release_pid=%release_started_pid%\"\r\n\\
+                 set \"release_pid_valid=1\"\r\n",
+                path_value(current_executable),
+                path_value(current_directory),
+            )
         })
         .unwrap_or_default();
     let release_rollback = |failure: &str| {
@@ -517,6 +536,7 @@ fn create_update_handoff_impl(
         let release_setup = normalize_batch_fragment(&release_setup);
         let release_precondition = normalize_batch_fragment(&release_precondition);
         let release_health_check = normalize_batch_fragment(&release_health_check);
+        let release_start = normalize_batch_fragment(&release_start);
         let release_commit = normalize_batch_fragment(&release_commit);
         let failure_labels = normalize_batch_fragment(&failure_labels);
         let release_cleanup = normalize_batch_fragment(&release_cleanup);
@@ -536,6 +556,13 @@ fn create_update_handoff_impl(
             &replacement_anchor,
             &format!("{release_precondition}{replacement_anchor}"),
         );
+        let start_anchor = format!("start \"\" {}\r\n", quote(current_executable));
+        if !script.contains(&start_anchor) {
+            return Err(
+                "Template handoff update tidak memiliki awal proses yang diharapkan.".to_string(),
+            );
+        }
+        script = script.replace(&start_anchor, &release_start);
         let backup = quote(&backup_executable);
         let health_anchor =
             "%SystemRoot%\\System32\\tasklist.exe /FI \"IMAGENAME eq WuwaIDLauncher.exe\" | %SystemRoot%\\System32\\findstr.exe /I /C:\"WuwaIDLauncher.exe\" >nul\r\n";
@@ -1025,6 +1052,8 @@ mod tests {
         assert!(script.contains("move /Y \"%release_transaction%\" \"%release_pending%\""));
         assert!(script.contains("set \"release_tag=v2.10.0\""));
         assert!(script.contains("set \"WUWAID_LAUNCHER_UPDATE_READY=%release_ready_temp%\""));
+        assert!(script.contains("Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE"));
+        assert!(script.contains("set \"release_started_pid=%%P\""));
         assert!(script.contains("if exist \"%release_ready_temp%\" goto fail_12"));
         assert!(script.contains("PID eq %release_pid%"));
         assert!(script.contains(":stop_released_launcher"));
