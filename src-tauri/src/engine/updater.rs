@@ -992,6 +992,46 @@ mod tests {
     }
 
     #[test]
+    fn latest_release_json_rejects_unofficial_asset_urls() {
+        let json = serde_json::json!({
+            "tag_name": "v2.10.0",
+            "assets": [{
+                "name": "WuwaIDLauncher-v2.10.0.zip",
+                "browser_download_url": "https://example.com/WuwaIDLauncher-v2.10.0.zip"
+            }]
+        });
+
+        assert!(parse_latest_release_json(&json).is_err());
+    }
+
+    #[test]
+    fn update_request_rejects_mismatched_version_or_unofficial_assets() -> Result<(), String> {
+        let tag = "v2.10.0";
+        let zip_name = expected_zip_asset_name(tag)?;
+        let zip_url = expected_official_asset_url(tag, &zip_name)?;
+        let checksums_url = expected_official_asset_url(tag, "SHA256sums.txt")?;
+
+        assert!(validate_update_request("2.10.0", tag, &zip_url, Some(&checksums_url)).is_ok());
+        assert!(validate_update_request("2.10.1", tag, &zip_url, Some(&checksums_url)).is_err());
+        assert!(validate_update_request(
+            "2.10.0",
+            tag,
+            "https://example.com/WuwaIDLauncher-v2.10.0.zip",
+            Some(&checksums_url),
+        )
+        .is_err());
+        assert!(validate_update_request("2.10.0", tag, &zip_url, None).is_err());
+        assert!(validate_update_request(
+            "2.10.0",
+            tag,
+            &zip_url,
+            Some("https://example.com/SHA256sums.txt"),
+        )
+        .is_err());
+        Ok(())
+    }
+
+    #[test]
     fn test_extract_zip() {
         let tmp = tempfile::tempdir().unwrap();
         let target = tmp.path().join("extracted");

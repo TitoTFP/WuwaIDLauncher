@@ -446,10 +446,13 @@ fn windows_handoff_commits_whats_new_after_successful_restart() {
     let temp = tempdir().unwrap();
     let _launcher_cleanup = LauncherFixtureCleanup::new(temp.path());
     let current = temp.path().join("WuwaIDLauncher.exe");
+    let backup = temp.path().join("WuwaIDLauncher.exe.wuwaid-backup");
     let staging = temp.path().join("staging");
     let handoff = temp.path().join("update-handoff.cmd");
     fs::create_dir_all(&staging).unwrap();
-    fs::copy(fixture_binary(), &current).unwrap();
+    let old_bytes = b"old-launcher-binary".to_vec();
+    let staged_bytes = fs::read(fixture_binary()).unwrap();
+    fs::write(&current, &old_bytes).unwrap();
     fs::copy(fixture_binary(), staging.join("WuwaIDLauncher.exe")).unwrap();
     let (transaction, pending, ready, ready_temp) = release_state_paths(temp.path());
     write_release_note(&transaction, &launcher_release_note("v2.10.0"));
@@ -469,9 +472,13 @@ fn windows_handoff_commits_whats_new_after_successful_restart() {
     assert!(status.success(), "handoff failed with {status}");
     assert!(!handoff.exists());
     assert!(!staging.exists());
+    assert!(!backup.exists());
     assert!(!transaction.exists());
     assert!(!ready_temp.exists());
     assert!(pending.exists());
+    let updated_bytes = fs::read(&current).unwrap();
+    assert_eq!(updated_bytes, staged_bytes);
+    assert_ne!(updated_bytes, old_bytes);
     assert_eq!(fs::read_to_string(&ready).unwrap().trim(), "v2.10.0");
     let committed = launcher_update_state::read_committed_release_note(
         &transaction,
