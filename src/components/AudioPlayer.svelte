@@ -1,9 +1,22 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { appState } from '../lib/launcherState.svelte';
+  import {
+    beginVolumePointer,
+    cancelVolume,
+    commitVolume as commitVolumeState,
+    createVolumeState,
+    previewVolume,
+    setVolumeMuted,
+    syncSavedVolume,
+    volumeView,
+  } from '../lib/volumeControl';
+  import type { VolumeState } from '../lib/volumeControl';
 
+  let volumeState: VolumeState = createVolumeState(35);
   let volumePercent = $state(35);
   let isMuted = $state(false);
+  let volumePointerActive = $state(false);
   let isPlaying = $state(false);
   let userWantsPlayback = $state(true);
   let wasPlayingBeforeTray = $state(false);
@@ -25,8 +38,13 @@
 
   // Sync state with loaded configuration
   $effect(() => {
-    if (appState.config.bgmVolume !== undefined) {
-      volumePercent = Math.max(0, Math.min(100, Math.round(appState.config.bgmVolume * 100)));
+    if (appState.config.bgmVolume !== undefined && !volumePointerActive) {
+      const configuredVolume = Math.max(
+        0,
+        Math.min(100, Math.round(appState.config.bgmVolume * 100)),
+      );
+      volumeState = syncSavedVolume(volumeState, configuredVolume);
+      volumePercent = configuredVolume;
     }
     if (appState.config.bgmEnabled !== undefined) {
       userWantsPlayback = appState.config.bgmEnabled;
@@ -117,30 +135,73 @@
     }
   }
 
+  function syncAudioVolume() {
+    if (!audioElement) return;
+    const view = volumeView(volumeState);
+    audioElement.muted = view.muted;
+    audioElement.volume = view.audioVolume;
+  }
+
+  function applyVolumeState(state: VolumeState) {
+    volumeState = state;
+    const view = volumeView(state);
+    volumePercent = view.percent;
+    isMuted = view.muted;
+    syncAudioVolume();
+  }
+
+  function applyVolumePreview(value: number) {
+    applyVolumeState(previewVolume(volumeState, value));
+  }
+
   function toggleMute() {
     if (!audioElement) return;
-    isMuted = !isMuted;
-    audioElement.muted = isMuted;
+    applyVolumeState(setVolumeMuted(volumeState, !isMuted));
     if (!isMuted && volumePercent === 0) {
-      volumePercent = 35;
-      audioElement.volume = 0.35;
+      applyVolumeState(syncSavedVolume(volumeState, 35));
       appState.config.bgmVolume = 0.35;
       void persistAudioConfig();
     }
   }
 
-  async function handleVolumeChange(e: Event) {
-    const val = parseInt((e.target as HTMLInputElement).value, 10);
-    volumePercent = val;
-    if (audioElement) {
-      if (val > 0 && isMuted) {
-        isMuted = false;
-        audioElement.muted = false;
-      }
-      audioElement.volume = isMuted ? 0 : val / 100;
-    }
-    appState.config.bgmVolume = val / 100;
-    await persistAudioConfig();
+  function volumeValueFromEvent(event: Event): number | null {
+    const input = (event.currentTarget ?? event.target) as HTMLInputElement;
+    const value = Number(input.value);
+    if (!Number.isFinite(value)) return null;
+    return Math.max(0, Math.min(100, Math.round(value)));
+  }
+
+  function handleVolumePointerDown(event: PointerEvent) {
+    if (event.button !== 0) return;
+    volumePointerActive = true;
+    volumeState = beginVolumePointer(volumeState);
+    (event.currentTarget as HTMLInputElement).setPointerCapture(event.pointerId);
+  }
+
+  function handleVolumeInput(event: Event) {
+    const value = volumeValueFromEvent(event);
+    if (value !== null) applyVolumePreview(value);
+  }
+
+  function handleVolumeChange(event: Event) {
+    const value = volumeValueFromEvent(event);
+    if (value === null) return;
+
+    volumePointerActive = false;
+    appState.config.bgmVolume = value / 100;
+    const result = commitVolumeState(volumeState, value, () => {
+      void persistAudioConfig();
+    });
+    applyVolumeState(result.state);
+  }
+
+  function handleVolumeCancel(event: Event) {
+    volumePointerActive = false;
+    applyVolumeState(cancelVolume(volumeState));
+    const view = volumeView(volumeState);
+    (event.currentTarget as HTMLInputElement).value = String(
+      view.muted ? 0 : view.percent,
+    );
   }
 </script>
 
@@ -210,9 +271,14 @@
         type="range"
         class="ap-vol__slider"
         id="apVolSlider"
+        aria-label="Volume musik"
         min="0"
         max="100"
         value={isMuted ? 0 : volumePercent}
+        onpointerdown={handleVolumePointerDown}
+        oninput={handleVolumeInput}
+        onpointerup={handleVolumeChange}
+        onpointercancel={handleVolumeCancel}
         onchange={handleVolumeChange}
         step="1"
       />

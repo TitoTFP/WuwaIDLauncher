@@ -146,8 +146,8 @@
         </div>
         <h1 class="settings-title" id="settingsTitle">SETTINGS</h1>
         <button class="settings-close" id="settingsClose" title="Tutup" aria-label="Tutup pengaturan" onclick={() => onclose?.()} type="button">
-          <svg viewBox="0 0 24 24" width="17" height="17">
-            <path fill="currentColor" d="m18.3 5.7-1.4-1.4L12 9.2 7.1 4.3 5.7 5.7l4.9 4.9-4.9 4.9 1.4 1.4-4.9-4.9 4.9-4.9Z" />
+          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" />
           </svg>
         </button>
       </header>
@@ -414,7 +414,7 @@
   }
 
   .uid-mode-card:disabled {
-    cursor: default;
+    cursor: var(--cursor-select);
     opacity: 0.58;
   }
 
@@ -573,7 +573,7 @@
   }
 
   .method-card:disabled {
-    cursor: default;
+    cursor: var(--cursor-select);
     opacity: 0.58;
   }
 

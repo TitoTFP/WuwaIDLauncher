@@ -61,8 +61,10 @@
     position: absolute;
     inset: -6px 0;
     width: 100%;
+    z-index: 1;
     opacity: 0;
     cursor: var(--cursor-select);
+    touch-action: none;
     margin: 0;
     padding: 0;
     -webkit-appearance: none;
