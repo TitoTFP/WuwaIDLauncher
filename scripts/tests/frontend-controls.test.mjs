@@ -3,17 +3,28 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import {
+import ts from "typescript";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const read = (file) => readFileSync(join(root, file), "utf8");
+const volumeControl = await import(
+  `data:text/javascript,${encodeURIComponent(
+    ts.transpileModule(read("src/lib/volumeControl.ts"), {
+      compilerOptions: {
+        module: ts.ModuleKind.ESNext,
+        target: ts.ScriptTarget.ES2022,
+      },
+    }).outputText,
+  )}`,
+);
+const {
   beginVolumePointer,
   cancelVolume,
   commitVolume,
   createVolumeState,
   previewVolume,
   volumeView,
-} from "../../src/lib/volumeControl.ts";
-
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const read = (file) => readFileSync(join(root, file), "utf8");
+} = volumeControl;
 
 test("volume updates live and persists only on release/change", () => {
   const source = read("src/components/AudioPlayer.svelte");
