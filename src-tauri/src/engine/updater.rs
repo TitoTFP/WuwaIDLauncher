@@ -480,7 +480,10 @@ fn create_update_handoff_impl(
         .unwrap_or_default();
     let handoff_cleanup = [
         ":schedule_update_handoff_cleanup",
-        "set \"WUWAID_UPDATE_HANDOFF_PATH=%~f0\"",
+        &format!(
+            "set \\\"WUWAID_UPDATE_HANDOFF_PATH={}\\\"",
+            path_value(handoff_path)
+        ),
         "start \"\" /B \"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -WindowStyle Hidden -Command \"$path=$env:WUWAID_UPDATE_HANDOFF_PATH; for($attempt=0;$attempt -lt 20;$attempt++){try{Remove-Item -LiteralPath $path -Force -ErrorAction Stop; break}catch{Start-Sleep -Milliseconds 100}}\" >nul 2>nul",
         "exit /b 0",
     ]
