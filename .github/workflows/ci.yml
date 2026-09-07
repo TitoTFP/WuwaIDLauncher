@@ -203,10 +203,10 @@ jobs:
         run: npm run build
 
       - name: Test Windows backend
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1
+        run: cargo test --locked --manifest-path "${env:GITHUB_WORKSPACE}\src-tauri\Cargo.toml" --all-targets -- --test-threads=1
 
       - name: Lint Windows backend
-        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+        run: cargo clippy --locked --manifest-path "${env:GITHUB_WORKSPACE}\src-tauri\Cargo.toml" --all-targets -- -D warnings
 
       - name: Run Windows static acceptance contracts
         shell: pwsh
