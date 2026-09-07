@@ -509,13 +509,15 @@ try {
     })
     $loaderPath = Join-Path $fixtureRoot "Client\Binaries\Win64\winhttp.dll"
     $gameKey = ([IO.Path]::GetFullPath($fixtureRoot)).Replace('\', '/').ToLowerInvariant()
-    $games = [ordered]@{}
-    $games[$gameKey] = [ordered]@{
+    $gameMetadata = [ordered]@{
         _vhVersion = "999.999.999"
         _installMethod = "loader"
         _loaderSha256 = (Get-FileHash -LiteralPath $loaderPath -Algorithm SHA256).Hash.ToLowerInvariant()
         _patchVariant = "normal"
     }
+    $games = [ordered]@{}
+    $games[$gameKey] = $gameMetadata
+    $games["//?/$gameKey"] = $gameMetadata
     Write-JsonFile -Path (Join-Path $isolatedLocalAppData "WuwaIDLauncher\versions.json") -Value ([ordered]@{
         _schemaVersion = 3
         games = $games
