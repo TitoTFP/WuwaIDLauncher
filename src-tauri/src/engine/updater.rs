@@ -481,7 +481,7 @@ fn create_update_handoff_impl(
     let handoff_cleanup = [
         ":schedule_update_handoff_cleanup",
         &format!(
-            "set \\\"WUWAID_UPDATE_HANDOFF_PATH={}\\\"",
+            "set \"WUWAID_UPDATE_HANDOFF_PATH={}\"",
             path_value(handoff_path)
         ),
         "start \"\" /B \"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -WindowStyle Hidden -Command \"$path=$env:WUWAID_UPDATE_HANDOFF_PATH; for($attempt=0;$attempt -lt 20;$attempt++){try{Remove-Item -LiteralPath $path -Force -ErrorAction Stop; break}catch{Start-Sleep -Milliseconds 100}}\" >nul 2>nul",
@@ -1121,7 +1121,7 @@ mod tests {
             "v2.10.0",
         )
         .unwrap();
-        let script = std::fs::read_to_string(handoff).unwrap();
+        let script = std::fs::read_to_string(&handoff).unwrap();
 
         assert!(script.contains("if not exist \"%release_transaction%\" goto fail_11"));
         assert!(script.contains("move /Y \"%release_transaction%\" \"%release_pending%\""));
@@ -1152,6 +1152,11 @@ mod tests {
         assert!(script.contains("if not exist \"%release_ready_temp%\""));
         assert!(!script.contains("if errorlevel 1 goto release_health_failure\r\nif errorlevel 1"));
         assert!(script.contains(":cleanup_release_state"));
+        assert!(script.contains(&format!(
+            "set \"WUWAID_UPDATE_HANDOFF_PATH={}\"",
+            handoff.to_string_lossy()
+        )));
+        assert!(!script.contains("%~f0"));
         assert!(!script.lines().any(|line| line.trim_end().ends_with('\\')));
         assert!(script.contains(&format!("del /Q \"{}\"", pending.to_string_lossy())));
     }
