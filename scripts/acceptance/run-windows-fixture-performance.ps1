@@ -61,7 +61,7 @@ function Resolve-AbsolutePath {
 
 function Resolve-ExistingCandidate {
     param(
-        [Parameter(Mandatory = $true)][string]$ExplicitPath,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ExplicitPath,
         [Parameter(Mandatory = $true)][string[]]$Candidates,
         [Parameter(Mandatory = $true)][string]$Description
     )
