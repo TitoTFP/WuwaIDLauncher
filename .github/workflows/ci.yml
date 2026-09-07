@@ -205,6 +205,15 @@ jobs:
       - name: Test Windows backend
         run: cargo test --locked --manifest-path "${env:GITHUB_WORKSPACE}\src-tauri\Cargo.toml" --all-targets -- --test-threads=1
 
+      - name: Verify Windows workspace after backend tests
+        shell: pwsh
+        run: |
+          Write-Host "Location: $(Get-Location)"
+          Write-Host "Workspace: $env:GITHUB_WORKSPACE"
+          Write-Host "Cargo manifest exists: $(Test-Path -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'src-tauri\Cargo.toml'))"
+          git status --short
+          Get-ChildItem -Force (Join-Path $env:GITHUB_WORKSPACE 'src-tauri') | Select-Object Name,Length,Mode
+
       - name: Lint Windows backend
         run: cargo clippy --locked --manifest-path "${env:GITHUB_WORKSPACE}\src-tauri\Cargo.toml" --all-targets -- -D warnings
 
