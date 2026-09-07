@@ -374,7 +374,7 @@ fn create_update_handoff_impl(
                  set \"release_started_pid_file=%release_ready_temp%.pid\"\r\n\\
                  set \"WUWAID_LAUNCHER_UPDATE_START_PID=%release_started_pid_file%\"\r\n\\
                  del /Q \"%release_started_pid_file%\" >nul 2>nul\r\n\\
-                 %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; $p=Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE -WorkingDirectory $env:WUWAID_UPDATE_DIRECTORY -PassThru; Set-Content -LiteralPath $env:WUWAID_LAUNCHER_UPDATE_START_PID -Value $p.Id -ErrorAction Stop\" >nul 2>nul\r\n\\
+                 %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"$i=New-Object System.Diagnostics.ProcessStartInfo; $i.FileName=$env:WUWAID_UPDATE_EXECUTABLE; $i.WorkingDirectory=$env:WUWAID_UPDATE_DIRECTORY; $i.UseShellExecute=$false; $i.CreateNoWindow=$true; foreach($n in @('WUWAID_LAUNCHER_UPDATE_READY','WUWAID_LAUNCHER_UPDATE_PID_FILE')){{$v=[Environment]::GetEnvironmentVariable($n,'Process');if($null -ne $v){{$i.EnvironmentVariables[$n]=$v}}}}; $p=[System.Diagnostics.Process]::Start($i); Set-Content -LiteralPath $env:WUWAID_LAUNCHER_UPDATE_START_PID -Value $p.Id -ErrorAction Stop\" >nul 2>nul\r\n\\
                  if errorlevel 1 goto fail_6\r\n\\
                  set /p \"release_started_pid=\"<\"%release_started_pid_file%\"\r\n\\
                  del /Q \"%release_started_pid_file%\" >nul 2>nul\r\n\\
@@ -1124,11 +1124,13 @@ mod tests {
         assert!(script.contains("move /Y \"%release_transaction%\" \"%release_pending%\""));
         assert!(script.contains("set \"release_tag=v2.10.0\""));
         assert!(script.contains("set \"WUWAID_LAUNCHER_UPDATE_READY=%release_ready_temp%\""));
-        assert!(script.contains("Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE"));
+        assert!(script.contains("System.Diagnostics.ProcessStartInfo"));
+        assert!(script.contains("EnvironmentVariables[$n]"));
+        assert!(script.contains("Set-Content -LiteralPath $env:WUWAID_LAUNCHER_UPDATE_START_PID"));
         assert!(script.contains("release_started_pid_file=%release_ready_temp%.pid"));
         assert!(script.contains("set /p \"release_started_pid=\""));
         assert!(script.contains("if not \"%release_marker_pid%\"==\"%release_started_pid%\""));
-        assert!(!script.contains("System.Diagnostics.ProcessStartInfo"));
+        assert!(!script.contains("Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE"));
         assert!(!script.contains("for /f \"usebackq delims=\" %%P"));
         assert!(!script.contains("timeout.exe"));
         assert!(script.contains("Start-Sleep -Seconds 1"));
