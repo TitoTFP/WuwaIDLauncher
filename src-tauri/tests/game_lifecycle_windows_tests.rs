@@ -547,10 +547,6 @@ fn windows_missing_transaction_rejects_handoff_without_display() {
         "v2.10.0",
     )
     .unwrap();
-    eprintln!(
-        "missing-transaction handoff script:\n{}",
-        fs::read_to_string(&handoff).unwrap()
-    );
     let _status = run_handoff_script(&handoff);
 
     assert!(!handoff.exists());
