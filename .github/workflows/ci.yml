@@ -61,6 +61,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Audit npm dependencies
+        run: npm run test:security
+
       - name: Check frontend
         run: npm run check
 
@@ -68,7 +71,7 @@ jobs:
         run: npm run build
 
       - name: Test JavaScript contracts
-        run: node --test scripts/tests/game-exit-notice.test.mjs scripts/tests/resource-lifecycle.test.mjs scripts/tests/launcher-update-notification.test.mjs
+        run: node --test scripts/tests/frontend-controls.test.mjs scripts/tests/game-exit-notice.test.mjs scripts/tests/resource-lifecycle.test.mjs scripts/tests/launcher-update-notification.test.mjs scripts/tests/workflow-contract.test.mjs
 
       - name: Test patch status bridge
         run: npm run test:patch-status

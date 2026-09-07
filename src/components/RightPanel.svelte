@@ -432,8 +432,18 @@
 
   <!-- Actions: Hamburger Menu + Start Button -->
   <div class="rp-actions">
-    <button class="rp-menu__btn" class:active={dropdownOpen} id="btnMenu" onclick={toggleDropdown} title="Menu" type="button">
-      <svg viewBox="0 0 24 24" width="18" height="18">
+    <button
+      class="rp-menu__btn"
+      class:active={dropdownOpen}
+      id="btnMenu"
+      onclick={toggleDropdown}
+      title="Menu"
+      aria-label="Buka menu"
+      aria-expanded={dropdownOpen}
+      aria-controls="rpDropdown"
+      type="button"
+    >
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
         <path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z" />
       </svg>
     </button>

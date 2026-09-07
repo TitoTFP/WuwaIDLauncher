@@ -221,6 +221,8 @@
     id="apPlay"
     onclick={togglePlay}
     title={isPlaying ? 'Jeda Musik' : 'Putar Musik'}
+    aria-label={isPlaying ? 'Jeda musik' : 'Putar musik'}
+    aria-pressed={isPlaying}
     type="button"
   >
     {#if isPlaying}
@@ -240,6 +242,8 @@
       id="apVolBtn"
       onclick={toggleMute}
       title={isMuted ? 'Aktifkan Suara' : 'Bisukan'}
+      aria-label={isMuted ? 'Aktifkan suara' : 'Bisukan musik'}
+      aria-pressed={isMuted}
       type="button"
     >
       {#if isMuted || volumePercent === 0}

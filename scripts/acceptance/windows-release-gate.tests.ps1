@@ -168,6 +168,8 @@ function Assert-WorkflowContract {
     Assert-True ($ci -match "ci-evidence-" -and $ci -match "always\(\)") "CI must upload bounded evidence after failures."
     Assert-True ($ci -match "test:patch-status") "CI must run the patch-status bridge regression."
     Assert-True ($ci -match "test:version") "CI must run the release version consistency regression."
+    Assert-True ($ci -match "test:security" -and $release -match "test:security") "CI and release must audit npm dependencies."
+    Assert-True ($ci -match "frontend-controls" -and $release -match "frontend-controls") "CI and release must run frontend accessibility/control regressions."
     Assert-True ($allWorkflows -notmatch "self-hosted|wuwaid-trusted-windows|windows-acceptance\.yml") "CI/CD must not contain a self-hosted real-game acceptance workflow."
     Assert-True ($readme -match "Acceptance Game Nyata \(Manual Windows Kompatibel\)" -and $readme -match "tidak dijalankan oleh GitHub Actions") "README must document real-game acceptance as manual and outside GitHub Actions."
     Assert-True ($realAcceptance -match "GamePath" -and $realAcceptance -match "Client-Win64-Shipping\.exe") "Manual acceptance must require the real game installation."

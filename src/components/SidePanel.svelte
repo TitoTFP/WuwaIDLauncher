@@ -25,7 +25,7 @@
 </script>
 
 <div class="side-panel" class:collapsed id="sidePanel">
-  <div class="rn-content">
+  <div class="rn-content" id="sidePanelContent">
     <div class="rn-head">
       <div class="rn-head__left">
         <span class="rn-tag" id="rnTag">ID</span>
@@ -57,8 +57,17 @@
     </div>
   </div>
 
-  <button class="rn-toggle" id="rnToggle" title="Tutup / Buka" onclick={toggle} type="button">
-    <svg viewBox="0 0 24 24" width="11" height="11">
+  <button
+    class="rn-toggle"
+    id="rnToggle"
+    title="Tutup / Buka"
+    aria-label={collapsed ? 'Buka pengumuman' : 'Tutup pengumuman'}
+    aria-expanded={!collapsed}
+    aria-controls="sidePanelContent"
+    onclick={toggle}
+    type="button"
+  >
+    <svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true">
       <path fill="currentColor" d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
     </svg>
   </button>

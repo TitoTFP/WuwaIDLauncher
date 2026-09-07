@@ -130,10 +130,17 @@ pub fn compute_sha256(file_path: &Path) -> Result<String, std::io::Error> {
 }
 
 pub async fn get_asset_content_length(url: &str) -> Result<u64, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+    let parsed_url =
+        reqwest::Url::parse(url).map_err(|error| format!("URL download tidak valid: {error}"))?;
+    let official_url = is_allowed_github_redirect(&parsed_url);
+    if !official_url && !is_allowed_https_or_loopback(&parsed_url) {
+        return Err("URL download harus HTTPS, kecuali server loopback untuk test.".to_string());
+    }
+    let client = if official_url {
+        official_github_client(Duration::from_secs(15))?
+    } else {
+        safe_http_client(Duration::from_secs(15))?
+    };
 
     let resp = client
         .head(url)
@@ -145,6 +152,9 @@ pub async fn get_asset_content_length(url: &str) -> Result<u64, String> {
 
     if !resp.status().is_success() {
         return Err(format!("HEAD request returned status: {}", resp.status()));
+    }
+    if official_url && !is_allowed_github_redirect(resp.url()) {
+        return Err("HEAD asset GitHub menuju URL yang tidak diizinkan.".to_string());
     }
 
     let len = resp
@@ -177,12 +187,20 @@ pub async fn download_file_with_expected_size<F>(
 where
     F: Fn(DownloadProgress) + Send + 'static,
 {
+    let redirect_policy = reqwest::Url::parse(url)
+        .ok()
+        .filter(is_allowed_github_redirect)
+        .map(|_| DownloadRedirectPolicy::OfficialGithubAsset {
+            expected_url: url.to_string(),
+        })
+        .unwrap_or(DownloadRedirectPolicy::AnyHttps);
+
     download_file_with_expected_size_limited_policy(
         url,
         dest_path,
         expected_size,
         MAX_DOWNLOAD_BYTES,
-        DownloadRedirectPolicy::AnyHttps,
+        redirect_policy,
         on_progress,
     )
     .await
@@ -209,19 +227,38 @@ where
         ));
     }
 
+    let parsed_url =
+        reqwest::Url::parse(url).map_err(|error| format!("URL download tidak valid: {error}"))?;
     let mut client_builder = reqwest::Client::builder().timeout(Duration::from_secs(60));
-    if let DownloadRedirectPolicy::OfficialGithubAsset { expected_url } = &redirect_policy {
-        if url != expected_url {
-            return Err("URL asset GitHub tidak sesuai URL resmi yang diharapkan.".to_string());
+    match &redirect_policy {
+        DownloadRedirectPolicy::OfficialGithubAsset { expected_url } => {
+            if url != expected_url {
+                return Err("URL asset GitHub tidak sesuai URL resmi yang diharapkan.".to_string());
+            }
+            client_builder =
+                client_builder.redirect(reqwest::redirect::Policy::custom(move |attempt| {
+                    if is_allowed_github_redirect(attempt.url()) {
+                        attempt.follow()
+                    } else {
+                        attempt.error("redirect asset GitHub menuju host yang tidak diizinkan")
+                    }
+                }));
         }
-        client_builder =
-            client_builder.redirect(reqwest::redirect::Policy::custom(move |attempt| {
-                if is_allowed_github_redirect(attempt.url()) {
-                    attempt.follow()
-                } else {
-                    attempt.error("redirect asset GitHub menuju host yang tidak diizinkan")
-                }
-            }));
+        DownloadRedirectPolicy::AnyHttps => {
+            if !is_allowed_https_or_loopback(&parsed_url) {
+                return Err(
+                    "URL download harus HTTPS, kecuali server loopback untuk test.".to_string(),
+                );
+            }
+            client_builder =
+                client_builder.redirect(reqwest::redirect::Policy::custom(|attempt| {
+                    if is_allowed_https_or_loopback(attempt.url()) {
+                        attempt.follow()
+                    } else {
+                        attempt.error("redirect download menuju URL non-HTTPS yang tidak diizinkan")
+                    }
+                }));
+        }
     }
     let client = client_builder
         .build()
@@ -866,14 +903,38 @@ fn is_allowed_github_redirect(url: &reqwest::Url) -> bool {
             url.host_str(),
             Some(
                 "github.com"
+                    | "api.github.com"
+                    | "raw.githubusercontent.com"
                     | "release-assets.githubusercontent.com"
                     | "objects.githubusercontent.com"
             )
         )
 }
 
+fn is_allowed_https_or_loopback(url: &reqwest::Url) -> bool {
+    url.scheme() == "https"
+        || (url.scheme() == "http"
+            && matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1")))
+}
+
+fn safe_http_client(timeout: Duration) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .user_agent("WuwaIDLauncher-Tauri")
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if is_allowed_https_or_loopback(attempt.url()) {
+                attempt.follow()
+            } else {
+                attempt.error("redirect download menuju URL non-HTTPS yang tidak diizinkan")
+            }
+        }))
+        .build()
+        .map_err(|error| format!("Gagal membuat client download: {error}"))
+}
+
 pub fn official_github_client(timeout: std::time::Duration) -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
+        .user_agent("WuwaIDLauncher-Tauri")
         .timeout(timeout)
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             if is_allowed_github_redirect(attempt.url()) {
@@ -914,6 +975,30 @@ mod tests {
             parsed.get("test.dll").map(|value| value.as_str()),
             Some("a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e")
         );
+    }
+
+    #[test]
+    fn official_github_redirects_are_host_allowlisted() {
+        for url in [
+            "https://github.com/TitoTFP/WuwaID/releases/latest/download/asset.pak",
+            "https://api.github.com/repos/TitoTFP/WuwaIDLauncher/releases/latest",
+            "https://raw.githubusercontent.com/TitoTFP/WuwaID/main/Web/assets.json",
+            "https://release-assets.githubusercontent.com/asset",
+            "https://objects.githubusercontent.com/asset",
+        ] {
+            assert!(
+                reqwest::Url::parse(url).is_ok_and(|parsed| is_allowed_github_redirect(&parsed))
+            );
+        }
+        for url in [
+            "http://github.com/asset",
+            "https://example.com/asset",
+            "https://github.com.evil.example/asset",
+        ] {
+            assert!(
+                !reqwest::Url::parse(url).is_ok_and(|parsed| is_allowed_github_redirect(&parsed))
+            );
+        }
     }
 
     #[test]

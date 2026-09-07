@@ -4,7 +4,7 @@ use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::engine::downloader::read_response_body_limited;
+use crate::engine::downloader::{official_github_client, read_response_body_limited};
 
 pub const GITHUB_API_LATEST_RELEASE: &str =
     "https://api.github.com/repos/TitoTFP/WuwaIDLauncher/releases/latest";
@@ -782,11 +782,7 @@ pub fn parse_latest_release_json(json: &serde_json::Value) -> Result<ReleaseInfo
 }
 
 pub async fn fetch_latest_release() -> Result<ReleaseInfo, String> {
-    let client = reqwest::Client::builder()
-        .user_agent("WuwaIDLauncher-Tauri")
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+    let client = official_github_client(std::time::Duration::from_secs(10))?;
 
     let response = client
         .get(GITHUB_API_LATEST_RELEASE)

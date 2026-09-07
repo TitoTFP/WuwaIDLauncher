@@ -3,8 +3,13 @@ import { access } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 
-const binary = process.platform === "win32" ? "tauri.cmd" : "tauri";
-const executable = join(process.cwd(), "node_modules", ".bin", binary);
+const executable = join(
+  process.cwd(),
+  "node_modules",
+  "@tauri-apps",
+  "cli",
+  "tauri.js",
+);
 const args = process.argv.slice(2);
 const command = args[0];
 
@@ -21,10 +26,10 @@ try {
   process.exit(1);
 }
 
-const child = spawn(executable, args, {
+const child = spawn(process.execPath, [executable, ...args], {
   cwd: process.cwd(),
   env: process.env,
-  shell: process.platform === "win32",
+  shell: false,
   stdio: "inherit",
 });
 

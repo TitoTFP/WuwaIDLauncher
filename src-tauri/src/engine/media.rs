@@ -35,6 +35,35 @@ pub fn parse_manifest(json_str: &str) -> Result<AssetManifest, String> {
         .map_err(|e| format!("Gagal mem-parsing assets.json manifest: {}", e))
 }
 
+fn validate_media_asset_url(asset: &AssetEntry) -> Result<(), String> {
+    let url = reqwest::Url::parse(&asset.url)
+        .map_err(|_| format!("URL media {} tidak valid.", asset.name))?;
+    let expected_suffix = match asset.name.as_str() {
+        "bgm.mp3" => ("/Audio/bgm.mp3", "/bgm.mp3"),
+        "bg-video.mp4" => ("/Video/bg-video.mp4", "/bg-video.mp4"),
+        _ => return Err(format!("Nama aset media tidak dikenal: {}", asset.name)),
+    };
+    let has_safe_authority = url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none();
+    let is_official_asset = url.scheme() == "https"
+        && url.host_str() == Some("raw.githubusercontent.com")
+        && url.port().is_none()
+        && url.path().starts_with("/TitoTFP/WuwaID/")
+        && url.path().ends_with(expected_suffix.0);
+    let is_loopback_test_asset = url.scheme() == "http"
+        && matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
+        && url.path().ends_with(expected_suffix.1);
+    if !has_safe_authority || (!is_official_asset && !is_loopback_test_asset) {
+        return Err(format!(
+            "URL media {} bukan asset GitHub resmi yang diizinkan.",
+            asset.name
+        ));
+    }
+    Ok(())
+}
+
 pub async fn fetch_manifest(client: &reqwest::Client, url: &str) -> Result<AssetManifest, String> {
     let resp = client
         .get(url)
@@ -97,11 +126,7 @@ pub fn write_cached_manifest(cache_dir: &Path, manifest: &AssetManifest) -> Resu
         .map_err(|error| format!("Gagal menyusun manifest media cache: {error}"))?;
     std::fs::write(&temp, data)
         .map_err(|error| format!("Gagal menulis manifest media cache: {error}"))?;
-    if path.exists() {
-        std::fs::remove_file(&path)
-            .map_err(|error| format!("Gagal mengganti manifest media cache: {error}"))?;
-    }
-    std::fs::rename(&temp, &path)
+    replace_file_atomically(&temp, &path)
         .map_err(|error| format!("Gagal mengaktifkan manifest media cache: {error}"))
 }
 
@@ -159,6 +184,8 @@ where
     if video_entry.sha256.trim().is_empty() {
         return Err("SHA-256 checksum wajib dicantumkan untuk bg-video.mp4".to_string());
     }
+    validate_media_asset_url(bgm_entry)?;
+    validate_media_asset_url(video_entry)?;
 
     let on_progress = Arc::new(on_progress);
     let mut bgm_local = String::new();
@@ -268,6 +295,30 @@ mod tests {
         let (bgm3, vid3) = get_cached_media_paths(cache_dir);
         assert!(bgm3.is_none());
         assert!(vid3.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_media_rejects_untrusted_asset_url() -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let manifest = AssetManifest {
+            update_date: None,
+            assets: vec![
+                AssetEntry {
+                    name: "bgm.mp3".to_string(),
+                    url: "https://example.com/bgm.mp3".to_string(),
+                    sha256: "fca7653b0ffd03d38a70661f6373277927e4dd77466d4666b479972fb463a92d".to_string(),
+                },
+                AssetEntry {
+                    name: "bg-video.mp4".to_string(),
+                    url: "https://raw.githubusercontent.com/TitoTFP/WuwaID/refs/heads/main/Web/Video/bg-video.mp4".to_string(),
+                    sha256: "2d01c99d9fc568ae0ae6046423b081d2ee5ea56b5cf47922913fe0c23bacd953".to_string(),
+                },
+            ],
+        };
+
+        let result = sync_media(temp.path(), &manifest, |_, _| {}).await;
+        assert!(matches!(result, Err(error) if error.contains("URL media bgm.mp3")));
         Ok(())
     }
 

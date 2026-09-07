@@ -103,6 +103,32 @@ test("settings close control uses a symmetric SVG X", () => {
   assert.doesNotMatch(closeButton, /d="m18\.3 5\.7/);
 });
 
+test("icon-only controls expose accessible names", () => {
+  const topBar = read("src/components/TopBar.svelte");
+  const audio = read("src/components/AudioPlayer.svelte");
+  const sidePanel = read("src/components/SidePanel.svelte");
+  const rightPanel = read("src/components/RightPanel.svelte");
+
+  assert.match(topBar, /id="btnMinimize"[^>]*aria-label="Minimalkan"/);
+  assert.match(topBar, /id="btnClose"[^>]*aria-label="Tutup launcher"/);
+  assert.match(
+    audio,
+    /aria-label=\{isPlaying \? 'Jeda musik' : 'Putar musik'\}/,
+  );
+  assert.match(
+    audio,
+    /aria-label=\{isMuted \? 'Aktifkan suara' : 'Bisukan musik'\}/,
+  );
+  assert.match(
+    sidePanel,
+    /id="rnToggle"[\s\S]*aria-label=\{collapsed \? 'Buka pengumuman' : 'Tutup pengumuman'\}/,
+  );
+  assert.match(
+    rightPanel,
+    /id="btnMenu"[\s\S]*aria-label="Buka menu"[\s\S]*aria-controls="rpDropdown"/,
+  );
+});
+
 test("Tauri titlebar dragging does not create a native drag cursor region", () => {
   const topBar = read("src/components/TopBar.svelte");
   const baseStyles = read("src/styles/styles-base.css");
@@ -130,4 +156,15 @@ test("Tauri titlebar dragging does not create a native drag cursor region", () =
     assert.match(disabled, /cursor:\s*var\(--cursor-select\);/);
   }
   assert.match(capabilities, /"core:window:allow-start-dragging"/);
+});
+
+test("Node wrappers do not enable shell execution", () => {
+  for (const path of [
+    "scripts/run-frontend-gate.mjs",
+    "scripts/run-tauri.mjs",
+  ]) {
+    const source = read(path);
+    assert.match(source, /shell: false/);
+    assert.doesNotMatch(source, /shell:\s*true/);
+  }
 });
