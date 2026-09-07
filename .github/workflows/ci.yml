@@ -248,6 +248,14 @@ jobs:
                 git status --short
                 exit 1
               }
+              Write-Host "Running isolated backend preflight: windows_missing_transaction_rejects_handoff_without_display"
+              cargo test --locked --manifest-path $manifest --test $test windows_missing_transaction_rejects_handoff_without_display -- --exact --test-threads=1 --nocapture
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              if (-not (Test-Path -LiteralPath $cargoToml)) {
+                Write-Host "Workspace changed after backend preflight"
+                git status --short
+                exit 1
+              }
               foreach ($gameTest in $gameTests) {
                 Write-Host "Running isolated backend test: $gameTest"
                 cargo test --locked --manifest-path $manifest --test $test $gameTest -- --exact --test-threads=1 --nocapture
