@@ -239,6 +239,15 @@ jobs:
                 'windows_health_check_failure_rolls_back_and_discards_whats_new',
                 'windows_health_failure_stops_launched_process_before_rollback'
               )
+              Write-Host "Compiling isolated backend test target: $test"
+              cargo test --locked --manifest-path $manifest --test $test --no-run
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              $cargoToml = Join-Path $env:GITHUB_WORKSPACE 'src-tauri\Cargo.toml'
+              if (-not (Test-Path -LiteralPath $cargoToml)) {
+                Write-Host "Workspace changed while compiling backend test target: $test"
+                git status --short
+                exit 1
+              }
               foreach ($gameTest in $gameTests) {
                 Write-Host "Running isolated backend test: $gameTest"
                 cargo test --locked --manifest-path $manifest --test $test $gameTest -- --exact --test-threads=1 --nocapture
