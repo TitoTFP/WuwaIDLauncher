@@ -203,7 +203,35 @@ jobs:
         run: npm run build
 
       - name: Test Windows backend
-        run: cargo test --locked --manifest-path "${env:GITHUB_WORKSPACE}\src-tauri\Cargo.toml" --all-targets -- --test-threads=1
+        shell: pwsh
+        run: |
+          $manifest = Join-Path $env:GITHUB_WORKSPACE 'src-tauri\Cargo.toml'
+          cargo test --locked --manifest-path $manifest --lib -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $tests = @(
+            'app_command_integration_tests',
+            'backend_remediation_tests',
+            'download_integration_tests',
+            'game_lifecycle_windows_tests',
+            'installer_safety_tests',
+            'media_command_event_tests',
+            'milestone1_contract_tests',
+            'milestone2_contract_tests',
+            'milestone3_contract_tests',
+            'milestone5_contract_tests',
+            'milestone6_contract_tests'
+          )
+          foreach ($test in $tests) {
+            Write-Host "Running isolated backend test target: $test"
+            cargo test --locked --manifest-path $manifest --test $test -- --test-threads=1
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $cargoToml = Join-Path $env:GITHUB_WORKSPACE 'src-tauri\Cargo.toml'
+            if (-not (Test-Path -LiteralPath $cargoToml)) {
+              Write-Host "Workspace changed after backend test target: $test"
+              git status --short
+              exit 1
+            }
+          }
 
       - name: Verify Windows workspace after backend tests
         shell: pwsh
