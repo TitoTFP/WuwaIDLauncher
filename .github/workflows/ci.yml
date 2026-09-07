@@ -222,6 +222,36 @@ jobs:
             'milestone6_contract_tests'
           )
           foreach ($test in $tests) {
+            if ($test -eq 'game_lifecycle_windows_tests') {
+              $gameTests = @(
+                'direct_launch_without_dx11_handoffs_and_force_quits_verified_tree',
+                'direct_launch_with_dx11_handoffs_and_force_quits_verified_tree',
+                'elevated_uac_launch_handoffs_and_force_quits_with_retained_handle',
+                'external_instance_is_not_claimed_or_killed_by_unrelated_launcher_tree',
+                'supported_launch_modes_and_dx11_arguments_are_explicit',
+                'launcher_child_handoff_stays_owned_and_force_quit_cleans_the_tree',
+                'windows_handoff_commits_whats_new_after_successful_restart',
+                'windows_offline_startup_reads_matching_committed_whats_new',
+                'windows_acknowledgement_is_once_per_tag',
+                'windows_missing_transaction_rejects_handoff_without_display',
+                'windows_cancelled_update_invalidates_uncommitted_whats_new',
+                'windows_failed_update_does_not_display_whats_new',
+                'windows_health_check_failure_rolls_back_and_discards_whats_new',
+                'windows_health_failure_stops_launched_process_before_rollback'
+              )
+              foreach ($gameTest in $gameTests) {
+                Write-Host "Running isolated backend test: $gameTest"
+                cargo test --locked --manifest-path $manifest --test $test $gameTest -- --exact --test-threads=1
+                if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+                $cargoToml = Join-Path $env:GITHUB_WORKSPACE 'src-tauri\Cargo.toml'
+                if (-not (Test-Path -LiteralPath $cargoToml)) {
+                  Write-Host "Workspace changed after backend test: $gameTest"
+                  git status --short
+                  exit 1
+                }
+              }
+              continue
+            }
             Write-Host "Running isolated backend test target: $test"
             cargo test --locked --manifest-path $manifest --test $test -- --test-threads=1
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
