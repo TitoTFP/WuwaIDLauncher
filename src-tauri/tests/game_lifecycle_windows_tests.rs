@@ -398,6 +398,14 @@ fn write_committed_release_note(root: &Path, tag: &str) -> (PathBuf, PathBuf, Pa
 fn run_handoff_script(path: &Path) -> std::process::ExitStatus {
     let pid_file = launcher_fixture_pid_path(path.parent().unwrap());
     let script = fs::read_to_string(path).unwrap_or_default();
+    let preflight = script
+        .lines()
+        .filter_map(|line| {
+            line.strip_prefix("if not exist \"")
+                .and_then(|value| value.strip_suffix("\" goto fail_1"))
+                .map(|value| (value.to_string(), Path::new(value).exists()))
+        })
+        .collect::<Vec<_>>();
     let mut command = Command::new(windows_system_executable("cmd.exe"));
     let mut child = command
         .env("WUWAID_LAUNCHER_UPDATE_PID_FILE", &pid_file)
@@ -412,6 +420,9 @@ fn run_handoff_script(path: &Path) -> std::process::ExitStatus {
         if let Some(status) = child.try_wait().unwrap() {
             if !status.success() {
                 eprintln!("update handoff failed: {}", status);
+                for (path, exists) in &preflight {
+                    eprintln!("handoff preflight: exists={exists} path={path}");
+                }
                 for line in script.lines().filter(|line| {
                     line.contains("if not exist")
                         || line.contains("release_transaction")
