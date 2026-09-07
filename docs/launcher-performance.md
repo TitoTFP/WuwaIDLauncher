@@ -78,9 +78,10 @@ Evidence files include:
 
 ## GitHub Actions
 
-The matrix runs on the GitHub-hosted `windows-latest` runner in the Windows CI
-job. The workflow uploads `performance-evidence` as a retained artifact. No
-self-hosted runner is permitted by the workflow contract.
+The matrix runs in a dedicated GitHub-hosted `windows-latest` Windows fixture
+performance job. The workflow uploads `performance-evidence` as a retained
+artifact even when the separate Windows regression job fails. No self-hosted
+runner is permitted by the workflow contract.
 
 The hosted run still needs to create a real Tauri window and WebView2 process;
 the test must fail rather than silently switching to a headless or synthetic

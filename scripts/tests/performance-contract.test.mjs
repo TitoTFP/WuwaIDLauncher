@@ -26,6 +26,9 @@ test("fixture performance runner covers visible, tray, and restore evidence", ()
   assert.match(source, /resource-visible\.csv/);
   assert.match(source, /resource-tray\.csv/);
   assert.match(source, /summary\.json/);
+  assert.match(source, /Write-MinimalValidPak/);
+  assert.match(source, /installMethod = "loader"/);
+  assert.match(source, /_loaderSha256/);
   assert.match(source, /MaxLauncherPrivateMemoryMB/);
   assert.match(source, /MaxLauncherWorkingSetMB/);
   assert.match(source, /MaxLauncherReadBytesPerSecond/);
