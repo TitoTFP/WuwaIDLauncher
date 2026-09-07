@@ -657,8 +657,9 @@ fn windows_health_check_failure_rolls_back_and_discards_whats_new() {
         "v2.10.0",
     )
     .unwrap();
-    let _status = run_handoff_script(&handoff);
+    let status = run_handoff_script(&handoff);
 
+    assert_eq!(status.code(), Some(7), "handoff failed with {status}");
     assert!(!handoff.exists());
     assert!(!staging.exists());
     assert_eq!(fs::read(&current).unwrap(), current_bytes);
@@ -700,9 +701,12 @@ fn windows_health_failure_stops_launched_process_before_rollback() {
         "v2.10.0",
     )
     .unwrap();
-    let _status = run_handoff_script(&handoff);
+    let status = run_handoff_script(&handoff);
 
-    wait_for_launcher_pid_exit(&launcher_fixture_pid_path(temp.path()));
+    assert_eq!(status.code(), Some(7), "handoff failed with {status}");
+    let pid_file = launcher_fixture_pid_path(temp.path());
+    assert!(pid_file.is_file(), "launched fixture did not write its PID");
+    wait_for_launcher_pid_exit(&pid_file);
     assert!(!handoff.exists());
     assert!(!staging.exists());
     assert_eq!(fs::read(&current).unwrap(), current_bytes);

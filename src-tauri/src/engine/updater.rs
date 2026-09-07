@@ -556,7 +556,16 @@ fn create_update_handoff_impl(
             &replacement_anchor,
             &format!("{release_precondition}{replacement_anchor}"),
         );
-        let start_anchor = format!("start \"\" {}\r\n", quote(current_executable));
+        let start_anchor = format!(
+            "start \"\" {current}\r\n\
+             if errorlevel 1 (\r\n\
+             copy /Y {backup} {current} >nul\r\n\
+             if errorlevel 1 goto fail_8\r\n\
+             goto fail_6\r\n\
+             )\r\n",
+            current = quote(current_executable),
+            backup = quote(&backup_executable),
+        );
         if !script.contains(&start_anchor) {
             return Err(
                 "Template handoff update tidak memiliki awal proses yang diharapkan.".to_string(),
@@ -564,15 +573,23 @@ fn create_update_handoff_impl(
         }
         script = script.replace(&start_anchor, &release_start);
         let backup = quote(&backup_executable);
-        let health_anchor =
-            "%SystemRoot%\\System32\\tasklist.exe /FI \"IMAGENAME eq WuwaIDLauncher.exe\" | %SystemRoot%\\System32\\findstr.exe /I /C:\"WuwaIDLauncher.exe\" >nul\r\n";
-        if !script.contains(health_anchor) {
+        let health_anchor = format!(
+            "%SystemRoot%\\System32\\tasklist.exe /FI \"IMAGENAME eq WuwaIDLauncher.exe\" | %SystemRoot%\\System32\\findstr.exe /I /C:\"WuwaIDLauncher.exe\" >nul\r\n\
+             if errorlevel 1 (\r\n\
+             copy /Y {backup} {current} >nul\r\n\
+             if errorlevel 1 goto fail_8\r\n\
+             goto fail_7\r\n\
+             )\r\n",
+            current = quote(current_executable),
+            backup = backup,
+        );
+        if !script.contains(&health_anchor) {
             return Err(
                 "Template handoff update tidak memiliki pemeriksaan kesehatan yang diharapkan."
                     .to_string(),
             );
         }
-        script = script.replace(health_anchor, &release_health_check);
+        script = script.replace(&health_anchor, &release_health_check);
         let staging = quote(staging_dir);
         let success_anchor = format!(
             "del /Q {backup} >nul 2>nul\r\nrmdir /S /Q {staging} >nul 2>nul\r\ndel \"%~f0\"\r\n",
@@ -1090,6 +1107,7 @@ mod tests {
         assert!(script.contains("set \"WUWAID_LAUNCHER_UPDATE_READY=%release_ready_temp%\""));
         assert!(script.contains("Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE"));
         assert!(script.contains("set \"release_started_pid=%%P\""));
+        assert!(!script.contains("set \"release_started_pid=%%P\"\r\nif errorlevel 1"));
         assert!(script.contains("if exist \"%release_ready_temp%\" goto fail_12"));
         assert!(script.contains("PID eq %release_pid%"));
         assert!(script.contains(":stop_released_launcher"));
@@ -1102,6 +1120,7 @@ mod tests {
         assert!(!script.contains("tasklist.exe /FI \"IMAGENAME eq WuwaIDLauncher.exe\" |"));
         assert!(script.contains("goto fail_7"));
         assert!(script.contains("if not exist \"%release_ready_temp%\""));
+        assert!(!script.contains("if errorlevel 1 goto release_health_failure\r\nif errorlevel 1"));
         assert!(script.contains(":cleanup_release_state"));
         assert!(!script.lines().any(|line| line.trim_end().ends_with('\\')));
         assert!(script.contains(&format!("del /Q \"{}\"", pending.to_string_lossy())));
