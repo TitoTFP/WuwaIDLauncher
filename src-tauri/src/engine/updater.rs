@@ -494,7 +494,7 @@ fn create_update_handoff_impl(
          del /Q {replacement} >nul 2>nul\r\n\\
          del /Q {backup} >nul 2>nul\r\n\\
          rmdir /S /Q {staging} >nul 2>nul\r\n\\
-         del /Q \"%release_started_pid_file%\" >nul 2>nul\r\n\\
+         if defined release_started_pid_file del /Q \"%release_started_pid_file%\" >nul 2>nul\r\n\\
          call :schedule_update_handoff_cleanup\r\n\\
          exit /b 0\r\n",
         replacement = quote(&replacement_executable),
@@ -1132,6 +1132,8 @@ mod tests {
         assert!(script.contains("Set-Content -LiteralPath $env:WUWAID_LAUNCHER_UPDATE_START_PID"));
         assert!(script.contains("release_started_pid_file=%release_ready_temp%.pid"));
         assert!(script.contains("set /p \"release_started_pid=\""));
+        assert!(script
+            .contains("if defined release_started_pid_file del /Q \"%release_started_pid_file%\""));
         assert!(script.contains("if not \"%release_marker_pid%\"==\"%release_started_pid%\""));
         assert!(!script.contains("Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE"));
         assert!(!script.contains("for /f \"usebackq delims=\" %%P"));
