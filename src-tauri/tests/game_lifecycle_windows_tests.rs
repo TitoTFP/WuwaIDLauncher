@@ -397,6 +397,7 @@ fn write_committed_release_note(root: &Path, tag: &str) -> (PathBuf, PathBuf, Pa
 
 fn run_handoff_script(path: &Path) -> std::process::ExitStatus {
     let pid_file = launcher_fixture_pid_path(path.parent().unwrap());
+    let script = fs::read_to_string(path).unwrap_or_default();
     let mut command = Command::new(windows_system_executable("cmd.exe"));
     let mut child = command
         .env("WUWAID_LAUNCHER_UPDATE_PID_FILE", &pid_file)
@@ -409,6 +410,17 @@ fn run_handoff_script(path: &Path) -> std::process::ExitStatus {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if let Some(status) = child.try_wait().unwrap() {
+            if !status.success() {
+                eprintln!("update handoff failed: {}", status);
+                for line in script.lines().filter(|line| {
+                    line.contains("if not exist")
+                        || line.contains("release_transaction")
+                        || line.contains("release_started_pid")
+                        || line.contains("goto fail_")
+                }) {
+                    eprintln!("handoff: {line}");
+                }
+            }
             return status;
         }
         assert!(Instant::now() < deadline, "update handoff script timed out");
