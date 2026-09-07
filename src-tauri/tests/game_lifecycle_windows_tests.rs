@@ -406,33 +406,18 @@ fn run_handoff_script(path: &Path) -> std::process::ExitStatus {
                 .map(|value| (value.to_string(), Path::new(value).exists()))
         })
         .collect::<Vec<_>>();
-    let trace_path = path.with_extension("trace.cmd");
-    let mut trace_script = script.replace("@echo off", "@echo on");
-    for code in 1..=13 {
-        trace_script = trace_script.replace(
-            &format!("goto fail_{code}"),
-            &format!("echo TRACE_FAIL_{code} & goto fail_{code}"),
-        );
-    }
-    trace_script = trace_script.replace(
-        "goto release_health_failure",
-        "echo TRACE_HEALTH_FAILURE & goto release_health_failure",
-    );
-    fs::write(&trace_path, trace_script).unwrap();
     let mut command = Command::new(windows_system_executable("cmd.exe"));
     let mut child = command
         .env("WUWAID_LAUNCHER_UPDATE_PID_FILE", &pid_file)
-        .args(["/D", "/C", trace_path.to_str().unwrap()])
+        .args(["/D", "/C", path.to_str().unwrap()])
         .stdin(Stdio::null())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if let Some(status) = child.try_wait().unwrap() {
-            let _ = fs::remove_file(&trace_path);
-            let _ = fs::remove_file(path);
             if !status.success() {
                 eprintln!("update handoff failed: {}", status);
                 for (path, exists) in &preflight {
