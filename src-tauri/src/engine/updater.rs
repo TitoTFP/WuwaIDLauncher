@@ -370,7 +370,7 @@ fn create_update_handoff_impl(
                 "         set \"WUWAID_UPDATE_EXECUTABLE={}\"\r\n\\
                  set \"WUWAID_UPDATE_DIRECTORY={}\"\r\n\\
                  set \"release_started_pid=\"\r\n\\
-                 for /f \"usebackq delims=\" %%P in (`%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"$i=New-Object System.Diagnostics.ProcessStartInfo; $i.FileName=$env:WUWAID_UPDATE_EXECUTABLE; $i.WorkingDirectory=$env:WUWAID_UPDATE_DIRECTORY; $i.UseShellExecute=$false; foreach($n in @('WUWAID_LAUNCHER_UPDATE_READY','WUWAID_LAUNCHER_UPDATE_PID_FILE')){{$v=[Environment]::GetEnvironmentVariable($n,'Process');if($null -ne $v){{$i.EnvironmentVariables[$n]=$v}}}}; $p=[System.Diagnostics.Process]::Start($i); $p.Id\"`) do set \"release_started_pid=%%P\"\r\n\\
+                 for /f \"usebackq delims=\" %%P in (`%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"$i=New-Object System.Diagnostics.ProcessStartInfo; $i.FileName=$env:WUWAID_UPDATE_EXECUTABLE; $i.WorkingDirectory=$env:WUWAID_UPDATE_DIRECTORY; $i.UseShellExecute=$false; $i.CreateNoWindow=$true; $i.RedirectStandardInput=$true; $i.RedirectStandardOutput=$true; $i.RedirectStandardError=$true; foreach($n in @('WUWAID_LAUNCHER_UPDATE_READY','WUWAID_LAUNCHER_UPDATE_PID_FILE')){{$v=[Environment]::GetEnvironmentVariable($n,'Process');if($null -ne $v){{$i.EnvironmentVariables[$n]=$v}}}}; $p=[System.Diagnostics.Process]::Start($i); $p.Id\"`) do set \"release_started_pid=%%P\"\r\n\\
                  if not defined release_started_pid goto fail_6\r\n\\
                  set \"release_pid=%release_started_pid%\"\r\n\\
                  set \"release_pid_valid=1\"\r\n",
