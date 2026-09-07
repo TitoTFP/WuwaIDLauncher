@@ -407,16 +407,17 @@ fn run_handoff_script(path: &Path) -> std::process::ExitStatus {
         })
         .collect::<Vec<_>>();
     let trace_path = path.with_extension("trace.cmd");
-    let mut trace_script = String::from("@echo on\r\n");
-    for (path, _) in &preflight {
-        trace_script.push_str(&format!(
-            "if exist \"{path}\" (echo TRACE_EXISTS {path}) else (echo TRACE_MISSING {path})\r\n"
-        ));
+    let mut trace_script = script.replace("@echo off", "@echo on");
+    for code in 1..=13 {
+        trace_script = trace_script.replace(
+            &format!("goto fail_{code}"),
+            &format!("echo TRACE_FAIL_{code} & goto fail_{code}"),
+        );
     }
-    trace_script.push_str(&format!(
-        "call \"{}\"\r\nset \"handoff_status=%errorlevel%\"\r\necho TRACE_STATUS=%handoff_status%\r\nexit /b %handoff_status%\r\n",
-        path.display()
-    ));
+    trace_script = trace_script.replace(
+        "goto release_health_failure",
+        "echo TRACE_HEALTH_FAILURE & goto release_health_failure",
+    );
     fs::write(&trace_path, trace_script).unwrap();
     let mut command = Command::new(windows_system_executable("cmd.exe"));
     let mut child = command
@@ -431,6 +432,7 @@ fn run_handoff_script(path: &Path) -> std::process::ExitStatus {
     loop {
         if let Some(status) = child.try_wait().unwrap() {
             let _ = fs::remove_file(&trace_path);
+            let _ = fs::remove_file(path);
             if !status.success() {
                 eprintln!("update handoff failed: {}", status);
                 for (path, exists) in &preflight {
