@@ -471,12 +471,20 @@ fn create_update_handoff_impl(
             )
         })
         .unwrap_or_default();
+    let handoff_cleanup = [
+        ":schedule_update_handoff_cleanup",
+        "set \"WUWAID_UPDATE_HANDOFF_PATH=%~f0\"",
+        "start \"\" /B \"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -WindowStyle Hidden -Command \"$path=$env:WUWAID_UPDATE_HANDOFF_PATH; for($attempt=0;$attempt -lt 20;$attempt++){try{Remove-Item -LiteralPath $path -Force -ErrorAction Stop; break}catch{Start-Sleep -Milliseconds 100}}\" >nul 2>nul",
+        "exit /b 0",
+    ]
+    .join("\r\n")
+        + "\r\n";
     let update_cleanup = format!(
         ":cleanup_update_files\r\n\\
          del /Q {replacement} >nul 2>nul\r\n\\
          del /Q {backup} >nul 2>nul\r\n\\
          rmdir /S /Q {staging} >nul 2>nul\r\n\\
-         del \"%~f0\" >nul 2>nul\r\n\\
+         call :schedule_update_handoff_cleanup\r\n\\
          exit /b 0\r\n",
         replacement = quote(&replacement_executable),
         backup = quote(&backup_executable),
@@ -525,12 +533,14 @@ fn create_update_handoff_impl(
           )\r\n\
           del /Q {backup} >nul 2>nul\r\n\
           rmdir /S /Q {staging} >nul 2>nul\r\n\
-         del \"%~f0\"\r\n",
+         call :schedule_update_handoff_cleanup\r\n\
+         exit /b 0\r\n{handoff_cleanup}",
         current = quote(current_executable),
         staged = quote(&staged_executable),
         backup = quote(&backup_executable),
         replacement = quote(&replacement_executable),
         staging = quote(staging_dir),
+        handoff_cleanup = handoff_cleanup,
     );
     let script = if release_state.is_some() {
         let release_setup = normalize_batch_fragment(&release_setup);
@@ -592,7 +602,7 @@ fn create_update_handoff_impl(
         script = script.replace(&health_anchor, &release_health_check);
         let staging = quote(staging_dir);
         let success_anchor = format!(
-            "del /Q {backup} >nul 2>nul\r\nrmdir /S /Q {staging} >nul 2>nul\r\ndel \"%~f0\"\r\n",
+            "del /Q {backup} >nul 2>nul\r\nrmdir /S /Q {staging} >nul 2>nul\r\ncall :schedule_update_handoff_cleanup\r\nexit /b 0\r\n",
             backup = backup,
             staging = staging,
         );
@@ -602,7 +612,7 @@ fn create_update_handoff_impl(
             );
         }
         let success = format!(
-            "{release_commit}del /Q {backup} >nul 2>nul\r\nrmdir /S /Q {staging} >nul 2>nul\r\ndel \"%~f0\" >nul 2>nul\r\nexit /b 0\r\n{failure_labels}{release_cleanup}{update_cleanup}",
+            "{release_commit}del /Q {backup} >nul 2>nul\r\nrmdir /S /Q {staging} >nul 2>nul\r\ncall :schedule_update_handoff_cleanup\r\nexit /b 0\r\n{failure_labels}{release_cleanup}{update_cleanup}",
             release_commit = release_commit,
             backup = backup,
             staging = staging,

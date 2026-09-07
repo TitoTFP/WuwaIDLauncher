@@ -418,6 +418,10 @@ fn run_handoff_script(path: &Path) -> std::process::ExitStatus {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if let Some(status) = child.try_wait().unwrap() {
+            let cleanup_deadline = Instant::now() + Duration::from_secs(5);
+            while path.exists() && Instant::now() < cleanup_deadline {
+                sleep(Duration::from_millis(100));
+            }
             if !status.success() {
                 eprintln!("update handoff failed: {}", status);
                 for (path, exists) in &preflight {
