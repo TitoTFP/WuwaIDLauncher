@@ -424,7 +424,7 @@ fn create_update_handoff_impl(
                  for /L %%W in (1,1,10) do (\r\n\\
                      %SystemRoot%\\System32\\tasklist.exe /FI \"PID eq %release_pid%\" /FO CSV /NH | %SystemRoot%\\System32\\findstr.exe /I /C:\"%release_pid%\" >nul\r\n\\
                      if errorlevel 1 exit /b 0\r\n\\
-                     %SystemRoot%\\System32\\timeout.exe /t 1 /nobreak >nul\r\n\\
+                     %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 1\" >nul 2>nul\r\n\\
                  )\r\n\\
                  exit /b 0\r\n"
             .to_string()
@@ -486,7 +486,7 @@ fn create_update_handoff_impl(
         "@echo off\r\n\
          setlocal\r\n\
          rem WuwaID updater handoff with a verified backup and rollback\r\n\
-         %SystemRoot%\\System32\\timeout.exe /t 1 /nobreak >nul\r\n\
+         %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 1\" >nul 2>nul\r\n\
          if not exist {staged} exit /b 1\r\n\
          if not exist {current} exit /b 1\r\n\
          if exist {replacement} del /Q {replacement} >nul 2>nul\r\n\
@@ -516,7 +516,7 @@ fn create_update_handoff_impl(
              if errorlevel 1 exit /b 8\r\n\
              exit /b 6\r\n\
          )\r\n\
-          %SystemRoot%\\System32\\timeout.exe /t 2 /nobreak >nul\r\n\
+          %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 2\" >nul 2>nul\r\n\
           %SystemRoot%\\System32\\tasklist.exe /FI \"IMAGENAME eq WuwaIDLauncher.exe\" | %SystemRoot%\\System32\\findstr.exe /I /C:\"WuwaIDLauncher.exe\" >nul\r\n\
           if errorlevel 1 (\r\n\
              copy /Y {backup} {current} >nul\r\n\
@@ -1106,6 +1106,9 @@ mod tests {
         assert!(script.contains("set \"release_tag=v2.10.0\""));
         assert!(script.contains("set \"WUWAID_LAUNCHER_UPDATE_READY=%release_ready_temp%\""));
         assert!(script.contains("Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE"));
+        assert!(!script.contains("timeout.exe"));
+        assert!(script.contains("Start-Sleep -Seconds 1"));
+        assert!(script.contains("Start-Sleep -Seconds 2"));
         assert!(script.contains("set \"release_started_pid=%%P\""));
         assert!(!script.contains("set \"release_started_pid=%%P\"\r\nif errorlevel 1"));
         assert!(script.contains("if exist \"%release_ready_temp%\" goto fail_12"));
