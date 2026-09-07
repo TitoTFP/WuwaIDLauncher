@@ -71,7 +71,7 @@ jobs:
         run: npm run build
 
       - name: Test JavaScript contracts
-        run: node --test scripts/tests/frontend-controls.test.mjs scripts/tests/game-exit-notice.test.mjs scripts/tests/resource-lifecycle.test.mjs scripts/tests/launcher-update-notification.test.mjs scripts/tests/workflow-contract.test.mjs
+        run: node --test scripts/tests/frontend-controls.test.mjs scripts/tests/game-exit-notice.test.mjs scripts/tests/resource-lifecycle.test.mjs scripts/tests/launcher-update-notification.test.mjs scripts/tests/workflow-contract.test.mjs scripts/tests/performance-contract.test.mjs
 
       - name: Test patch status bridge
         run: npm run test:patch-status
@@ -228,6 +228,24 @@ jobs:
 
       - name: Build launcher binary
         run: npm run tauri -- build --no-bundle
+
+      - name: Run Windows fixture performance matrix
+        shell: pwsh
+        run: |
+          & pwsh -NoProfile -File "scripts/acceptance/run-windows-fixture-performance.ps1" `
+            -OutputRoot "$env:GITHUB_WORKSPACE\performance-evidence"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows fixture performance matrix failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Upload Windows fixture performance evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-fixture-performance-${{ github.run_number }}
+          path: performance-evidence
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Validate launcher artifact
         shell: pwsh

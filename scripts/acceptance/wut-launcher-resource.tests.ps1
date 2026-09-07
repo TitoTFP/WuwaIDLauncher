@@ -6,12 +6,18 @@ param(
     [ValidateRange(0.1, 100)][double]$MaxLauncherCpuPercent = 1.0,
     [ValidateRange(0.1, 100)][double]$MaxWebViewCpuPercent = 1.0,
     [ValidateRange(1, 5000)][int]$MaxCadenceJitterMilliseconds = 1000,
+    [ValidateRange(0, 4096)][double]$MaxLauncherMemoryGrowthMB = 32,
     [bool]$RequireHiddenWindow = $true,
+    [bool]$RequireVisibleWindow = $false,
     [bool]$RequireWebView = $true,
     [string]$OutputPath = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($RequireHiddenWindow -and $RequireVisibleWindow) {
+    throw "RequireHiddenWindow and RequireVisibleWindow cannot both be true."
+}
 
 Add-Type @"
 using System;
@@ -236,6 +242,7 @@ function Get-ProcessSample {
     $launcherIo = [WutNativeProbe]::GetProcessIoCounters([uint32]$LauncherPid)
     $webviewCpu = 0.0
     $webviewPrivateBytes = [int64]0
+    $webviewWorkingSetBytes = [int64]0
     $webviewReadBytes = [uint64]0
     $webviewWriteBytes = [uint64]0
     $webviewCount = 0
@@ -249,6 +256,7 @@ function Get-ProcessSample {
             $webviewCount++
             $webviewCpu += $child.TotalProcessorTime.TotalSeconds
             $webviewPrivateBytes += [int64]$child.PrivateMemorySize64
+            $webviewWorkingSetBytes += [int64]$child.WorkingSet64
             $webviewReadBytes += [uint64]$childIo[0]
             $webviewWriteBytes += [uint64]$childIo[1]
         } catch [System.InvalidOperationException] {
@@ -266,6 +274,7 @@ function Get-ProcessSample {
         LauncherWriteBytes = [uint64]$launcherIo[1]
         WebViewCpuSeconds = [double]$webviewCpu
         WebViewPrivateBytes = [int64]$webviewPrivateBytes
+        WebViewWorkingSetBytes = [int64]$webviewWorkingSetBytes
         WebViewReadBytes = $webviewReadBytes
         WebViewWriteBytes = $webviewWriteBytes
         WebViewCount = $webviewCount
@@ -285,6 +294,9 @@ $launcherPid = $launcher.Id
 $initialVisibility = Get-WindowVisibility -Process $launcher
 if ($RequireHiddenWindow -and $initialVisibility -ne "false") {
     throw "Launcher window is not proven hidden (visibility=$initialVisibility). Put it in tray and rerun."
+}
+if ($RequireVisibleWindow -and $initialVisibility -ne "true") {
+    throw "Launcher window is not proven visible (visibility=$initialVisibility)."
 }
 
 $processRows = @(Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, Name | Select-Object ProcessId, ParentProcessId, Name)
@@ -336,6 +348,7 @@ for ($sampleIndex = 0; $sampleIndex -lt $expectedSamples; $sampleIndex++) {
         LauncherWriteBytesPerSecond = [Math]::Round((Get-NonNegativeDelta -Current $current.LauncherWriteBytes -Previous $previous.LauncherWriteBytes) / $wallSeconds, 2)
         WebViewCpuPercent = [Math]::Round($webviewCpu, 4)
         WebViewPrivateMB = [Math]::Round($current.WebViewPrivateBytes / 1MB, 2)
+        WebViewWorkingSetMB = [Math]::Round($current.WebViewWorkingSetBytes / 1MB, 2)
         WebViewReadBytes = $current.WebViewReadBytes
         WebViewWriteBytes = $current.WebViewWriteBytes
         WebViewReadBytesPerSecond = [Math]::Round((Get-NonNegativeDelta -Current $current.WebViewReadBytes -Previous $previous.WebViewReadBytes) / $wallSeconds, 2)
@@ -384,6 +397,9 @@ if ($RequireWebView -and $webviewRows.Count -eq 0) {
 if ($RequireHiddenWindow -and $visibleRows.Count -gt 0) {
     throw "Launcher became visible during the tray sample."
 }
+if ($RequireVisibleWindow -and $visibleRows.Count -ne $rows.Count) {
+    throw "Launcher was not visible for every visible-state sample."
+}
 if ($launcherCpuMax -gt $MaxLauncherCpuPercent) {
     throw "Launcher CPU sample max $launcherCpuMax% exceeds $MaxLauncherCpuPercent%."
 }
@@ -393,8 +409,8 @@ if ($webviewCpuMax -gt $MaxWebViewCpuPercent) {
 if ($maxCadenceJitter -gt $MaxCadenceJitterMilliseconds) {
     throw "Sampler cadence jitter max $([Math]::Round($maxCadenceJitter, 2))ms exceeds $MaxCadenceJitterMilliseconds ms."
 }
-if ($memoryGrowth -gt 32) {
-    throw "Launcher private memory grew by $memoryGrowth MB during the sample."
+if ($memoryGrowth -gt $MaxLauncherMemoryGrowthMB) {
+    throw "Launcher private memory grew by $memoryGrowth MB during the sample; maximum is $MaxLauncherMemoryGrowthMB MB."
 }
 
 Write-Output "PASS: tray resource sample stayed within CPU, WebView2, visibility, cadence, I/O, and memory bounds"

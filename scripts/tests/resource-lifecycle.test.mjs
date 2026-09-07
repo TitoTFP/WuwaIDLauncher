@@ -55,6 +55,8 @@ test("resource sampler records I/O and enforces every-sample CPU and cadence lim
   );
 
   assert.match(source, /GetProcessIoCounters/);
+  assert.match(source, /RequireVisibleWindow/);
+  assert.match(source, /WebViewWorkingSetMB/);
   assert.match(source, /LauncherReadBytesPerSecond/);
   assert.match(source, /WebViewWriteBytesPerSecond/);
   assert.match(source, /\$minimumRequired/);
