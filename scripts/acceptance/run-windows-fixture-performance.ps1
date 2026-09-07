@@ -203,6 +203,38 @@ function Invoke-LaunchButton {
     ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
 }
 
+function Write-MinimalValidPak {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $index = [byte[]](0)
+    $sha1 = [Security.Cryptography.SHA1]::Create()
+    try {
+        $indexHash = $sha1.ComputeHash($index)
+    } finally {
+        $sha1.Dispose()
+    }
+
+    $stream = [IO.MemoryStream]::new()
+    $writer = [IO.BinaryWriter]::new($stream)
+    try {
+        $writer.Write($index)
+        $writer.Write([uint64]0)
+        $writer.Write([uint64]0)
+        $writer.Write([byte]0)
+        $writer.Write([byte[]](0xE1, 0x12, 0x6F, 0x5A))
+        $writer.Write([byte[]](0x0C, 0x00, 0x00, 0x00))
+        $writer.Write([uint64]0)
+        $writer.Write([uint64]1)
+        $writer.Write($indexHash)
+        $writer.Write([byte[]](0..159 | ForEach-Object { 0 }))
+        $writer.Flush()
+        [IO.File]::WriteAllBytes($Path, $stream.ToArray())
+    } finally {
+        $writer.Dispose()
+        $stream.Dispose()
+    }
+}
+
 function New-FixtureGame {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
@@ -210,13 +242,19 @@ function New-FixtureGame {
     )
 
     $binaryDirectory = Join-Path $Root "Client\Binaries\Win64"
-    New-Item -ItemType Directory -Force -Path $binaryDirectory | Out-Null
+    $loaderDirectory = Join-Path $binaryDirectory "wuwaIndonesia"
+    New-Item -ItemType Directory -Force -Path $binaryDirectory, $loaderDirectory | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $Root "Client\Content\Paks") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $Root "Client\Saved\Resources\3.0.0") | Out-Null
     Copy-Item -LiteralPath $FixtureBinary -Destination (Join-Path $binaryDirectory "Client-Win64-Shipping.exe") -Force
     Set-Content -LiteralPath (Join-Path $Root "Client\Saved\Resources\3.0.0\ResManifest") -Value "fixture manifest" -NoNewline
     Set-Content -LiteralPath (Join-Path $Root "Client\Content\Paks\unrelated-fixture.pak") -Value "fixture data" -NoNewline
-    return (Join-Path $Root "Client\Binaries\Win64\Client-Win64-Shipping.exe")
+    Write-MinimalValidPak -Path (Join-Path $loaderDirectory "pakchunk0-ID-WindowsNoEditor_1000_P.pak")
+    [IO.File]::WriteAllBytes(
+        (Join-Path $binaryDirectory "winhttp.dll"),
+        [Text.Encoding]::ASCII.GetBytes("fixture loader")
+    )
+    return (Join-Path $binaryDirectory "Client-Win64-Shipping.exe")
 }
 
 function Write-JsonFile {
@@ -461,13 +499,26 @@ try {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $settingsPath) | Out-Null
     Write-JsonFile -Path $settingsPath -Value ([ordered]@{
         gamePath = $fixtureRoot
-        installMethod = "resource_mount"
+        installMethod = "loader"
         dx11 = $false
         csharpEnvironment = $false
         uidMode = "default"
         uidText = ""
         bgmVolume = 0
         bgmEnabled = $false
+    })
+    $loaderPath = Join-Path $fixtureRoot "Client\Binaries\Win64\winhttp.dll"
+    $gameKey = ([IO.Path]::GetFullPath($fixtureRoot)).Replace('\', '/').ToLowerInvariant()
+    $games = [ordered]@{}
+    $games[$gameKey] = [ordered]@{
+        _vhVersion = "999.999.999"
+        _installMethod = "loader"
+        _loaderSha256 = (Get-FileHash -LiteralPath $loaderPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        _patchVariant = "normal"
+    }
+    Write-JsonFile -Path (Join-Path $isolatedLocalAppData "WuwaIDLauncher\versions.json") -Value ([ordered]@{
+        _schemaVersion = 3
+        games = $games
     })
 
     $env:WUWAID_LAUNCHER_FIXTURE_CHILD_LIFETIME_SECONDS = ([Math]::Max(120, $TrayDurationSeconds + 60)).ToString()
