@@ -202,6 +202,10 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      - name: Check Windows Rust formatting
+        shell: pwsh
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
       - name: Test Windows backend
         shell: pwsh
         run: |
@@ -279,6 +283,12 @@ jobs:
               exit 1
             }
           }
+
+      - name: Run required Windows all-targets contract
+        shell: pwsh
+        run: |
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify Windows workspace after backend tests
         shell: pwsh
