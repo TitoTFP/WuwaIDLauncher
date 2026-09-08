@@ -2,356 +2,124 @@
 
 # 🌊 WuwaID Launcher
 
-**Launcher Resmi & Patch Installer Bahasa Indonesia untuk Wuthering Waves**
+### Wuthering Waves, sekarang dalam Bahasa Indonesia.
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPL_v3-blue.svg)](LICENSE)
-[![Tauri Version](https://img.shields.io/badge/Tauri-v2-24C8D8?logo=tauri)](https://v2.tauri.app/)
-[![Rust](https://img.shields.io/badge/Backend-Rust_1.97%2B-DEA584?logo=rust)](https://www.rust-lang.org/)
-[![Frontend](https://img.shields.io/badge/Frontend-Svelte_5_%2B_TS-FF3E00?logo=svelte)](https://svelte.dev/)
-[![Platform](https://img.shields.io/badge/Platform-Windows_x64-0078D6?logo=windows)](https://microsoft.com)
-[![Launcher Version](https://img.shields.io/badge/Version-2.10.0-brightgreen)](#)
+Launcher resmi **WuwaID** untuk memasang, memperbarui, dan memainkan **Wuthering Waves dengan patch Bahasa Indonesia** secara mudah.
 
-_Nikmati petualangan di Sol3 dengan teks Bahasa Indonesia yang presisi, launcher ultra-ringan berbasis Tauri v2 & Rust, serta konsumsi resource minimal tanpa mengganggu performa bermain game._
+[![Latest Release](https://img.shields.io/github/v/release/TitoTFP/WuwaIDLauncher?style=flat-square&label=Release)](https://github.com/TitoTFP/WuwaIDLauncher/releases/latest)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20x64-0078D6?style=flat-square&logo=windows)](https://github.com/TitoTFP/WuwaIDLauncher/releases/latest)
+[![Tauri](https://img.shields.io/badge/Tauri-v2-24C8D8?style=flat-square&logo=tauri)](https://tauri.app/)
+[![License](https://img.shields.io/github/license/TitoTFP/WuwaIDLauncher?style=flat-square)](LICENSE)
 
----
-
-[Fitur Utama](#-fitur-utama) • [Cara Penggunaan](#-cara-penggunaan) • [Persyaratan Sistem](#-persyaratan-sistem) • [Pengembangan & Build](#-pengembangan--build) • [CI/CD](#cicd) • [Performa](#-performa) • [Struktur Proyek](#-struktur-direktori-proyek) • [Kredit](#-kredit--apresiasi) • [Lisensi](#-lisensi)
+**[⬇️ Download Latest Release](https://github.com/TitoTFP/WuwaIDLauncher/releases/latest)**
 
 </div>
 
 ---
 
-## 📌 Tentang Proyek
+## ✨ Apa itu WuwaID Launcher?
 
-**WuwaID Launcher** adalah aplikasi launcher generasi baru yang dibangun menggunakan **Tauri v2**, **Rust backend**, dan **Svelte 5 frontend**. Dirancang khusus untuk mempermudah komunitas Indonesia dalam menginstal, memperbarui, dan mengelola patch lokalisasi Bahasa Indonesia untuk game **Wuthering Waves**.
+**WuwaID Launcher** adalah companion launcher untuk proyek lokalisasi [WuwaID](https://github.com/TitoTFP/WuwaID).
 
-Rebuild dari arsitektur terdahulu (.NET 8 WPF) ke Tauri v2 memberikan fondasi untuk **startup cepat, konsumsi resource rendah saat game berjalan, verifikasi integritas data yang ketat (SHA-256), serta antarmuka modern yang responsif**. Angka resource final tetap perlu diukur pada mesin Windows release.
+Alih-alih memasang patch secara manual, launcher menangani proses instalasi, update, verifikasi, dan peluncuran game dari satu tempat.
 
----
+Dibangun ulang menggunakan **Tauri v2**, **Rust**, dan **Svelte 5** agar tetap cepat, ringan, dan modern.
 
-## ✅ Status Implementasi & Release Gate
+## 🚀 Fitur
 
-Kontrak utama launcher sudah diimplementasikan dan diverifikasi melalui test suite Rust, Svelte check, frontend production build, serta cross-target check Windows. Status yang masih membutuhkan mesin game Windows release ditandai sebagai **partial/manual**; ini bukan asumsi bahwa smoke test game nyata sudah lulus.
+- 🇮🇩 **Install & update patch sekali klik**
+- 🔄 **Update otomatis** untuk patch dan launcher
+- 🧩 **Dua metode instalasi** — Resource Mount dan Loader
+- 🛡️ **Verifikasi SHA-256** dan rollback saat instalasi gagal
+- 🎮 **Launch game langsung** dari launcher
+- ⚙️ Pengaturan **Custom UID, DirectX 11, dan C# Environment**
+- 🎬 Background, BGM, dan release notes dinamis
+- 💤 Otomatis masuk **system tray** saat game berjalan
+- 🩺 Diagnostics lokal untuk membantu troubleshooting
 
-| Area | Status | Bukti / batasan |
-| :--- | :--- | :--- |
-| Path game, dua metode, artefak kanonis, transaksi, rollback, switch, uninstall | **Implemented** | src-tauri/tests/milestone1_contract_tests.rs, milestone2_contract_tests.rs, installer safety |
-| Launch, external process, force quit, error event | **Implemented + manual game smoke** | Contract tests lulus; perlu executable game nyata untuk taskkill dan lifecycle Windows |
-| Launcher Workspace, konfigurasi, navigation lock, progress/error/reset state | **Implemented** | Svelte check 0 error/0 warning |
-| Media cache hash, offline fallback, staged replacement, release-note sanitization | **Implemented** | milestone5_contract_tests.rs, media event tests |
-| Self-update checksum, ZIP validation, staging, rollback handoff, cleanup | **Implemented + manual restart smoke** | Checksum/ZIP/handoff tests; valid release asset diperlukan untuk restart end-to-end |
-| Local runtime diagnostics tanpa upload log | **Implemented** | Isi diagnostics tetap lokal; heartbeat active-player hanya mengirim payload minimal |
-| Distribusi ZIP updater dan SHA256 manifest | **Implemented** | Artifact gate dan workflow release; executable tersedia di dalam ZIP; MSI/NSIS sengaja tidak dibuat |
-| Real game/tray/WebView2/resource acceptance | **Manual / partial** | `scripts/acceptance/run-windows-real-acceptance.ps1` dijalankan manual pada Windows kompatibel dengan game asli yang sudah ter-patch; tidak dijalankan oleh GitHub Actions |
-| Admin/read-only/offline/restart self-update acceptance | **Partial / manual** | Jalankan pada mesin release; kontrak ACL/lifecycle tetap diuji di CI |
-| Future features di luar WUT-5 sampai WUT-29 | **Planned** | Tidak menjadi bagian release gate ini |
+## 🎮 Mulai
 
-Test deterministik Rust dan `wut-game-lifecycle.tests.ps1` memakai fixture game disposable, bukan instalasi Wuthering Waves nyata. Acceptance yang benar-benar menjalankan game adalah `scripts/acceptance/run-windows-real-acceptance.ps1`; prosedur ini dijalankan manual oleh operator pada sistem Windows kompatibel yang interaktif dan memiliki game yang sudah ter-patch, bukan oleh GitHub Actions. `windows-release-gate.ps1 -GamePath` sendiri hanya memvalidasi prerequisite. Read-only, offline, dan restart self-update tetap memerlukan operator karena tidak aman untuk dipaksa pada runner CI.
+1. Download **WuwaIDLauncher** dari [GitHub Releases](https://github.com/TitoTFP/WuwaIDLauncher/releases/latest).
+2. Ekstrak `WuwaIDLauncher-vX.Y.Z.zip`.
+3. Jalankan `WuwaIDLauncher.exe`.
+4. Pilih folder instalasi **Wuthering Waves**.
+5. Klik **Instal Patch ID**.
+6. Selesai — klik **Mainkan** dan jelajahi Solaris-3 dalam Bahasa Indonesia.
 
----
+> Distribusi resmi menyediakan `WuwaIDLauncher-vX.Y.Z.zip` beserta `SHA256sums.txt` untuk verifikasi integritas file.
 
-## ✨ Fitur Utama
+## 🧩 Metode Instalasi
 
-### 🛠️ Manajemen Patch & Engine Mod Terpadu
+| Metode | Cara Kerja |
+| --- | --- |
+| **Resource Mount** | Memasang patch melalui resource mount game tanpa mengganti signature utama game. |
+| **Loader** | Memuat patch menggunakan `winhttp.dll` pada direktori binary game. |
 
-- **Instalasi & Perbaruan Sekali Klik:** Mengunduh, memverifikasi integritas hash SHA-256, dan menerapkan patch Bahasa Indonesia secara otomatis.
-- **Dua Metode Instalasi:** mapping internal memakai identifier semantik berikut; `method2/3` hanya alias legacy yang dimigrasikan saat membaca konfigurasi lama.
-  - **Metode 1 — `resource_mount` (Resource Mount):** Deploy file PAK + signature + berkas mount ke folder resource game aktif (`Client/Saved/Resources/<ver>/Mount/`) tanpa menyentuh signature utama game. Dilengkapi proteksi rollback transaksional dan verifikasi integritas struktur Unreal PAK.
-  - **Metode 2 — `loader` (Loader):** Menempatkan loader `winhttp.dll` dan folder `wuwaIndonesia/` pada direktori binaries game (`Client/Binaries/Win64/`).
-- **Dynamic Method Switcher:** Berpindah metode instalasi secara instan dengan pembersihan artefak pada path kanonis metode sebelumnya. Path kanonis diperlakukan sebagai target launcher, termasuk saat artefak berasal dari launcher lama.
-- **Settings Overlay:** Ikon gear accessible membuka pengaturan ringkas untuk metode instalasi, identitas UID (`DEFAULT`/`CUSTOM`), Optimasi C#, dan DirectX 11. Overlay dapat ditutup melalui tombol tutup, **SELESAI**, klik luar, atau `Esc`.
-- **Pemilihan Folder Game:** Membuka dialog folder interaktif untuk memilih lokasi instalasi Wuthering Waves dan memvalidasi folder yang dipilih.
-- **Engine PAK Packer & FNV64:** Modul Rust murni untuk pembuatan paket PAK Unreal Engine kompatibel dengan hashing FNV64 & index SHA-1.
-- **Opsi Peluncuran:** Toggle opt-in DirectX 11 dan optimisasi environment C# (`-ForceEnableCSharpEnvironment`); keduanya diteruskan sebagai argumen proses tanpa memodifikasi shortcut Steam maupun executable game.
-- **Identitas UID:** Mode `DEFAULT` mempertahankan teks UID bawaan game. Mode `CUSTOM` mengganti tiga entri UID di database terjemahan dengan teks pilihan (maksimal 64 karakter, satu baris); teks custom yang kosong menyembunyikan UID memakai U+3164 Hangul Filler (`ㅤ`). Perubahan varian ditandai sebagai patch yang perlu dipasang ulang, bukan dianggap instalasi siap.
+Keduanya dapat dipilih langsung dari pengaturan launcher.
 
-### 🎬 Live Media Ingestion & Dynamic Release Notes
+## 💻 Persyaratan
 
-- **Streaming Video Background & BGM:** Mengambil manifest live `assets.json`, mengunduh aset video latar dan musik dengan verifikasi SHA-256 ke cache lokal, dan men-stream melalui protokol `media://` dengan dukungan HTTP Range/206.
-- **Dynamic Release Notes (Atom Feed):** Mengambil catatan rilis terbaru langsung dari `releases.atom` GitHub repo WuwaID dan merendernya sebagai Markdown di drawer pengumuman `SidePanel`.
-- **Launcher Release Notes:** Catatan release resmi ditampilkan di dialog sebelum update; setelah self-update sukses, payload yang sama disimpan atomik dan ditampilkan sebagai **What's New** sekali per tag, termasuk saat startup offline.
-- **Countdown Tanggal Update:** Mem-parsing jadwal pembaruan game dari manifest untuk menampilkan hitung mundur waktu rilis patch berikutnya.
+- **Windows 10/11 64-bit**
+- **Microsoft Edge WebView2**
+- Wuthering Waves versi PC
 
-### ⚡ Mode Tray & Penghematan Resource Ekstrem
+## 🛠️ Development
 
-- **Window Minimization ke System Tray:** Launcher otomatis menyembunyikan jendela ke system tray saat game berjalan dan menangguhkan WebView2 untuk menekan penggunaan resource.
-- **Operasi Lokal & Active Player:** Launcher menyimpan diagnostics lokal dan tidak mengunggah log. Statistik active player memakai heartbeat minimal tanpa path game, username Windows, akun, atau isi log.
-
-### 🛡️ Keamanan, Diagnostik & Menu Cepat (7 Hamburger Actions)
-
-- **Folder Game:** Dialog pemilih direktori instalasi game interaktif (`rfd`).
-- **Perbarui Patch ID & Perbarui Launcher:** Validasi ulang integritas file mod lokal dan pengecekan rilis versi terbaru launcher.
-- **Paksa Tutup Game:** Terminasi proses `Client-Win64-Shipping.exe` secara aman jika terjadi crash/hang.
-- **Jalankan sebagai Admin:** Alur restart aplikasi dengan elevasi hak akses Administrator Windows (`runas`).
-- **Reset Cache Tampilan:** Pembersihan data cache webview dan media cache lokal.
-- **Hapus Patch ID:** Penghapusan bersih seluruh artefak mod yang dikelola launcher.
-
----
-
-## 🚀 Cara Penggunaan
-
-### 1️⃣ Jalankan Launcher
-
-1. Unduh `WuwaIDLauncher-vX.Y.Z.zip` dari halaman GitHub Releases dan verifikasi dengan `SHA256sums.txt`.
-2. Ekstrak ZIP, lalu jalankan `WuwaIDLauncher.exe` dari folder hasil ekstraksi.
-
-### 2️⃣ Tentukan Folder Game
-
-1. Klik ikon hamburger di kanan bawah ➔ **Folder Game**.
-2. Pilih folder utama tempat `Client-Win64-Shipping.exe` berada; launcher akan memvalidasi folder tersebut.
-
-### 3️⃣ Pilih Metode & Instal Patch
-
-1. Klik ikon gear **Pengaturan**, lalu pilih kartu metode instalasi yang diinginkan.
-2. Pada bagian **Identitas UID**, pilih `DEFAULT` atau `CUSTOM`. Jika memilih `CUSTOM`, masukkan teks satu baris maksimal 64 karakter; kosongkan teks untuk menyembunyikan UID. Aktifkan **Optimisasi C#** atau **DirectX 11** sesuai kebutuhan. Perubahan pengaturan tersimpan otomatis.
-3. Klik tombol **Instal Patch ID** (atau **Perbarui Patch**).
-4. Setelah selesai, klik **Mainkan** untuk langsung masuk ke Sol3 dalam Bahasa Indonesia!
-
-### Kontrak Asset Patch
-
-Rilis WuwaID menyediakan PAK normal mentah, `winhttp.dll`, dan `SHA256sums.txt`.
-Launcher memverifikasi SHA-256 serta struktur PAK normal sebelum menggunakannya.
-
-Jika mode **CUSTOM** dipilih, launcher membuat salinan lokal melalui crate repak V12,
-mengganti tepat tiga ID berikut di database terjemahan dengan teks custom, lalu mengemasnya kembali:
-
-- `Text_FriendMyUid_Text`
-- `Text_UserId_Text`
-- `PrefabTextItem_1341587207_Text`
-
-Jika teks custom kosong atau hanya berisi spasi, launcher menggunakan U+3164 Hangul Filler
-(`ㅤ`) sehingga UID tidak terlihat. PAK hasil kustomisasi hanya disimpan di cache launcher
-dan dipasang dengan nama PAK normal. Launcher gagal dengan pesan jelas bila database atau
-salah satu ID target tidak ada/ambigu; launcher tidak pernah diam-diam mengganti permintaan
-kustomisasi UID dengan PAK normal. Release WuwaID cukup menyediakan PAK normal,
-`winhttp.dll`, dan `SHA256sums.txt`; tidak perlu menyediakan PAK custom atau PAK Hide UID kedua.
-
-### Mapping Metode dan Recovery
-
-Gunakan identifier canonical berikut pada konfigurasi atau command bridge:
-
-- resource_mount — resource mount terisolasi.
-- loader — winhttp.dll loader.
-
-method2 dan method3 hanya alias legacy saat migrasi konfigurasi lama. Pemeriksaan update launcher otomatis selalu aktif. Nilai metode yang sudah dihapus dari versi lama dipulihkan ke `resource_mount`. Launcher menolak path yang tidak mengandung executable game, mengelola artefak pada path kanonis metode yang dipilih, dan menulis metadata hanya setelah cleanup berhasil. File pada path kanonis dianggap milik workflow launcher meskipun dibuat oleh versi launcher lama; file di luar path kanonis tidak disentuh. Jika instalasi atau update gagal, jangan hapus file game manual: simpan diagnostics lokal, jalankan pemeriksaan status, dan ulangi setelah penyebab permission/network diperbaiki.
-
-Lokasi artefak runtime:
-
-- Konfigurasi dan versi: %LOCALAPPDATA%/WuwaIDLauncher/.
-- Media cache: %LOCALAPPDATA%/WuwaIDLauncher/Cache/.
-- Diagnostics lokal dan log runtime: %LOCALAPPDATA%/WuwaIDLauncher/.
-- Update staging/handoff sementara: .staging/, update.zip, dan update-handoff.cmd di appdata; artifact gagal dibersihkan otomatis.
-
-### Privacy dan Consent
-
-Launcher tidak mengirim log atau isi diagnostics ke server. Untuk statistik active
-player, launcher hanya mengirim `client_id` acak, versi launcher, metode instalasi,
-dan jenis event. Tidak ada path game, username Windows, akun, atau isi log yang
-dikirim; isi log game tetap lokal dan dapat memuat data yang ditulis oleh game,
-jadi tinjau sebelum membagikannya secara manual.
-
----
-
-## 💻 Persyaratan Sistem
-
-| Komponen           | Persyaratan Minimum                   | Rekomendasi                         |
-| :----------------- | :------------------------------------ | :---------------------------------- |
-| **Sistem Operasi** | Windows 10 (64-bit)                   | Windows 11 (64-bit)                 |
-| **Arsitektur**     | x86_64 / x64                          | x86_64 / x64                        |
-| **Web Runtime**    | Microsoft Edge WebView2 (terbawa OS)  | Microsoft Edge WebView2 versi baru  |
-| **RAM**            | 50 MB kosong                          | 100 MB kosong                       |
-
----
-
-## 🏗️ Pengembangan & Build
-
-### Prasyarat
-
-- **Node.js** v20+ dan **npm** / **pnpm**
-- **Rust** 1.97.1 melalui `rust-toolchain.toml`
-- **Windows SDK** / `x86_64-pc-windows-msvc` target (atau `cargo-xwin` untuk cross-compilation di Linux)
-
-### Langkah Pengembangan Lokal
-
-1. Clone repositori:
-
-   ```bash
-   git clone https://github.com/TitoTFP/WuwaIDLauncher.git
-   cd WuwaIDLauncher
-   ```
-
-2. Instal dependensi frontend:
-
-   ```bash
-   npm install
-   ```
-
-3. Jalankan aplikasi mode pengembangan (Live Reload) di Windows:
-
-   ```bash
-   npm run tauri -- dev
-   ```
-
-Untuk membuka pratinjau frontend langsung di browser tanpa runtime Tauri:
+**Requirements:** Node.js 20+, Rust 1.97.1+, dan Windows toolchain.
 
 ```bash
-npm run dev -- --host 0.0.0.0
+git clone https://github.com/TitoTFP/WuwaIDLauncher.git
+cd WuwaIDLauncher
+
+npm install
+npm run tauri -- dev
 ```
 
-Buka `http://localhost:1420/` untuk memeriksa layout frontend tanpa runtime Tauri.
-
-### Pengujian & Validasi Kualitas
+Validasi frontend:
 
 ```bash
-# Validasi tipe & komponen Svelte
 npm run check
-
-# Build frontend
 npm run build
-
-# Regression tests: lifecycle, resource, and launcher update contracts
-node --test scripts/tests/game-exit-notice.test.mjs scripts/tests/resource-lifecycle.test.mjs scripts/tests/launcher-update-notification.test.mjs
-
-# Test frontend async state contracts
-npm run test:patch-status
-
-# Verifikasi semua metadata rilis dan fallback frontend memakai versi yang sama
-npm run test:version
-
-# Menjalankan seluruh unit test, mock HTTP, command integration, dan installer safety tests
-cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1
-
-# Format dan lint Rust dengan warning diperlakukan sebagai error
-cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
-cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-### Acceptance Game Nyata (Manual Windows Kompatibel)
-
-Acceptance ini benar-benar menjalankan launcher dan `Client-Win64-Shipping.exe`, lalu memeriksa UAC, tray, WebView2, resource, proses game, dan pemulihan lifecycle launcher. Game harus sudah terpasang dan ter-patch. Jalankan secara manual pada sistem Windows kompatibel yang memiliki game asli; prosedur ini tidak dijalankan oleh GitHub Actions dan tidak menggunakan Wine.
-
-```powershell
-pwsh -NoProfile -File scripts/acceptance/run-windows-real-acceptance.ps1 `
-  -LauncherPath .\src-tauri\target\release\WuwaIDLauncher.exe `
-  -GamePath "C:\path\to\Wuthering Waves" `
-  -OutputRoot .\real-acceptance-evidence
-```
-
-Acceptance ini harus dijalankan di Windows; fixture Linux tidak menjadi bukti release Windows.
-
-### Kompilasi Rilis Distribusi (Windows MSVC)
-
-Build native pada Windows:
+Build binary Windows:
 
 ```bash
-# Build binary rilis produksi via Tauri
 npm run tauri -- build --no-bundle
 ```
 
-Cross-build dari Linux menggunakan `cargo-xwin`:
+### Tech Stack
 
-```bash
-npm run build
+`Tauri v2` · `Rust` · `Svelte 5` · `TypeScript` · `Vite`
 
-# Rebuild binary MSVC langsung tanpa membuat bundle installer
-CARGOFLAGS=--locked npm run tauri -- build \
-  --runner cargo-xwin \
-  --target x86_64-pc-windows-msvc \
-  --no-bundle \
-  --ci
-```
+## ✅ Acceptance Game Nyata (Manual Windows Kompatibel)
 
-Output build berada di `src-tauri/target/x86_64-pc-windows-msvc/release/WuwaIDLauncher.exe`.
+Acceptance yang benar-benar menjalankan Wuthering Waves dilakukan secara manual pada mesin Windows kompatibel melalui `scripts/acceptance/run-windows-real-acceptance.ps1` dan **tidak dijalankan oleh GitHub Actions**.
 
-Artifact release yang diharapkan:
+## 🔒 Privasi
 
-- WuwaIDLauncher-vX.Y.Z.zip (berisi WuwaIDLauncher.exe)
-- SHA256sums.txt
+WuwaID Launcher **tidak mengunggah diagnostics atau log lokal**.
 
-Checklist sebelum publish:
+Statistik active player hanya menggunakan heartbeat minimal seperti ID acak launcher, versi launcher, metode instalasi, dan jenis event — tanpa mengirim path game, username Windows, akun game, atau isi log.
 
-- [ ] `npm run check` lulus tanpa error atau warning.
-- [ ] `npm run build` lulus.
-- [ ] `npm run test:patch-status` dan `npm run test:version` lulus.
-- [ ] `cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check` lulus.
-- [ ] `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` lulus.
-- [ ] `cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1` lulus dengan fixture deterministic.
-- [ ] ZIP dan SHA256sums.txt ada serta menggunakan versi yang sama.
-- [ ] Jalankan Windows release gate dengan artifact dan fixture disposable:
+## 🤝 Kontribusi
 
-  ```powershell
-  pwsh -NoProfile -File scripts/acceptance/windows-release-gate.ps1 `
-    -Mode automated `
-    -ArtifactRoot .\release-artifacts `
-    -OutputRoot .\release-gate-evidence `
-    -FixtureRoot .\release-gate-fixture
-  ```
+Bug, ide fitur, maupun kontribusi kode sangat diterima.
 
-- [ ] Jalankan acceptance game nyata secara manual pada sistem Windows kompatibel yang memiliki game asli:
-  `pwsh -NoProfile -File scripts/acceptance/run-windows-real-acceptance.ps1 -LauncherPath .\src-tauri\target\release\WuwaIDLauncher.exe -GamePath <game-path>`.
-- [ ] Uji read-only/admin, offline media, dan self-update restart pada mesin release.
-- [ ] Tinjau diagnostics lokal sebelum membagikannya secara manual.
+- [Open an Issue](https://github.com/TitoTFP/WuwaIDLauncher/issues)
+- [Pull Requests](https://github.com/TitoTFP/WuwaIDLauncher/pulls)
+- [WuwaID Translation Project](https://github.com/TitoTFP/WuwaID)
 
-### CI/CD
+## 📜 License
 
-- Pull request, push `main`, dan push `feat/**` menjalankan job Ubuntu paralel untuk frontend/Rust serta job Windows untuk native regression, deterministic acceptance, dan binary build. Job Windows mempertahankan lifecycle test terisolasi secara serial, lalu menjalankan aggregate `cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1`, `cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check`, Clippy, static acceptance, dan validasi binary.
-- Acceptance game nyata tidak menjadi job CI/CD GitHub Actions. Operator yang memiliki sistem Windows kompatibel dan game asli yang sudah ter-patch dapat menjalankan `scripts/acceptance/run-windows-real-acceptance.ps1` secara manual; hasilnya dapat ditinjau atau dilampirkan sebagai evidence release.
-- Release memvalidasi checkout tepat pada tag `vX.Y.Z`, melakukan satu kompilasi Windows, membuat ZIP portable + `SHA256sums.txt`, lalu membuat provenance attestation. Publish menunggu approval environment `release-production`.
-- Distribusi tetap unsigned karena proyek belum memiliki sertifikat Authenticode. SHA-256 dan attestation menjadi bukti integritas/provenance; signing dapat ditambahkan bila sertifikat atau program OSS yang layak tersedia.
-- Branch protection `main` mewajibkan review pull request, penyelesaian percakapan, dan required checks `Frontend and JavaScript contracts`, `Rust checks`, serta `Windows regression and build`. Dependabot memeriksa npm, Cargo, dan GitHub Actions setiap minggu dengan cooldown tujuh hari.
-
-Workflow release tidak membuat installer MSI/NSIS. UAC interaktif, acceptance game nyata, dan restart self-update tetap menjadi langkah operator pada sistem Windows kompatibel; GitHub Actions tidak menjalankan acceptance game nyata.
-
----
-
-## 📊 Performa
-
-Perilaku runtime yang diterapkan mencakup target memori rendah WebView2, launcher yang disembunyikan ke system tray saat game berjalan tanpa men-suspend WebView agar event lifecycle tetap diterima, pembacaan media berbasis HTTP Range, capture output proses yang dibatasi, dan response metadata HTTP yang dibaca dengan hard limit. Angka benchmark tidak dicantumkan sampai profiling dilakukan pada mesin Windows release.
-
----
-
-## 📁 Struktur Direktori Proyek
-
-```text
-WuwaIDLauncher/
-├── 📁 src/                       # Frontend Svelte 5 + TypeScript
-│   ├── 📁 components/            # Komponen UI (TopBar, SettingsOverlay, SidePanel, RightPanel, AudioPlayer, dll.)
-│   ├── 📁 lib/                   # Bridge RPC Tauri, State Management (Svelte 5 runes), Types
-│   ├── 📁 styles/                # CSS Modular (base, panel, theme, effects)
-│   ├── 📄 App.svelte             # Root UI Layout
-│   └── 📄 main.ts               # Frontend Entrypoint
-├── 📁 src-tauri/                 # Backend Rust & Engine Mod
-│   ├── 📁 capabilities/          # Definisi permission & security capability Tauri v2
-│   ├── 📁 src/
-│   │   ├── 📁 engine/            # Modul inti (downloader, installer, media, pak, path, runtime, updater, dll.)
-│   │   ├── 📄 lib.rs             # Registrasi RPC commands, event listeners, dan media protocol
-│   │   └── 📄 main.rs            # Application Runner
-│   ├── 📁 tests/                 # Integration tests (app command, download, installer safety, media events)
-│   └── 📄 Cargo.toml             # Konfigurasi dependensi Rust
-├── 📄 package.json               # Konfigurasi npm & dependensi frontend
-├── 📄 src-tauri/tauri.conf.json  # Konfigurasi utama Tauri v2 (window size 1280x720, CSP, identifier)
-└── 📄 README.md                  # Dokumentasi Proyek
-```
-
----
-
-## 🤝 Kredit & Apresiasi
-
-Terima kasih kepada proyek-proyek berikut atas inspirasi dan ekosistem open-source:
-
-- **[Tauri Apps](https://tauri.app/)** — Framework desktop multi-platform yang cepat dan aman.
-- **[Svelte Team](https://svelte.dev/)** — Framework reaktif modern Svelte 5.
-- **[CallMeDangDev](https://github.com/CallMeDangDev)** — Referensi arsitektur launcher mod Wuthering Waves.
-- **Komunitas & Penerjemah Wuthering Waves Indonesia** — Dedikasi dalam menghadirkan terjemahan Bahasa Indonesia berkualitas bagi pemain Sol3.
-
----
-
-## 📜 Lisensi
-
-Proyek ini dilisensikan di bawah lisensi terbuka **[GNU General Public License v3.0 (GPL-3.0)](LICENSE)**.
+WuwaID Launcher tersedia di bawah **[GNU General Public License v3.0](LICENSE)**.
 
 ---
 
 <div align="center">
-  Dibuat dengan ❤️ untuk Komunitas Wuthering Waves Indonesia
+
+**Dibuat untuk komunitas Wuthering Waves Indonesia 🇮🇩**
+
+*See you in Solaris-3, Rover.*
+
 </div>
