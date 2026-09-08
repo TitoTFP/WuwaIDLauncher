@@ -4,7 +4,7 @@ use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::engine::downloader::read_response_body_limited;
+use crate::engine::downloader::{official_github_client, read_response_body_limited};
 
 pub const GITHUB_API_LATEST_RELEASE: &str =
     "https://api.github.com/repos/TitoTFP/WuwaIDLauncher/releases/latest";
@@ -357,6 +357,8 @@ fn create_update_handoff_impl(
                  set /p \"release_marker_pid=\"<\"%release_ready_temp%\"\r\n\\
                  if not defined release_marker_pid goto release_health_failure\r\n\\
                  for /f \"delims=0123456789\" %%A in (\"%release_marker_pid%\") do goto release_health_failure\r\n\\
+                 for /f \"delims=0123456789\" %%A in (\"%release_started_pid%\") do goto release_health_failure\r\n\\
+                 if not \"%release_marker_pid%\"==\"%release_started_pid%\" goto release_health_failure\r\n\\
                  set \"release_pid=%release_marker_pid%\"\r\n\\
                  set \"release_pid_valid=1\"\r\n\\
                  cmd /c exit 0\r\n                 %SystemRoot%\\System32\\tasklist.exe /FI \"PID eq %release_pid%\" /FI \"IMAGENAME eq WuwaIDLauncher.exe\" | %SystemRoot%\\System32\\findstr.exe /I /C:\"WuwaIDLauncher.exe\" >nul\r\n\\
@@ -369,8 +371,13 @@ fn create_update_handoff_impl(
             format!(
                 "         set \"WUWAID_UPDATE_EXECUTABLE={}\"\r\n\\
                  set \"WUWAID_UPDATE_DIRECTORY={}\"\r\n\\
-                 set \"release_started_pid=\"\r\n\\
-                 for /f \"usebackq delims=\" %%P in (`%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"$process = Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE -WorkingDirectory $env:WUWAID_UPDATE_DIRECTORY -PassThru; $process.Id\"`) do set \"release_started_pid=%%P\"\r\n\\
+                 set \"release_started_pid_file=%release_ready_temp%.pid\"\r\n\\
+                 set \"WUWAID_LAUNCHER_UPDATE_START_PID=%release_started_pid_file%\"\r\n\\
+                 del /Q \"%release_started_pid_file%\" >nul 2>nul\r\n\\
+                 %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"$i=New-Object System.Diagnostics.ProcessStartInfo; $i.FileName=$env:WUWAID_UPDATE_EXECUTABLE; $i.WorkingDirectory=$env:WUWAID_UPDATE_DIRECTORY; $i.UseShellExecute=$false; $i.CreateNoWindow=$true; foreach($n in @('WUWAID_LAUNCHER_UPDATE_READY','WUWAID_LAUNCHER_UPDATE_PID_FILE')){{$v=[Environment]::GetEnvironmentVariable($n,'Process');if($null -ne $v){{$i.EnvironmentVariables[$n]=$v}}}}; $p=[System.Diagnostics.Process]::Start($i); Set-Content -LiteralPath $env:WUWAID_LAUNCHER_UPDATE_START_PID -Value $p.Id -ErrorAction Stop\" >nul 2>nul\r\n\\
+                 if errorlevel 1 goto fail_6\r\n\\
+                 set /p \"release_started_pid=\"<\"%release_started_pid_file%\"\r\n\\
+                 del /Q \"%release_started_pid_file%\" >nul 2>nul\r\n\\
                  if not defined release_started_pid goto fail_6\r\n\\
                  set \"release_pid=%release_started_pid%\"\r\n\\
                  set \"release_pid_valid=1\"\r\n",
@@ -424,7 +431,7 @@ fn create_update_handoff_impl(
                  for /L %%W in (1,1,10) do (\r\n\\
                      %SystemRoot%\\System32\\tasklist.exe /FI \"PID eq %release_pid%\" /FO CSV /NH | %SystemRoot%\\System32\\findstr.exe /I /C:\"%release_pid%\" >nul\r\n\\
                      if errorlevel 1 exit /b 0\r\n\\
-                     %SystemRoot%\\System32\\timeout.exe /t 1 /nobreak >nul\r\n\\
+                     %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 1\" >nul 2>nul\r\n\\
                  )\r\n\\
                  exit /b 0\r\n"
             .to_string()
@@ -471,12 +478,24 @@ fn create_update_handoff_impl(
             )
         })
         .unwrap_or_default();
+    let handoff_cleanup = [
+        ":schedule_update_handoff_cleanup",
+        &format!(
+            "set \"WUWAID_UPDATE_HANDOFF_PATH={}\"",
+            path_value(handoff_path)
+        ),
+        "start \"\" /B \"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -WindowStyle Hidden -Command \"$path=$env:WUWAID_UPDATE_HANDOFF_PATH; for($attempt=0;$attempt -lt 20;$attempt++){try{Remove-Item -LiteralPath $path -Force -ErrorAction Stop; break}catch{Start-Sleep -Milliseconds 100}}\" >nul 2>nul",
+        "exit /b 0",
+    ]
+    .join("\r\n")
+        + "\r\n";
     let update_cleanup = format!(
         ":cleanup_update_files\r\n\\
          del /Q {replacement} >nul 2>nul\r\n\\
          del /Q {backup} >nul 2>nul\r\n\\
          rmdir /S /Q {staging} >nul 2>nul\r\n\\
-         del \"%~f0\" >nul 2>nul\r\n\\
+         if defined release_started_pid_file del /Q \"%release_started_pid_file%\" >nul 2>nul\r\n\\
+         call :schedule_update_handoff_cleanup\r\n\\
          exit /b 0\r\n",
         replacement = quote(&replacement_executable),
         backup = quote(&backup_executable),
@@ -486,7 +505,7 @@ fn create_update_handoff_impl(
         "@echo off\r\n\
          setlocal\r\n\
          rem WuwaID updater handoff with a verified backup and rollback\r\n\
-         %SystemRoot%\\System32\\timeout.exe /t 1 /nobreak >nul\r\n\
+         %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 1\" >nul 2>nul\r\n\
          if not exist {staged} exit /b 1\r\n\
          if not exist {current} exit /b 1\r\n\
          if exist {replacement} del /Q {replacement} >nul 2>nul\r\n\
@@ -516,7 +535,7 @@ fn create_update_handoff_impl(
              if errorlevel 1 exit /b 8\r\n\
              exit /b 6\r\n\
          )\r\n\
-          %SystemRoot%\\System32\\timeout.exe /t 2 /nobreak >nul\r\n\
+          %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 2\" >nul 2>nul\r\n\
           %SystemRoot%\\System32\\tasklist.exe /FI \"IMAGENAME eq WuwaIDLauncher.exe\" | %SystemRoot%\\System32\\findstr.exe /I /C:\"WuwaIDLauncher.exe\" >nul\r\n\
           if errorlevel 1 (\r\n\
              copy /Y {backup} {current} >nul\r\n\
@@ -525,12 +544,15 @@ fn create_update_handoff_impl(
           )\r\n\
           del /Q {backup} >nul 2>nul\r\n\
           rmdir /S /Q {staging} >nul 2>nul\r\n\
-         del \"%~f0\"\r\n",
+         if defined release_started_pid_file del /Q \"%release_started_pid_file%\" >nul 2>nul\r\n\
+         call :schedule_update_handoff_cleanup\r\n\
+         exit /b 0\r\n{handoff_cleanup}",
         current = quote(current_executable),
         staged = quote(&staged_executable),
         backup = quote(&backup_executable),
         replacement = quote(&replacement_executable),
         staging = quote(staging_dir),
+        handoff_cleanup = handoff_cleanup,
     );
     let script = if release_state.is_some() {
         let release_setup = normalize_batch_fragment(&release_setup);
@@ -556,7 +578,16 @@ fn create_update_handoff_impl(
             &replacement_anchor,
             &format!("{release_precondition}{replacement_anchor}"),
         );
-        let start_anchor = format!("start \"\" {}\r\n", quote(current_executable));
+        let start_anchor = format!(
+            "start \"\" {current}\r\n\
+             if errorlevel 1 (\r\n\
+             copy /Y {backup} {current} >nul\r\n\
+             if errorlevel 1 goto fail_8\r\n\
+             goto fail_6\r\n\
+             )\r\n",
+            current = quote(current_executable),
+            backup = quote(&backup_executable),
+        );
         if !script.contains(&start_anchor) {
             return Err(
                 "Template handoff update tidak memiliki awal proses yang diharapkan.".to_string(),
@@ -564,18 +595,26 @@ fn create_update_handoff_impl(
         }
         script = script.replace(&start_anchor, &release_start);
         let backup = quote(&backup_executable);
-        let health_anchor =
-            "%SystemRoot%\\System32\\tasklist.exe /FI \"IMAGENAME eq WuwaIDLauncher.exe\" | %SystemRoot%\\System32\\findstr.exe /I /C:\"WuwaIDLauncher.exe\" >nul\r\n";
-        if !script.contains(health_anchor) {
+        let health_anchor = format!(
+            "%SystemRoot%\\System32\\tasklist.exe /FI \"IMAGENAME eq WuwaIDLauncher.exe\" | %SystemRoot%\\System32\\findstr.exe /I /C:\"WuwaIDLauncher.exe\" >nul\r\n\
+             if errorlevel 1 (\r\n\
+             copy /Y {backup} {current} >nul\r\n\
+             if errorlevel 1 goto fail_8\r\n\
+             goto fail_7\r\n\
+             )\r\n",
+            current = quote(current_executable),
+            backup = backup,
+        );
+        if !script.contains(&health_anchor) {
             return Err(
                 "Template handoff update tidak memiliki pemeriksaan kesehatan yang diharapkan."
                     .to_string(),
             );
         }
-        script = script.replace(health_anchor, &release_health_check);
+        script = script.replace(&health_anchor, &release_health_check);
         let staging = quote(staging_dir);
         let success_anchor = format!(
-            "del /Q {backup} >nul 2>nul\r\nrmdir /S /Q {staging} >nul 2>nul\r\ndel \"%~f0\"\r\n",
+            "del /Q {backup} >nul 2>nul\r\nrmdir /S /Q {staging} >nul 2>nul\r\nif defined release_started_pid_file del /Q \"%release_started_pid_file%\" >nul 2>nul\r\ncall :schedule_update_handoff_cleanup\r\nexit /b 0\r\n",
             backup = backup,
             staging = staging,
         );
@@ -585,7 +624,7 @@ fn create_update_handoff_impl(
             );
         }
         let success = format!(
-            "{release_commit}del /Q {backup} >nul 2>nul\r\nrmdir /S /Q {staging} >nul 2>nul\r\ndel \"%~f0\" >nul 2>nul\r\nexit /b 0\r\n{failure_labels}{release_cleanup}{update_cleanup}",
+            "{release_commit}del /Q {backup} >nul 2>nul\r\nrmdir /S /Q {staging} >nul 2>nul\r\nif defined release_started_pid_file del /Q \"%release_started_pid_file%\" >nul 2>nul\r\ncall :schedule_update_handoff_cleanup\r\nexit /b 0\r\n{failure_labels}{release_cleanup}{update_cleanup}",
             release_commit = release_commit,
             backup = backup,
             staging = staging,
@@ -782,11 +821,7 @@ pub fn parse_latest_release_json(json: &serde_json::Value) -> Result<ReleaseInfo
 }
 
 pub async fn fetch_latest_release() -> Result<ReleaseInfo, String> {
-    let client = reqwest::Client::builder()
-        .user_agent("WuwaIDLauncher-Tauri")
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+    let client = official_github_client(std::time::Duration::from_secs(10))?;
 
     let response = client
         .get(GITHUB_API_LATEST_RELEASE)
@@ -992,6 +1027,46 @@ mod tests {
     }
 
     #[test]
+    fn latest_release_json_rejects_unofficial_asset_urls() {
+        let json = serde_json::json!({
+            "tag_name": "v2.10.0",
+            "assets": [{
+                "name": "WuwaIDLauncher-v2.10.0.zip",
+                "browser_download_url": "https://example.com/WuwaIDLauncher-v2.10.0.zip"
+            }]
+        });
+
+        assert!(parse_latest_release_json(&json).is_err());
+    }
+
+    #[test]
+    fn update_request_rejects_mismatched_version_or_unofficial_assets() -> Result<(), String> {
+        let tag = "v2.10.0";
+        let zip_name = expected_zip_asset_name(tag)?;
+        let zip_url = expected_official_asset_url(tag, &zip_name)?;
+        let checksums_url = expected_official_asset_url(tag, "SHA256sums.txt")?;
+
+        assert!(validate_update_request("2.10.0", tag, &zip_url, Some(&checksums_url)).is_ok());
+        assert!(validate_update_request("2.10.1", tag, &zip_url, Some(&checksums_url)).is_err());
+        assert!(validate_update_request(
+            "2.10.0",
+            tag,
+            "https://example.com/WuwaIDLauncher-v2.10.0.zip",
+            Some(&checksums_url),
+        )
+        .is_err());
+        assert!(validate_update_request("2.10.0", tag, &zip_url, None).is_err());
+        assert!(validate_update_request(
+            "2.10.0",
+            tag,
+            &zip_url,
+            Some("https://example.com/SHA256sums.txt"),
+        )
+        .is_err());
+        Ok(())
+    }
+
+    #[test]
     fn test_extract_zip() {
         let tmp = tempfile::tempdir().unwrap();
         let target = tmp.path().join("extracted");
@@ -1046,14 +1121,25 @@ mod tests {
             "v2.10.0",
         )
         .unwrap();
-        let script = std::fs::read_to_string(handoff).unwrap();
+        let script = std::fs::read_to_string(&handoff).unwrap();
 
         assert!(script.contains("if not exist \"%release_transaction%\" goto fail_11"));
         assert!(script.contains("move /Y \"%release_transaction%\" \"%release_pending%\""));
         assert!(script.contains("set \"release_tag=v2.10.0\""));
         assert!(script.contains("set \"WUWAID_LAUNCHER_UPDATE_READY=%release_ready_temp%\""));
-        assert!(script.contains("Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE"));
-        assert!(script.contains("set \"release_started_pid=%%P\""));
+        assert!(script.contains("System.Diagnostics.ProcessStartInfo"));
+        assert!(script.contains("EnvironmentVariables[$n]"));
+        assert!(script.contains("Set-Content -LiteralPath $env:WUWAID_LAUNCHER_UPDATE_START_PID"));
+        assert!(script.contains("release_started_pid_file=%release_ready_temp%.pid"));
+        assert!(script.contains("set /p \"release_started_pid=\""));
+        assert!(script
+            .contains("if defined release_started_pid_file del /Q \"%release_started_pid_file%\""));
+        assert!(script.contains("if not \"%release_marker_pid%\"==\"%release_started_pid%\""));
+        assert!(!script.contains("Start-Process -FilePath $env:WUWAID_UPDATE_EXECUTABLE"));
+        assert!(!script.contains("for /f \"usebackq delims=\" %%P"));
+        assert!(!script.contains("timeout.exe"));
+        assert!(script.contains("Start-Sleep -Seconds 1"));
+        assert!(script.contains("Start-Sleep -Seconds 2"));
         assert!(script.contains("if exist \"%release_ready_temp%\" goto fail_12"));
         assert!(script.contains("PID eq %release_pid%"));
         assert!(script.contains(":stop_released_launcher"));
@@ -1066,7 +1152,13 @@ mod tests {
         assert!(!script.contains("tasklist.exe /FI \"IMAGENAME eq WuwaIDLauncher.exe\" |"));
         assert!(script.contains("goto fail_7"));
         assert!(script.contains("if not exist \"%release_ready_temp%\""));
+        assert!(!script.contains("if errorlevel 1 goto release_health_failure\r\nif errorlevel 1"));
         assert!(script.contains(":cleanup_release_state"));
+        assert!(script.contains(&format!(
+            "set \"WUWAID_UPDATE_HANDOFF_PATH={}\"",
+            handoff.to_string_lossy()
+        )));
+        assert!(!script.contains("%~f0"));
         assert!(!script.lines().any(|line| line.trim_end().ends_with('\\')));
         assert!(script.contains(&format!("del /Q \"{}\"", pending.to_string_lossy())));
     }

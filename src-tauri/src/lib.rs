@@ -1294,10 +1294,7 @@ fn acknowledge_launcher_release_notes(tag: String) -> Result<(), String> {
 }
 
 async fn get_latest_patch_version() -> Option<String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .ok()?;
+    let client = engine::downloader::official_github_client(Duration::from_secs(10)).ok()?;
     engine::atom_feed::fetch_latest_release_notes(&client, engine::atom_feed::ATOM_FEED_URL)
         .await
         .ok()
@@ -1438,10 +1435,20 @@ fn check_and_sync_media<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
             );
         }
 
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(20))
-            .build()
-            .unwrap_or_default();
+        let client = match engine::downloader::official_github_client(Duration::from_secs(20)) {
+            Ok(client) => client,
+            Err(error) => {
+                log::warn!("HTTP client media tidak dapat dibuat: {error}");
+                let _ = app_handle.emit(
+                    "onMediaStatus",
+                    serde_json::json!({
+                        "status": "error",
+                        "message": "Sinkronisasi media tidak tersedia."
+                    }),
+                );
+                return;
+            }
+        };
 
         match engine::media::fetch_manifest(&client, &media_manifest_url()).await {
             Ok(manifest) => {
@@ -1549,10 +1556,25 @@ fn get_vh_release_notes<R: Runtime>(app: AppHandle<R>) {
             }
         }
 
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(15))
-            .build()
-            .unwrap_or_default();
+        let emit_fallback = || {
+            if !had_cached {
+                let _ = app_handle.emit("onVHReleaseNotes", serde_json::json!({
+                    "tag": format!("v{}", env!("CARGO_PKG_VERSION")),
+                    "date": "",
+                    "body": "<p>Selamat datang di WuwaID Launcher. Catatan rilis daring tidak dapat dijangkau saat ini (offline).</p>",
+                    "title": "WuwaID Launcher",
+                    "author": "WuwaID Team"
+                }));
+            }
+        };
+        let client = match engine::downloader::official_github_client(Duration::from_secs(15)) {
+            Ok(client) => client,
+            Err(error) => {
+                log::warn!("HTTP client release notes tidak dapat dibuat: {error}");
+                emit_fallback();
+                return;
+            }
+        };
 
         match engine::atom_feed::fetch_latest_release_notes(
             &client,
@@ -1586,16 +1608,7 @@ fn get_vh_release_notes<R: Runtime>(app: AppHandle<R>) {
             }
             Err(e) => {
                 log::warn!("Failed to fetch release notes: {}", e);
-                if !had_cached {
-                    // Fallback to ensure UI loading resolves
-                    let _ = app_handle.emit("onVHReleaseNotes", serde_json::json!({
-                        "tag": format!("v{}", env!("CARGO_PKG_VERSION")),
-                        "date": "",
-                        "body": "<p>Selamat datang di WuwaID Launcher. Catatan rilis daring tidak dapat dijangkau saat ini (offline).</p>",
-                        "title": "WuwaID Launcher",
-                        "author": "WuwaID Team"
-                    }));
-                }
+                emit_fallback();
             }
         }
     });
@@ -2163,12 +2176,23 @@ fn start_installation<R: Runtime>(
             }),
         );
 
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .unwrap_or_default();
+        let client = match engine::downloader::official_github_client(Duration::from_secs(30)) {
+            Ok(client) => client,
+            Err(error) => {
+                let _ = app_handle.emit(
+                    "onInstallError",
+                    format!("Client jaringan tidak dapat dibuat: {error}"),
+                );
+                return;
+            }
+        };
 
-        let checksums = match client.get(WUWAID_LATEST_CHECKSUMS_URL).send().await {
+        let checksums = match client
+            .get(WUWAID_LATEST_CHECKSUMS_URL)
+            .header("User-Agent", "WuwaIDLauncher-Tauri")
+            .send()
+            .await
+        {
             Ok(resp) if resp.status().is_success() => {
                 match engine::downloader::read_response_body_limited(
                     resp,
@@ -3028,6 +3052,29 @@ pub mod frontend_fixture {
         .map_err(|error| error.to_string())
     }
 
+    #[tauri::command(rename = "fixture_emit_game_exit")]
+    fn fixture_emit_game_exit<R: Runtime>(
+        app: AppHandle<R>,
+        id: String,
+        status: String,
+        reason: String,
+    ) -> Result<(), String> {
+        app.emit(
+            "onGameExit",
+            json!({"id": id, "status": status, "reason": reason}),
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    #[tauri::command(rename = "fixture_emit_launch_error")]
+    fn fixture_emit_launch_error<R: Runtime>(
+        app: AppHandle<R>,
+        error: String,
+    ) -> Result<(), String> {
+        app.emit("onLaunchError", error)
+            .map_err(|error| error.to_string())
+    }
+
     #[tauri::command(rename = "acknowledge_launcher_release_notes")]
     fn fixture_acknowledge_launcher_release_notes(_tag: String) {}
 
@@ -3073,6 +3120,8 @@ pub mod frontend_fixture {
                 fixture_get_launcher_release_notes,
                 fixture_emit_launcher_release_notes,
                 fixture_emit_patch_status,
+                fixture_emit_game_exit,
+                fixture_emit_launch_error,
                 fixture_acknowledge_launcher_release_notes,
                 fixture_check_launcher_update,
             ])
@@ -3083,7 +3132,13 @@ pub mod frontend_fixture {
             .unwrap();
 
         let mut listeners = Vec::new();
-        for event_name in ["onPatchStatus", "onMediaStatus", "onLauncherReleaseNotes"] {
+        for event_name in [
+            "onPatchStatus",
+            "onMediaStatus",
+            "onLauncherReleaseNotes",
+            "onGameExit",
+            "onLaunchError",
+        ] {
             let event_name = event_name.to_string();
             let listener_event_name = event_name.clone();
             let event_output = Arc::clone(&output);

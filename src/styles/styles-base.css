@@ -209,7 +209,8 @@ body.game-runtime-readonly a {
         rgba(5, 5, 5, 0.2) 80%,
         transparent 100%
     );
-    -webkit-app-region: drag;
+    cursor: var(--cursor-custom);
+    -webkit-app-region: no-drag;
 }
 
 .top-bar::after {
@@ -217,7 +218,6 @@ body.game-runtime-readonly a {
 }
 
 .top-bar__left {
-    -webkit-app-region: no-drag;
     padding-left: 6px;
 }
 .top-bar__logo {
@@ -232,7 +232,6 @@ body.game-runtime-readonly a {
     align-items: center;
     gap: 4px;
     height: 100%;
-    -webkit-app-region: no-drag;
 }
 
 .top-bar__btn {

@@ -42,11 +42,11 @@ Kontrak utama launcher sudah diimplementasikan dan diverifikasi melalui test sui
 | Self-update checksum, ZIP validation, staging, rollback handoff, cleanup | **Implemented + manual restart smoke** | Checksum/ZIP/handoff tests; valid release asset diperlukan untuk restart end-to-end |
 | Local runtime diagnostics tanpa upload log | **Implemented** | Isi diagnostics tetap lokal; heartbeat active-player hanya mengirim payload minimal |
 | Distribusi ZIP updater dan SHA256 manifest | **Implemented** | Artifact gate dan workflow release; executable tersedia di dalam ZIP; MSI/NSIS sengaja tidak dibuat |
-| Real game/tray/WebView2/resource acceptance | **Automated on trusted Windows** | Workflow manual/nightly memerlukan runner self-hosted dan game yang sudah ter-patch |
+| Real game/tray/WebView2/resource acceptance | **Manual / partial** | `scripts/acceptance/run-windows-real-acceptance.ps1` dijalankan manual pada Windows kompatibel dengan game asli yang sudah ter-patch; tidak dijalankan oleh GitHub Actions |
 | Admin/read-only/offline/restart self-update acceptance | **Partial / manual** | Jalankan pada mesin release; kontrak ACL/lifecycle tetap diuji di CI |
 | Future features di luar WUT-5 sampai WUT-29 | **Planned** | Tidak menjadi bagian release gate ini |
 
-Acceptance game nyata, tray, WebView2, resource, lifecycle, dan probe elevasi UAC dijalankan pada runner Windows tepercaya yang interaktif. Read-only, offline, dan restart self-update tetap memerlukan operator karena tidak aman untuk dipaksa pada runner CI.
+Test deterministik Rust dan `wut-game-lifecycle.tests.ps1` memakai fixture game disposable, bukan instalasi Wuthering Waves nyata. Acceptance yang benar-benar menjalankan game adalah `scripts/acceptance/run-windows-real-acceptance.ps1`; prosedur ini dijalankan manual oleh operator pada sistem Windows kompatibel yang interaktif dan memiliki game yang sudah ter-patch, bukan oleh GitHub Actions. `windows-release-gate.ps1 -GamePath` sendiri hanya memvalidasi prerequisite. Read-only, offline, dan restart self-update tetap memerlukan operator karena tidak aman untuk dipaksa pada runner CI.
 
 ---
 
@@ -226,6 +226,19 @@ cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
+### Acceptance Game Nyata (Manual Windows Kompatibel)
+
+Acceptance ini benar-benar menjalankan launcher dan `Client-Win64-Shipping.exe`, lalu memeriksa UAC, tray, WebView2, resource, proses game, dan pemulihan lifecycle launcher. Game harus sudah terpasang dan ter-patch. Jalankan secara manual pada sistem Windows kompatibel yang memiliki game asli; prosedur ini tidak dijalankan oleh GitHub Actions dan tidak menggunakan Wine.
+
+```powershell
+pwsh -NoProfile -File scripts/acceptance/run-windows-real-acceptance.ps1 `
+  -LauncherPath .\src-tauri\target\release\WuwaIDLauncher.exe `
+  -GamePath "C:\path\to\Wuthering Waves" `
+  -OutputRoot .\real-acceptance-evidence
+```
+
+Acceptance ini harus dijalankan di Windows; fixture Linux tidak menjadi bukti release Windows.
+
 ### Kompilasi Rilis Distribusi (Windows MSVC)
 
 Build native pada Windows:
@@ -262,7 +275,7 @@ Checklist sebelum publish:
 - [ ] `npm run test:patch-status` dan `npm run test:version` lulus.
 - [ ] `cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check` lulus.
 - [ ] `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` lulus.
-- [ ] `cargo test --locked --all-targets` lulus dengan fixture deterministic.
+- [ ] `cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1` lulus dengan fixture deterministic.
 - [ ] ZIP dan SHA256sums.txt ada serta menggunakan versi yang sama.
 - [ ] Jalankan Windows release gate dengan artifact dan fixture disposable:
 
@@ -274,20 +287,20 @@ Checklist sebelum publish:
     -FixtureRoot .\release-gate-fixture
   ```
 
-- [ ] Jalankan acceptance manual/nightly pada Windows tepercaya:
+- [ ] Jalankan acceptance game nyata secara manual pada sistem Windows kompatibel yang memiliki game asli:
   `pwsh -NoProfile -File scripts/acceptance/run-windows-real-acceptance.ps1 -LauncherPath .\src-tauri\target\release\WuwaIDLauncher.exe -GamePath <game-path>`.
 - [ ] Uji read-only/admin, offline media, dan self-update restart pada mesin release.
 - [ ] Tinjau diagnostics lokal sebelum membagikannya secara manual.
 
 ### CI/CD
 
-- Pull request, push `main`, dan push `feat/**` menjalankan job Ubuntu paralel untuk frontend/Rust serta job Windows untuk native regression, deterministic acceptance, dan binary build.
-- `windows-acceptance.yml` hanya berjalan terjadwal atau manual pada runner Windows self-hosted berlabel `wuwaid-trusted-windows`; label ini wajib dipasang hanya pada mesin tepercaya yang interaktif dan tidak pernah dipakai PR. Set repository variable `WUWAID_ACCEPTANCE_GAME_PATH` ke instalasi game yang sudah ter-patch; workflow menyimpan evidence resource/tray/lifecycle/UAC dan memulihkan `settings.json`.
+- Pull request, push `main`, dan push `feat/**` menjalankan job Ubuntu paralel untuk frontend/Rust serta job Windows untuk native regression, deterministic acceptance, dan binary build. Job Windows mempertahankan lifecycle test terisolasi secara serial, lalu menjalankan aggregate `cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1`, `cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check`, Clippy, static acceptance, dan validasi binary.
+- Acceptance game nyata tidak menjadi job CI/CD GitHub Actions. Operator yang memiliki sistem Windows kompatibel dan game asli yang sudah ter-patch dapat menjalankan `scripts/acceptance/run-windows-real-acceptance.ps1` secara manual; hasilnya dapat ditinjau atau dilampirkan sebagai evidence release.
 - Release memvalidasi checkout tepat pada tag `vX.Y.Z`, melakukan satu kompilasi Windows, membuat ZIP portable + `SHA256sums.txt`, lalu membuat provenance attestation. Publish menunggu approval environment `release-production`.
 - Distribusi tetap unsigned karena proyek belum memiliki sertifikat Authenticode. SHA-256 dan attestation menjadi bukti integritas/provenance; signing dapat ditambahkan bila sertifikat atau program OSS yang layak tersedia.
 - Branch protection `main` mewajibkan review pull request, penyelesaian percakapan, dan required checks `Frontend and JavaScript contracts`, `Rust checks`, serta `Windows regression and build`. Dependabot memeriksa npm, Cargo, dan GitHub Actions setiap minggu dengan cooldown tujuh hari.
 
-Workflow release tidak membuat installer MSI/NSIS. UAC interaktif pada runner acceptance dan restart self-update tetap menjadi langkah operator pada mesin release.
+Workflow release tidak membuat installer MSI/NSIS. UAC interaktif, acceptance game nyata, dan restart self-update tetap menjadi langkah operator pada sistem Windows kompatibel; GitHub Actions tidak menjalankan acceptance game nyata.
 
 ---
 

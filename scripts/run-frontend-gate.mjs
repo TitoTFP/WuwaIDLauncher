@@ -16,14 +16,16 @@ if (!gates[gate]) {
   process.exit(2);
 }
 
-const executableName = (binary) =>
-  process.platform === "win32" ? `${binary}.cmd` : binary;
+const scriptPath = {
+  "svelte-check": ["svelte-check", "bin", "svelte-check"],
+  vite: ["vite", "bin", "vite.js"],
+};
 const run = (executable, args, options = {}) =>
   new Promise((done) => {
     const child = spawn(executable, args, {
       cwd: options.cwd ?? root,
       env: options.env ?? process.env,
-      shell: process.platform === "win32",
+      shell: false,
       stdio: "inherit",
     });
     child.once("error", (error) => {
@@ -34,17 +36,14 @@ const run = (executable, args, options = {}) =>
       done(code ?? (signal ? 1 : 0));
     });
   });
+const runNodeScript = (script, args, options = {}) =>
+  run(process.execPath, [script, ...args], options);
 
 const { binary, args } = gates[gate];
-const localExecutable = join(
-  root,
-  "node_modules",
-  ".bin",
-  executableName(binary),
-);
+const localExecutable = join(root, "node_modules", ...scriptPath[binary]);
 
 if (await pathExists(localExecutable)) {
-  process.exitCode = await run(localExecutable, args);
+  process.exitCode = await runNodeScript(localExecutable, args);
 } else {
   const nodeModules = join(root, "node_modules");
   if (await pathExists(nodeModules)) {
@@ -64,17 +63,22 @@ if (await pathExists(localExecutable)) {
         join(root, "package-lock.json"),
         join(temporaryRoot, "package-lock.json"),
       );
-      exitCode = await run(
-        process.platform === "win32" ? "npm.cmd" : "npm",
-        ["ci", "--no-audit", "--no-fund"],
-        {
-          cwd: temporaryRoot,
-          env: {
-            ...process.env,
-            npm_config_cache: join(temporaryRoot, ".npm-cache"),
-          },
+      const npmArgs = ["ci", "--no-audit", "--no-fund"];
+      const npmExecutable =
+        process.platform === "win32"
+          ? (process.env.ComSpec ?? "cmd.exe")
+          : "npm";
+      const installArgs =
+        process.platform === "win32"
+          ? ["/d", "/s", "/c", `npm.cmd ${npmArgs.join(" ")}`]
+          : npmArgs;
+      exitCode = await run(npmExecutable, installArgs, {
+        cwd: temporaryRoot,
+        env: {
+          ...process.env,
+          npm_config_cache: join(temporaryRoot, ".npm-cache"),
         },
-      );
+      });
 
       if (exitCode === 0) {
         await symlink(
@@ -83,8 +87,8 @@ if (await pathExists(localExecutable)) {
           process.platform === "win32" ? "junction" : "dir",
         );
         linked = true;
-        exitCode = await run(
-          join(temporaryNodeModules, ".bin", executableName(binary)),
+        exitCode = await runNodeScript(
+          join(temporaryNodeModules, ...scriptPath[binary]),
           args,
         );
       }

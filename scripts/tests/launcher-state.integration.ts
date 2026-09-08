@@ -27,6 +27,14 @@ function callsFor(command: string) {
   return invokeCalls.filter((call) => call.command === command);
 }
 
+async function waitFor(condition: () => boolean, message: string) {
+  const deadline = Date.now() + 2_000;
+  while (!condition() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert(condition(), message);
+}
+
 export async function runLauncherStateScenario() {
   try {
     const paths = await fixtureReady;
@@ -85,6 +93,44 @@ export async function runLauncherStateScenario() {
       appState.patchState === "not_installed",
       "backend status event was not routed to LauncherState",
     );
+
+    appState.patchState = "ready";
+    const gamePathBeforeExit = appState.gamePath;
+    const statusCallsBeforeExit = callsFor("check_patch_status").length;
+    await invoke("fixture_emit_game_exit", {
+      id: "game-exit-refresh",
+      status: "normal",
+      reason: "Game meminta restart setelah update internal.",
+    });
+    await waitFor(
+      () =>
+        callsFor("check_patch_status").length === statusCallsBeforeExit + 1 &&
+        appState.patchState === "not_installed",
+      "game exit did not refresh the stale patch state",
+    );
+    const exitRefreshCall =
+      callsFor("check_patch_status")[statusCallsBeforeExit];
+    assert(
+      exitRefreshCall.args.gamePath === gamePathBeforeExit &&
+        exitRefreshCall.args.installMethod === "resource_mount" &&
+        exitRefreshCall.args.uidMode === "default" &&
+        exitRefreshCall.args.uidText === "",
+      "game exit refresh did not use the active patch selection",
+    );
+
+    appState.patchState = "ready";
+    const statusCallsBeforeLaunchError = callsFor("check_patch_status").length;
+    await invoke("fixture_emit_launch_error", {
+      error: "launch_failure: reason=patch_not_ready",
+    });
+    await waitFor(
+      () =>
+        callsFor("check_patch_status").length ===
+          statusCallsBeforeLaunchError + 1 &&
+        appState.patchState === "not_installed",
+      "patch_not_ready launch failure did not refresh the stale patch state",
+    );
+
     assert(
       isValidUidText("x".repeat(64)) && !isValidUidText("x".repeat(65)),
       "UID UI validator did not enforce the 64-character limit",
@@ -137,9 +183,9 @@ export async function runLauncherStateScenario() {
     await appState.updateUidSelection("custom", "Halo Nozomi ✦ 2026!");
     const uidStatusCalls = callsFor("check_patch_status");
     assert(
-      uidStatusCalls.length === 2 &&
-        uidStatusCalls[1].args.uidMode === "custom" &&
-        uidStatusCalls[1].args.uidText === "Halo Nozomi ✦ 2026!",
+      uidStatusCalls.length === 4 &&
+        uidStatusCalls[3].args.uidMode === "custom" &&
+        uidStatusCalls[3].args.uidText === "Halo Nozomi ✦ 2026!",
       "custom UID selection was not sent to the backend",
     );
     assert(
@@ -158,10 +204,10 @@ export async function runLauncherStateScenario() {
     );
     const aliasStatusCalls = callsFor("check_patch_status");
     assert(
-      aliasStatusCalls.length === 3 &&
-        aliasStatusCalls[2].args.gamePath === paths.legacyGamePath &&
-        aliasStatusCalls[2].args.uidMode === "custom" &&
-        aliasStatusCalls[2].args.uidText === "Halo Nozomi ✦ 2026!",
+      aliasStatusCalls.length === 5 &&
+        aliasStatusCalls[4].args.gamePath === paths.legacyGamePath &&
+        aliasStatusCalls[4].args.uidMode === "custom" &&
+        aliasStatusCalls[4].args.uidText === "Halo Nozomi ✦ 2026!",
       "real bridge did not preserve the legacy path or UID selection in the IPC request",
     );
     assert(
@@ -186,14 +232,14 @@ export async function runLauncherStateScenario() {
     );
     const postSwitchStatusCalls = callsFor("check_patch_status");
     assert(
-      postSwitchStatusCalls.length === 4,
+      postSwitchStatusCalls.length === 6,
       "post-switch status was not requested",
     );
     assert(
-      postSwitchStatusCalls[3].args.gamePath === paths.legacyGamePath &&
-        postSwitchStatusCalls[3].args.installMethod === "loader" &&
-        postSwitchStatusCalls[3].args.uidMode === "custom" &&
-        postSwitchStatusCalls[3].args.uidText === "Halo Nozomi ✦ 2026!",
+      postSwitchStatusCalls[5].args.gamePath === paths.legacyGamePath &&
+        postSwitchStatusCalls[5].args.installMethod === "loader" &&
+        postSwitchStatusCalls[5].args.uidMode === "custom" &&
+        postSwitchStatusCalls[5].args.uidText === "Halo Nozomi ✦ 2026!",
       "post-switch status request did not use the new method and UID selection",
     );
     const savedSettings = callsFor("save_settings");
@@ -222,15 +268,16 @@ export async function runLauncherStateScenario() {
       uidMode: "custom",
       uidText: "stale value",
     });
+    const patchStateAfterStaleEvent: string = appState.patchState;
     assert(
-      appState.patchState === "not_installed",
+      patchStateAfterStaleEvent === "not_installed",
       "stale UID status event overwrote the active patch state",
     );
     const patchEvents = deliveredEvents.filter(
       (event) => event.event === "onPatchStatus",
     );
     assert(
-      patchEvents.length === 5 &&
+      patchEvents.length === 7 &&
         patchEvents.every(
           (event) => event.payload.gamePath === paths.canonicalGamePath,
         ),

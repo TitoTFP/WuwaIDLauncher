@@ -124,23 +124,24 @@ function Assert-WorkflowContract {
     $acceptancePath = Join-Path $workflowRoot "windows-acceptance.yml"
     $actionlintPath = Join-Path $workflowRoot "..\actionlint.yaml"
     $dependabotPath = Join-Path $workflowRoot "..\dependabot.yml"
+    $readmePath = Join-Path $workflowRoot "..\..\README.md"
     $gatePath = Join-Path $PSScriptRoot "windows-release-gate.ps1"
     $realAcceptancePath = Join-Path $PSScriptRoot "run-windows-real-acceptance.ps1"
     $resourceAcceptancePath = Join-Path $PSScriptRoot "wut-launcher-resource.tests.ps1"
     Assert-True (Test-Path -LiteralPath $ciPath -PathType Leaf) "Professional CI workflow is required."
     Assert-True (Test-Path -LiteralPath $releasePath -PathType Leaf) "Professional release workflow is required."
-    Assert-True (Test-Path -LiteralPath $acceptancePath -PathType Leaf) "Trusted Windows acceptance workflow is required."
-    Assert-True (Test-Path -LiteralPath $actionlintPath -PathType Leaf) "Custom runner labels must be declared for actionlint."
+    Assert-True (-not (Test-Path -LiteralPath $acceptancePath -PathType Leaf)) "Real game acceptance must not be a GitHub Actions workflow."
+    Assert-True (-not (Test-Path -LiteralPath $actionlintPath -PathType Leaf)) "Self-hosted runner configuration must not remain."
     Assert-True (Test-Path -LiteralPath $dependabotPath -PathType Leaf) "Dependabot configuration is required."
+    Assert-True (Test-Path -LiteralPath $readmePath -PathType Leaf) "Manual acceptance documentation is required."
     Assert-True (Test-Path -LiteralPath $gatePath -PathType Leaf) "Windows release gate runner is required."
     Assert-True (Test-Path -LiteralPath $realAcceptancePath -PathType Leaf) "Real Windows acceptance runner is required."
     Assert-True (Test-Path -LiteralPath $resourceAcceptancePath -PathType Leaf) "Resource acceptance runner is required."
 
     $ci = Get-Content -Raw -LiteralPath $ciPath
     $release = Get-Content -Raw -LiteralPath $releasePath
-    $acceptance = Get-Content -Raw -LiteralPath $acceptancePath
-    $actionlint = Get-Content -Raw -LiteralPath $actionlintPath
     $dependabot = Get-Content -Raw -LiteralPath $dependabotPath
+    $readme = Get-Content -Raw -LiteralPath $readmePath
     $gate = Get-Content -Raw -LiteralPath $gatePath
     $realAcceptance = Get-Content -Raw -LiteralPath $realAcceptancePath
     $resourceAcceptance = Get-Content -Raw -LiteralPath $resourceAcceptancePath
@@ -167,14 +168,14 @@ function Assert-WorkflowContract {
     Assert-True ($ci -match "ci-evidence-" -and $ci -match "always\(\)") "CI must upload bounded evidence after failures."
     Assert-True ($ci -match "test:patch-status") "CI must run the patch-status bridge regression."
     Assert-True ($ci -match "test:version") "CI must run the release version consistency regression."
-    Assert-True ($acceptance -notmatch "pull_request") "Trusted acceptance must never run on pull requests."
-    Assert-True ($actionlint -match "wuwaid-trusted-windows") "The trusted runner label must be allowlisted for actionlint."
-    Assert-True ($acceptance -match "self-hosted" -and $acceptance -match "wuwaid-trusted-windows" -and $acceptance -match "schedule:" -and $acceptance -match "workflow_dispatch") "Trusted acceptance must be uniquely targeted to a scheduled/manual self-hosted runner."
-    Assert-True ($acceptance -match "WUWAID_ACCEPTANCE_GAME_PATH" -and $acceptance -match "run-windows-real-acceptance") "Trusted acceptance must run the real game smoke with a configured game path."
+    Assert-True ($ci -match "test:security" -and $release -match "test:security") "CI and release must audit npm dependencies."
+    Assert-True ($ci -match "frontend-controls" -and $release -match "frontend-controls") "CI and release must run frontend accessibility/control regressions."
+    Assert-True ($allWorkflows -notmatch "self-hosted|wuwaid-trusted-windows|windows-acceptance\.yml") "CI/CD must not contain a self-hosted real-game acceptance workflow."
+    Assert-True ($readme -match "Acceptance Game Nyata \(Manual Windows Kompatibel\)" -and $readme -match "tidak dijalankan oleh GitHub Actions") "README must document real-game acceptance as manual and outside GitHub Actions."
+    Assert-True ($realAcceptance -match "GamePath" -and $realAcceptance -match "Client-Win64-Shipping\.exe") "Manual acceptance must require the real game installation."
     Assert-True ($realAcceptance -match "-Verb RunAs" -and $realAcceptance -match "Invoke-ElevationSmoke") "Real acceptance must exercise an explicit UAC elevation path."
     Assert-True ($realAcceptance -match "RequireWebView" -and $realAcceptance -match "WebViewCount.*-gt 0" -and $realAcceptance -match "lifecycle restoration") "Real acceptance must require WebView2 and launcher lifecycle restoration."
     Assert-True ($resourceAcceptance -match "RequireWebView" -and $resourceAcceptance -match "WebView2 process") "Resource acceptance must fail when WebView2 is not observed."
-    Assert-True ($acceptance -match "if:\s+\$\{\{\s*always\(\)\s*\}\}") "Trusted acceptance must upload evidence after failures."
     Assert-True ($dependabot -match "package-ecosystem: npm" -and $dependabot -match "package-ecosystem: cargo" -and $dependabot -match "package-ecosystem: github-actions") "Dependabot must cover npm, Cargo, and Actions."
     Assert-True ($dependabot -match "cooldown:" -and $dependabot -match "default-days:\s+7") "Dependabot updates need a cooldown."
     Assert-True ($release -match "test:patch-status") "Release workflow must run the patch-status bridge regression."

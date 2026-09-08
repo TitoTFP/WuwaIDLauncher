@@ -396,15 +396,6 @@ fn write_committed_release_note(root: &Path, tag: &str) -> (PathBuf, PathBuf, Pa
 }
 
 fn run_handoff_script(path: &Path) -> std::process::ExitStatus {
-    let mut script = fs::read_to_string(path).unwrap();
-    if std::env::var_os("WINE_HOST_HOME").is_some() {
-        // Wine's bundled fc does not implement /B; native Windows runs the exact script.
-        script = script.replace(
-            "%SystemRoot%\\System32\\fc.exe /B",
-            "%SystemRoot%\\System32\\fc.exe",
-        );
-    }
-    fs::write(path, script).unwrap();
     let pid_file = launcher_fixture_pid_path(path.parent().unwrap());
     let mut command = Command::new(windows_system_executable("cmd.exe"));
     let mut child = command
@@ -418,6 +409,10 @@ fn run_handoff_script(path: &Path) -> std::process::ExitStatus {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if let Some(status) = child.try_wait().unwrap() {
+            let cleanup_deadline = Instant::now() + Duration::from_secs(5);
+            while path.exists() && Instant::now() < cleanup_deadline {
+                sleep(Duration::from_millis(100));
+            }
             return status;
         }
         assert!(Instant::now() < deadline, "update handoff script timed out");
@@ -455,10 +450,13 @@ fn windows_handoff_commits_whats_new_after_successful_restart() {
     let temp = tempdir().unwrap();
     let _launcher_cleanup = LauncherFixtureCleanup::new(temp.path());
     let current = temp.path().join("WuwaIDLauncher.exe");
+    let backup = temp.path().join("WuwaIDLauncher.exe.wuwaid-backup");
     let staging = temp.path().join("staging");
     let handoff = temp.path().join("update-handoff.cmd");
     fs::create_dir_all(&staging).unwrap();
-    fs::copy(fixture_binary(), &current).unwrap();
+    let old_bytes = b"old-launcher-binary".to_vec();
+    let staged_bytes = fs::read(fixture_binary()).unwrap();
+    fs::write(&current, &old_bytes).unwrap();
     fs::copy(fixture_binary(), staging.join("WuwaIDLauncher.exe")).unwrap();
     let (transaction, pending, ready, ready_temp) = release_state_paths(temp.path());
     write_release_note(&transaction, &launcher_release_note("v2.10.0"));
@@ -478,9 +476,13 @@ fn windows_handoff_commits_whats_new_after_successful_restart() {
     assert!(status.success(), "handoff failed with {status}");
     assert!(!handoff.exists());
     assert!(!staging.exists());
+    assert!(!backup.exists());
     assert!(!transaction.exists());
     assert!(!ready_temp.exists());
     assert!(pending.exists());
+    let updated_bytes = fs::read(&current).unwrap();
+    assert_eq!(updated_bytes, staged_bytes);
+    assert_ne!(updated_bytes, old_bytes);
     assert_eq!(fs::read_to_string(&ready).unwrap().trim(), "v2.10.0");
     let committed = launcher_update_state::read_committed_release_note(
         &transaction,
@@ -659,8 +661,9 @@ fn windows_health_check_failure_rolls_back_and_discards_whats_new() {
         "v2.10.0",
     )
     .unwrap();
-    let _status = run_handoff_script(&handoff);
+    let status = run_handoff_script(&handoff);
 
+    assert_eq!(status.code(), Some(7), "handoff failed with {status}");
     assert!(!handoff.exists());
     assert!(!staging.exists());
     assert_eq!(fs::read(&current).unwrap(), current_bytes);
@@ -702,9 +705,12 @@ fn windows_health_failure_stops_launched_process_before_rollback() {
         "v2.10.0",
     )
     .unwrap();
-    let _status = run_handoff_script(&handoff);
+    let status = run_handoff_script(&handoff);
 
-    wait_for_launcher_pid_exit(&launcher_fixture_pid_path(temp.path()));
+    assert_eq!(status.code(), Some(7), "handoff failed with {status}");
+    let pid_file = launcher_fixture_pid_path(temp.path());
+    assert!(pid_file.is_file(), "launched fixture did not write its PID");
+    wait_for_launcher_pid_exit(&pid_file);
     assert!(!handoff.exists());
     assert!(!staging.exists());
     assert_eq!(fs::read(&current).unwrap(), current_bytes);

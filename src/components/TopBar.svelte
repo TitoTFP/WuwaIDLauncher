@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { appState } from '../lib/launcherState.svelte';
   import { bridge } from '../lib/bridge';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
   import { isTauriRuntime } from '../lib/runtime';
 
   interface Props {
@@ -14,6 +16,17 @@
     if (!isTauriRuntime()) return;
     try { await bridge.minimizeWindow(); }
     catch (error) { appState.showToast(`Gagal meminimalkan launcher: ${error instanceof Error ? error.message : String(error)}`, 'err'); }
+  }
+
+  async function handleWindowDrag(event: MouseEvent) {
+    if (!isTauriRuntime() || event.button !== 0) return;
+    if (event.target instanceof Element && event.target.closest('button, input, textarea, select, a')) return;
+
+    try {
+      await getCurrentWindow().startDragging();
+    } catch (error) {
+      console.error(`Gagal memindahkan launcher: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   async function handleClose() {
@@ -33,10 +46,18 @@
   }
 
   let closeDisabled = $derived(appState.isOperationBlocked('close'));
+
+  onMount(() => {
+    const topBar = document.getElementById('topBar');
+    if (!topBar) return;
+
+    topBar.addEventListener('mousedown', handleWindowDrag);
+    return () => topBar.removeEventListener('mousedown', handleWindowDrag);
+  });
 </script>
 
-<header class="top-bar" id="topBar" data-tauri-drag-region>
-  <div class="top-bar__left" data-tauri-drag-region>
+<header class="top-bar" id="topBar">
+  <div class="top-bar__left">
     <img src="/assets/logo.png" alt="Wuthering Waves" class="top-bar__logo" draggable="false" />
   </div>
 
@@ -58,14 +79,14 @@
 
     <div class="top-bar__sep"></div>
 
-    <button class="top-bar__btn" id="btnMinimize" title="Minimalkan" disabled={!isTauriRuntime()} onclick={handleMinimize} type="button">
-      <svg viewBox="0 0 24 24" width="14" height="14">
+    <button class="top-bar__btn" id="btnMinimize" title="Minimalkan" aria-label="Minimalkan" disabled={!isTauriRuntime()} onclick={handleMinimize} type="button">
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
         <path fill="currentColor" d="M19 13H5v-2h14v2z" />
       </svg>
     </button>
 
-    <button class="top-bar__btn top-bar__btn--close" id="btnClose" title="Tutup" disabled={closeDisabled || !isTauriRuntime()} onclick={handleClose} type="button">
-      <svg viewBox="0 0 24 24" width="14" height="14">
+    <button class="top-bar__btn top-bar__btn--close" id="btnClose" title="Tutup" aria-label="Tutup launcher" disabled={closeDisabled || !isTauriRuntime()} onclick={handleClose} type="button">
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
         <path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
       </svg>
     </button>
