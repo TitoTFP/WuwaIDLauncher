@@ -51,7 +51,19 @@ test("release metadata and frontend fallback use one version", async () => {
     version,
   );
   assert.equal(tauriConfig.version, version, "Tauri config version mismatch");
-  assert.match(readme, new RegExp(`Version-${version.replaceAll(".", "\\.")}`));
+
+  const readmeVersion = readme.match(/Version-(\d+\.\d+\.\d+)/);
+  const usesDynamicReleaseBadge = readme.includes(
+    "img.shields.io/github/v/release/TitoTFP/WuwaIDLauncher",
+  );
+  assert.ok(
+    usesDynamicReleaseBadge || readmeVersion,
+    "README must expose the launcher release version via a dynamic release badge or a static version badge",
+  );
+  if (readmeVersion) {
+    assert.equal(readmeVersion[1], version, "README static version mismatch");
+  }
+
   assert.match(
     releaseNotes,
     new RegExp(`^# WuwaID Launcher v${version}$`, "m"),
