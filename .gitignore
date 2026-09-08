@@ -31,6 +31,7 @@ Desktop.ini
 
 # Agent workspace files
 .memory/
+.session-analysis.jsonl
 CLAUDE.md
 AGENTS.md
 docs/agents/

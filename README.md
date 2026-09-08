@@ -275,7 +275,7 @@ Checklist sebelum publish:
 - [ ] `npm run test:patch-status` dan `npm run test:version` lulus.
 - [ ] `cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check` lulus.
 - [ ] `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` lulus.
-- [ ] `cargo test --locked --all-targets` lulus dengan fixture deterministic.
+- [ ] `cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1` lulus dengan fixture deterministic.
 - [ ] ZIP dan SHA256sums.txt ada serta menggunakan versi yang sama.
 - [ ] Jalankan Windows release gate dengan artifact dan fixture disposable:
 
@@ -294,7 +294,7 @@ Checklist sebelum publish:
 
 ### CI/CD
 
-- Pull request, push `main`, dan push `feat/**` menjalankan job Ubuntu paralel untuk frontend/Rust serta job Windows untuk native regression, deterministic acceptance, dan binary build.
+- Pull request, push `main`, dan push `feat/**` menjalankan job Ubuntu paralel untuk frontend/Rust serta job Windows untuk native regression, deterministic acceptance, dan binary build. Job Windows mempertahankan lifecycle test terisolasi secara serial, lalu menjalankan aggregate `cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1`, `cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check`, Clippy, static acceptance, dan validasi binary.
 - Acceptance game nyata tidak menjadi job CI/CD GitHub Actions. Operator yang memiliki sistem Windows kompatibel dan game asli yang sudah ter-patch dapat menjalankan `scripts/acceptance/run-windows-real-acceptance.ps1` secara manual; hasilnya dapat ditinjau atau dilampirkan sebagai evidence release.
 - Release memvalidasi checkout tepat pada tag `vX.Y.Z`, melakukan satu kompilasi Windows, membuat ZIP portable + `SHA256sums.txt`, lalu membuat provenance attestation. Publish menunggu approval environment `release-production`.
 - Distribusi tetap unsigned karena proyek belum memiliki sertifikat Authenticode. SHA-256 dan attestation menjadi bukti integritas/provenance; signing dapat ditambahkan bila sertifikat atau program OSS yang layak tersedia.
