@@ -5636,7 +5636,7 @@ dependencies = [
 
 [[package]]
 name = "wuwaid-launcher"
-version = "2.9.2"
+version = "2.10.0"
 dependencies = [
  "hex",
  "log",
