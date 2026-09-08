@@ -92,6 +92,10 @@ npm run tauri -- build --no-bundle
 
 `Tauri v2` · `Rust` · `Svelte 5` · `TypeScript` · `Vite`
 
+## ✅ Acceptance Game Nyata (Manual Windows Kompatibel)
+
+Acceptance yang benar-benar menjalankan Wuthering Waves dilakukan secara manual pada mesin Windows kompatibel melalui `scripts/acceptance/run-windows-real-acceptance.ps1` dan **tidak dijalankan oleh GitHub Actions**.
+
 ## 🔒 Privasi
 
 WuwaID Launcher **tidak mengunggah diagnostics atau log lokal**.
