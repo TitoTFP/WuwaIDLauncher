@@ -35,7 +35,7 @@ Dibangun ulang menggunakan **Tauri v2**, **Rust**, dan **Svelte 5** agar tetap c
 - ⚙️ Pengaturan **Custom UID, DirectX 11, dan C# Environment**
 - 🎬 Background, BGM, dan release notes dinamis
 - 💤 Otomatis masuk **system tray** saat game berjalan
-- 🩺 Diagnostics lokal untuk membantu troubleshooting
+- 🧰 Pesan error peluncuran ringkas untuk membantu troubleshooting
 
 ## 🎮 Mulai
 
@@ -98,9 +98,11 @@ Acceptance yang benar-benar menjalankan Wuthering Waves dilakukan secara manual 
 
 ## 🔒 Privasi
 
-WuwaID Launcher **tidak mengunggah diagnostics atau log lokal**.
+WuwaID Launcher tidak lagi mengirim heartbeat statistik ke `logs.titotfp.my.id`.
 
-Statistik active player hanya menggunakan heartbeat minimal seperti ID acak launcher, versi launcher, metode instalasi, dan jenis event — tanpa mengirim path game, username Windows, akun game, atau isi log.
+File diagnostik peluncuran dari versi sebelumnya dibersihkan dari folder data aplikasi saat launcher dimulai; launcher tidak membuat file diagnostik baru.
+
+Launcher tetap menghubungi GitHub untuk memeriksa rilis dan mengunduh update/aset.
 
 ## 🤝 Kontribusi
 

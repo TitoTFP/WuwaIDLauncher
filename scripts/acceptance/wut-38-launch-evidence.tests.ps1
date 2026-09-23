@@ -22,8 +22,9 @@ $runtimeMarkers = @(
     "pub fn classify_spawn_error"
 )
 $libMarkers = @(
-    "fn save_launch_evidence",
-    "Diagnostics",
+    "fn remove_saved_launch_diagnostics",
+    "remove_dir_all(diagnostics_dir)",
+    "remove_saved_launch_diagnostics(&get_appdata_dir())",
     "wait_for_launcher_process_tree",
     "PROCESS_HANDOFF_GRACE",
     "onLaunchError",
@@ -31,6 +32,11 @@ $libMarkers = @(
     "finish_launch_lifecycle",
     "exit_code",
     "game_log_tail"
+)
+$removedPersistenceMarkers = @(
+    "fn save_launch_evidence",
+    "fn launch_error_message",
+    "serde_json::to_vec_pretty(&evidence)"
 )
 
 foreach ($marker in $runtimeMarkers) {
@@ -43,5 +49,10 @@ foreach ($marker in $libMarkers) {
         throw "WUT-38 lifecycle marker missing: $marker"
     }
 }
+foreach ($marker in $removedPersistenceMarkers) {
+    if ($lib -match [regex]::Escape($marker)) {
+        throw "WUT-38 removed diagnostics persistence marker remains: $marker"
+    }
+}
 
-Write-Output "PASS: WUT-38 launch evidence contract"
+Write-Output "PASS: WUT-38 launch lifecycle and diagnostics cleanup contract"

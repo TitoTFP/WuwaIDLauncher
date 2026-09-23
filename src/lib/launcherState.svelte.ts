@@ -877,13 +877,6 @@ export class LauncherState implements ILauncherState {
     this.eventUnlisteners = unlisteners;
 
     try {
-      await bridge.notifyUiInteractive(this.config.installMethod);
-    } catch {
-      // The UI remains usable if the optional heartbeat cannot start.
-    }
-    if (!isCurrent()) return;
-
-    try {
       await this.startMediaSync();
     } catch {
       // Media is optional; its event reports the detailed failure when possible.
