@@ -65,7 +65,7 @@ Keduanya dapat dipilih langsung dari pengaturan launcher.
 
 ## 🛠️ Development
 
-**Requirements:** Node.js 20+, Rust 1.97.1+, dan Windows toolchain.
+**Requirements:** Node.js 20+, Rust 1.97.1+. Build native Windows memerlukan MSVC toolchain. Cross-build MSVC dari Linux memerlukan `cargo-xwin`, `clang-cl`, dan `lld-link`; install `cargo-xwin` dengan `cargo install cargo-xwin`. `cargo-xwin` mengunduh Windows SDK/CRT bila belum tersedia.
 
 ```bash
 git clone https://github.com/TitoTFP/WuwaIDLauncher.git
@@ -82,10 +82,16 @@ npm run check
 npm run build
 ```
 
-Build binary Windows:
+Build binary Windows dari Windows:
 
 ```bash
 npm run tauri -- build --no-bundle
+```
+
+Build binary Windows MSVC dari Linux x64:
+
+```bash
+npm run launcher-build:msvc
 ```
 
 ### Tech Stack

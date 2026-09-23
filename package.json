@@ -16,7 +16,8 @@
     "test:security": "npm audit --audit-level=high",
     "test:tray": "cargo test --manifest-path src-tauri/Cargo.toml tray --lib",
     "test:lifecycle": "node --test scripts/tests/frontend-controls.test.mjs scripts/tests/game-exit-notice.test.mjs scripts/tests/resource-lifecycle.test.mjs scripts/tests/launcher-update-notification.test.mjs scripts/tests/workflow-contract.test.mjs",
-    "tauri": "node scripts/run-tauri.mjs"
+    "tauri": "node scripts/run-tauri.mjs",
+    "launcher-build:msvc": "npm run build && npm run tauri -- build --no-bundle --target x86_64-pc-windows-msvc --runner cargo-xwin -- --locked && node scripts/finalize-msvc-build.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.2.0",
