@@ -113,6 +113,15 @@ fn get_appdata_dir() -> PathBuf {
     dirs_next_or_default()
 }
 
+fn remove_saved_launch_diagnostics(appdata_dir: &Path) -> std::io::Result<()> {
+    let diagnostics_dir = appdata_dir.join("Diagnostics");
+    match std::fs::remove_dir_all(diagnostics_dir) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 fn dirs_next_or_default() -> PathBuf {
     if let Some(mut dir) = dirs_sys_local_appdata() {
         dir.push("WuwaIDLauncher");
@@ -477,7 +486,6 @@ fn complete_launcher_exit<R: Runtime>(
     status: &'static str,
     reason: impl Into<String>,
 ) {
-    let _ = save_launch_evidence(evidence.clone());
     emit_game_exit_notice(
         app,
         evidence,
@@ -495,37 +503,6 @@ fn exit_reason(prefix: &str, exit_code: Option<i32>) -> String {
     }
 }
 
-fn save_launch_evidence(mut evidence: engine::runtime::LaunchEvidence) -> Option<PathBuf> {
-    let diagnostics_dir = get_appdata_dir().join("Diagnostics");
-    if std::fs::create_dir_all(&diagnostics_dir).is_err() {
-        return None;
-    }
-
-    let stem = format!(
-        "launch-{}-{}",
-        evidence.started_at_ms,
-        evidence
-            .pid
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "none".to_string())
-    );
-    let path = diagnostics_dir.join(format!("{stem}.json"));
-    evidence.evidence_path = Some(path.clone());
-    let Ok(serialized) = serde_json::to_vec_pretty(&evidence) else {
-        return None;
-    };
-    if std::fs::write(&path, serialized).is_err() {
-        return None;
-    }
-    Some(path)
-}
-
-fn launch_error_message(mut evidence: engine::runtime::LaunchEvidence) -> String {
-    let path = save_launch_evidence(evidence.clone());
-    evidence.evidence_path = path;
-    evidence.user_message()
-}
-
 fn emit_launch_failure<R: Runtime>(
     app: &AppHandle<R>,
     game_path: &str,
@@ -540,10 +517,9 @@ fn emit_launch_failure<R: Runtime>(
             csharp_environment,
         ),
         engine::runtime::SpawnFailureKind::SpawnFailed,
-        None,
     );
     evidence.error = Some(error.into());
-    let _ = app.emit("onLaunchError", launch_error_message(evidence));
+    let _ = app.emit("onLaunchError", evidence.user_message());
 }
 
 fn finish_launch_lifecycle<R: Runtime>(app: &AppHandle<R>) {
@@ -1967,23 +1943,6 @@ async fn check_patch_status<R: Runtime>(
 }
 
 #[tauri::command]
-fn notify_ui_interactive<R: Runtime>(app: AppHandle<R>, install_method: String) {
-    let method = match engine::method::InstallMethod::parse(&install_method) {
-        Ok(method) => method,
-        Err(error) => {
-            log::warn!(
-                "Install method active player tidak valid ({error}); memakai resource_mount"
-            );
-            engine::method::InstallMethod::ResourceMount
-        }
-    };
-    if let Some(service) = app.try_state::<engine::active_player::ActivePlayerService>() {
-        service.start(method);
-    }
-    log::info!("UI interactive milestone reached");
-}
-
-#[tauri::command]
 fn reset_webview_cache<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let operation =
         engine::operations::global().try_acquire(engine::operations::OperationKind::CacheReset)?;
@@ -2510,11 +2469,6 @@ fn launch_game<R: Runtime>(
 
         match engine::runtime::launch_game_with_options(&p, dx11, csharp_environment) {
             Ok(mut process) => {
-                if let Some(service) =
-                    app_handle.try_state::<engine::active_player::ActivePlayerService>()
-                {
-                    service.send_launch(method);
-                }
                 let root_pid = process.id();
                 let mut evidence =
                     engine::runtime::LaunchEvidence::for_process(command, process.mode, root_pid);
@@ -2616,7 +2570,7 @@ fn launch_game<R: Runtime>(
             }
             Err(mut error) => {
                 error.evidence.game_log_tail = engine::runtime::collect_game_log_tail(&p);
-                let _ = app_handle.emit("onLaunchError", launch_error_message(error.evidence));
+                let _ = app_handle.emit("onLaunchError", error.evidence.user_message());
                 finish_launch_lifecycle(&app_handle);
             }
         }
@@ -2765,14 +2719,15 @@ pub fn run<R: tauri::Runtime>(context: tauri::Context<R>) {
 
     tauri::Builder::<R>::new()
         .manage(RuntimeCoordinator::default())
-        .manage(engine::active_player::ActivePlayerService::new(
-            get_appdata_dir(),
-        ))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
         .register_uri_scheme_protocol("media", media_protocol_handler)
         .setup(|app| {
+            if let Err(error) = remove_saved_launch_diagnostics(&get_appdata_dir()) {
+                log::warn!("Diagnostik peluncuran lama tidak dapat dihapus: {error}");
+            }
+
             restore_legacy_signature_from_settings();
             let app_handle = app.handle().clone();
             configure_webview_memory_target(&app_handle);
@@ -2831,7 +2786,6 @@ pub fn run<R: tauri::Runtime>(context: tauri::Context<R>) {
             perform_launcher_update,
             check_patch_status,
             switch_method,
-            notify_ui_interactive,
             reset_webview_cache,
             start_installation,
             check_game_folder_write_access,
@@ -2842,13 +2796,9 @@ pub fn run<R: tauri::Runtime>(context: tauri::Context<R>) {
         ])
         .build(context)
         .expect("error while building wuwaid launcher application")
-        .run(|app, event| {
+        .run(|_app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
                 restore_legacy_signature_from_settings();
-                if let Some(service) = app.try_state::<engine::active_player::ActivePlayerService>()
-                {
-                    service.stop();
-                }
             }
         });
 }
@@ -3003,9 +2953,6 @@ pub mod frontend_fixture {
         .map_err(|error| error.to_string())
     }
 
-    #[tauri::command(rename = "notify_ui_interactive")]
-    fn fixture_notify_ui_interactive(_install_method: String) {}
-
     #[tauri::command(rename = "get_vh_release_notes")]
     fn fixture_get_vh_release_notes() {}
 
@@ -3115,7 +3062,6 @@ pub mod frontend_fixture {
                 check_patch_status,
                 switch_method,
                 fixture_check_and_sync_media,
-                fixture_notify_ui_interactive,
                 fixture_get_vh_release_notes,
                 fixture_get_launcher_release_notes,
                 fixture_emit_launcher_release_notes,
@@ -3486,6 +3432,21 @@ mod tests {
     }
 
     #[test]
+    fn old_launch_diagnostics_are_removed_without_touching_other_app_data() {
+        let appdata = tempfile::tempdir().unwrap();
+        let diagnostics_dir = appdata.path().join("Diagnostics");
+        std::fs::create_dir_all(&diagnostics_dir).unwrap();
+        std::fs::write(diagnostics_dir.join("launch-old.json"), b"old").unwrap();
+        let settings_path = appdata.path().join("settings.json");
+        std::fs::write(&settings_path, "{}").unwrap();
+
+        remove_saved_launch_diagnostics(appdata.path()).unwrap();
+
+        assert!(!diagnostics_dir.exists());
+        assert_eq!(std::fs::read_to_string(settings_path).unwrap(), "{}");
+    }
+
+    #[test]
     fn force_quit_exit_restores_launcher_lifecycle() {
         let _env_lock = lock_test_environment();
         let appdata = tempfile::tempdir().unwrap();
@@ -3529,7 +3490,7 @@ mod tests {
         assert!(!is_tray_mode(handle));
         assert!(window.is_visible().unwrap());
         assert!(coordinator_launcher_pid(handle).is_none());
-        assert!(appdata.path().join("Diagnostics").exists());
+        assert!(!appdata.path().join("Diagnostics").exists());
         app.unlisten(listener);
         std::env::remove_var("WUWAID_E2E_APPDATA");
     }
@@ -4891,14 +4852,7 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .unwrap()
             .contains("invalid_game_path: executable game tidak ditemukan"));
-        let diagnostics_dir = appdata.path().join("Diagnostics");
-        let diagnostic_files = std::fs::read_dir(&diagnostics_dir)
-            .unwrap()
-            .filter_map(Result::ok)
-            .collect::<Vec<_>>();
-        assert_eq!(diagnostic_files.len(), 1);
-        let diagnostic = std::fs::read_to_string(diagnostic_files[0].path()).unwrap();
-        assert!(diagnostic.contains("invalid_game_path: executable game tidak ditemukan"));
+        assert!(!appdata.path().join("Diagnostics").exists());
         app.unlisten(launch_error_listener);
 
         let (install_error_tx, install_error_rx) = sync_channel(1);

@@ -118,7 +118,6 @@ pub struct LaunchEvidence {
     pub stdout: String,
     pub stderr: String,
     pub game_log_tail: String,
-    pub evidence_path: Option<PathBuf>,
     pub started_at_ms: u128,
     pub detected_at_ms: Option<u128>,
     pub finished_at_ms: Option<u128>,
@@ -137,18 +136,13 @@ impl LaunchEvidence {
             stdout: String::new(),
             stderr: String::new(),
             game_log_tail: String::new(),
-            evidence_path: None,
             started_at_ms: now_millis(),
             detected_at_ms: None,
             finished_at_ms: None,
         }
     }
 
-    pub fn for_failure(
-        command: LaunchCommand,
-        failure_kind: SpawnFailureKind,
-        evidence_path: Option<PathBuf>,
-    ) -> Self {
+    pub fn for_failure(command: LaunchCommand, failure_kind: SpawnFailureKind) -> Self {
         let timestamp = now_millis();
         Self {
             command,
@@ -161,11 +155,28 @@ impl LaunchEvidence {
             stdout: String::new(),
             stderr: String::new(),
             game_log_tail: String::new(),
-            evidence_path,
             started_at_ms: timestamp,
             detected_at_ms: None,
             finished_at_ms: Some(timestamp),
         }
+    }
+    pub fn user_message(&self) -> String {
+        let reason = self
+            .error
+            .as_deref()
+            .map(compact_detail)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| default_failure_reason(self.failure_kind).to_string());
+        format!(
+            "launch_failure: kind={}; exit_code={}; reason={}",
+            self.failure_kind
+                .map(SpawnFailureKind::as_str)
+                .unwrap_or("none"),
+            self.exit_code
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            reason,
+        )
     }
 
     pub fn mark_detected(&mut self) {
@@ -175,29 +186,6 @@ impl LaunchEvidence {
 
     pub fn mark_finished(&mut self) {
         self.finished_at_ms = Some(now_millis());
-    }
-
-    pub fn user_message(&self) -> String {
-        let reason = self
-            .error
-            .as_deref()
-            .map(compact_detail)
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| default_failure_reason(self.failure_kind).to_string());
-        format!(
-            "launch_failure: kind={}; exit_code={}; reason={}; evidence_path={}",
-            self.failure_kind
-                .map(SpawnFailureKind::as_str)
-                .unwrap_or("none"),
-            self.exit_code
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "none".to_string()),
-            reason,
-            self.evidence_path
-                .as_ref()
-                .map(|value| value.to_string_lossy().to_string())
-                .unwrap_or_else(|| "none".to_string()),
-        )
     }
 }
 
@@ -213,7 +201,7 @@ impl LaunchFailure {
         error: impl Into<String>,
         launch_mode: Option<LaunchMode>,
     ) -> Self {
-        let mut evidence = LaunchEvidence::for_failure(command, kind, None);
+        let mut evidence = LaunchEvidence::for_failure(command, kind);
         evidence.launch_mode = launch_mode;
         evidence.error = Some(error.into());
         Self { evidence }
@@ -1907,20 +1895,19 @@ mod tests {
     }
 
     #[test]
-    fn launch_failure_message_is_compact_and_keeps_evidence_local() {
+    fn launch_failure_message_is_compact_without_local_file_path() {
         let command = LaunchCommand::new(
             Path::new(r"C:\Games\Client-Win64-Shipping.exe"),
             Path::new(r"C:\Games"),
             false,
         );
-        let evidence =
-            LaunchEvidence::for_failure(command, SpawnFailureKind::ElevationRequired, None);
+        let evidence = LaunchEvidence::for_failure(command, SpawnFailureKind::ElevationRequired);
         let message = evidence.user_message();
 
         assert!(message.contains("elevation_required"));
         assert!(message.contains("exit_code=none"));
         assert!(message.contains("reason=Administrator permission required"));
-        assert!(message.contains("evidence_path=none"));
+        assert!(!message.contains("evidence_path"));
         assert!(!message.contains("game_log_tail"));
         assert!(!message.contains("stderr="));
         assert!(!message.contains("stdout="));

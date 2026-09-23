@@ -24,7 +24,6 @@ pub fn is_effectively_empty_uid_text(value: &str) -> bool {
         .all(|character| character == '\u{FEFF}' || character.is_whitespace())
 }
 
-pub mod active_player;
 pub mod atom_feed;
 pub mod downloader;
 pub mod elevation;

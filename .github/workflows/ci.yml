@@ -308,7 +308,6 @@ jobs:
           $tests = @(
             "scripts/acceptance/windows-release-gate.tests.ps1",
             "scripts/acceptance/wut-36-acl.tests.ps1",
-            "scripts/acceptance/wut-38-launch-evidence.tests.ps1",
             "scripts/acceptance/wut-main-ui-acl.tests.ps1",
             "scripts/acceptance/wut-main-ui.tests.ps1",
             "scripts/acceptance/wut-game-lifecycle.tests.ps1"
