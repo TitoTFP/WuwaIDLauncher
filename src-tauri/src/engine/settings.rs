@@ -4,6 +4,9 @@ use crate::engine::validate_uid_text;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+pub const THEME_PREFERENCE_AUTO: &str = "auto";
+pub const THEME_PREFERENCE_GENERAL: &str = "general";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LauncherSettings {
@@ -15,6 +18,7 @@ pub struct LauncherSettings {
     pub uid_text: String,
     pub bgm_volume: f64,
     pub bgm_enabled: bool,
+    pub theme_preference: String,
 }
 
 impl Default for LauncherSettings {
@@ -28,6 +32,7 @@ impl Default for LauncherSettings {
             uid_text: String::new(),
             bgm_volume: 0.35,
             bgm_enabled: true,
+            theme_preference: THEME_PREFERENCE_AUTO.to_string(),
         }
     }
 }
@@ -254,6 +259,27 @@ pub fn normalize_settings_json(raw: &str) -> SettingsLoadResult {
                 diagnostic(
                     &mut diagnostics,
                     "Field settings bgmVolume tidak valid; memakai default.",
+                );
+            }
+        }
+    }
+
+    if let Some(value) = object.get("themePreference") {
+        match value.as_str() {
+            Some(preference)
+                if !preference.is_empty()
+                    && preference.len() <= crate::engine::theme::MAX_THEME_ID_LENGTH
+                    && preference
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-') =>
+            {
+                settings.theme_preference = preference.to_string();
+            }
+            _ => {
+                repaired = true;
+                diagnostic(
+                    &mut diagnostics,
+                    "Field settings themePreference tidak valid; memakai default.",
                 );
             }
         }

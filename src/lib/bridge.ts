@@ -14,6 +14,7 @@ import type {
   ReleaseNotePayload,
   SettingsLoadResult,
   UidMode,
+  ThemePayload,
 } from "./types";
 
 interface UidSelection {
@@ -37,6 +38,8 @@ export const bridge = {
 
   // Media & Assets
   checkAndSyncMedia: (): Promise<void> => invoke("check_and_sync_media"),
+  getActiveTheme: (): Promise<ThemePayload> => invoke("get_active_theme"),
+
 
   // Update & Release Notes
   checkLauncherUpdate: (): Promise<void> => invoke("check_launcher_update"),
@@ -126,6 +129,7 @@ export interface EventBridgeCallbacks {
   onMediaStatus?: (payload: MediaStatusPayload) => void;
   onMediaProgress?: (payload: MediaProgressPayload) => void;
   onUpdateDate?: (dateStr: string) => void;
+  onThemeReady?: (payload: ThemePayload) => void;
   onVHReleaseNotes?: (payload: ReleaseNotePayload) => void;
   onLauncherReleaseNotes?: (payload: ReleaseNotePayload) => void;
 }
@@ -226,6 +230,7 @@ export async function setupEventBridge(
       callbacks.onMediaProgress?.(p),
     ),
     addListener<string>("onUpdateDate", (p) => callbacks.onUpdateDate?.(p)),
+    addListener<ThemePayload>("onThemeReady", (p) => callbacks.onThemeReady?.(p)),
     addListener<ReleaseNotePayload>("onVHReleaseNotes", (p) =>
       callbacks.onVHReleaseNotes?.(p),
     ),

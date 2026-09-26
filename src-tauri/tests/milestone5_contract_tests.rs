@@ -7,6 +7,7 @@ use wuwaid_launcher_lib::engine::{media, updater};
 fn media_manifest(bgm: &[u8], video: &[u8]) -> media::AssetManifest {
     media::AssetManifest {
         update_date: None,
+        theme: None,
         assets: vec![
             media::AssetEntry {
                 name: "bgm.mp3".to_string(),

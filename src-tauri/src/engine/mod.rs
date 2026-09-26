@@ -40,6 +40,7 @@ pub mod repak;
 pub mod runtime;
 pub mod settings;
 pub mod signature;
+pub mod theme;
 pub mod updater;
 
 #[cfg(test)]

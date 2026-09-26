@@ -1,0 +1,14 @@
+# Images are binary. Without this they inherit a text rule and git rewrites
+# their bytes on checkout, so the served file stops matching the sha256 the
+# signed manifest declares and the theme never activates.
+Web/**/*.jpg  -text binary
+Web/**/*.png  -text binary
+Web/**/*.webp -text binary
+
+# The manifest is signed byte-for-byte; never let a checkout rewrite it.
+# Scope text rules to text files — a blanket `Web/**` glob would catch media.
+Web/assets.json     text eol=lf
+Web/assets.json.sig text eol=lf
+Web/**/*.css        text eol=lf
+Web/**/*.json       text eol=lf
+Web/**/*.md         text eol=lf

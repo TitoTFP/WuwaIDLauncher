@@ -283,6 +283,7 @@ async fn test_mock_http_media_sync_with_full_hash_validation() {
 
     let manifest = AssetManifest {
         update_date: Some("2026-08-28T04:00:00Z".to_string()),
+        theme: None,
         assets: vec![
             AssetEntry {
                 name: "bgm.mp3".to_string(),
@@ -328,6 +329,7 @@ async fn test_corrupted_cached_media_is_rejected_and_re_downloaded_before_ready(
 
     let manifest = AssetManifest {
         update_date: None,
+        theme: None,
         assets: vec![
             AssetEntry {
                 name: "bgm.mp3".to_string(),

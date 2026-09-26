@@ -15,6 +15,11 @@ SHA256sums.txt
 # IDE / Editor
 .vs/
 .vscode/
+
+# Web content signing keys — the public halves live in the binary, the private
+# halves must never be committed.
+scripts/keys/
+*.key.pem
 *.user
 *.suo
 .antigravitycli/
@@ -36,3 +41,4 @@ CLAUDE.md
 AGENTS.md
 docs/agents/
 .pi/tasks/
+WATCHDOG.yml

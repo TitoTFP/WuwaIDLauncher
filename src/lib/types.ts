@@ -89,6 +89,22 @@ export interface LauncherConfig {
   uidText: string;
   bgmVolume: number;
   bgmEnabled: boolean;
+  themePreference: ThemePreference;
+}
+
+export type ThemePreference = "auto" | "general" | (string & {});
+
+export const THEME_PREFERENCES: readonly ThemePreference[] = ["auto", "general"];
+
+/** A verified theme as delivered by the backend. */
+export interface ThemePayload {
+  id: string;
+  name: string;
+  keyId: string;
+  tokens: Record<string, string>;
+  css: string;
+  backgroundFile: string;
+  status: "signed" | "general" | "unsigned" | "stale" | string;
 }
 
 export const DEFAULT_LAUNCHER_CONFIG: LauncherConfig = {
@@ -99,6 +115,7 @@ export const DEFAULT_LAUNCHER_CONFIG: LauncherConfig = {
   uidMode: "default",
   uidText: "",
   bgmVolume: 0.35,
+  themePreference: "auto",
   bgmEnabled: true,
 };
 
@@ -219,6 +236,19 @@ export function normalizeLauncherConfig(raw: unknown): NormalizedConfigResult {
     diagnostics.push("Field settings bgmVolume tidak valid; memakai default.");
   }
 
+  // Mirrors the backend validator: a known preference, or a theme id shape.
+  // A hand-edited settings.json must not be able to pin a nonsense id.
+  if (
+    typeof value.themePreference === "string" &&
+    (THEME_PREFERENCES.includes(value.themePreference as ThemePreference) ||
+      /^[a-z0-9-]{1,48}$/.test(value.themePreference))
+  ) {
+    config.themePreference = value.themePreference as ThemePreference;
+  } else if ("themePreference" in value) {
+    repaired = true;
+    diagnostics.push("Field settings themePreference tidak valid; memakai default.");
+  }
+
   return { config, repaired, diagnostics };
 }
 
@@ -326,6 +356,9 @@ export interface ILauncherState {
   adminPromptOpen: boolean;
   adminPromptPath: string;
   config: LauncherConfig;
+  themeStatus: string;
+  remoteTheme: { id: string; name: string } | null;
+  setThemePreference(preference: ThemePreference): Promise<void>;
   setStatus(message: string, diagnostic?: string): void;
   clearStatus(): void;
   showToast(message: string, kind?: ToastKind): void;
