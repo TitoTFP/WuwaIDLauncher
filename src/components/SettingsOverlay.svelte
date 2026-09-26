@@ -317,7 +317,16 @@
           </button>
         </div>
         {#if appState.themeStatus === 'unsigned'}
-          <p class="uid-note"><span aria-hidden="true">i</span> Tema daring ditolak: manifest tidak ditandatangani dengan kunci tepercaya. Tema Umum tetap dipakai.</p>
+          <p class="uid-note">
+            <span aria-hidden="true">i</span>
+            {#if appState.remoteTheme}
+              Manifest ditolak karena tidak ditandatangani dengan kunci tepercaya;
+              masih memakai tema tersimpan terakhir ({appState.remoteTheme.name}).
+            {:else}
+              Tema daring ditolak: manifest tidak ditandatangani dengan kunci tepercaya.
+              Tema Umum tetap dipakai.
+            {/if}
+          </p>
         {:else if appState.themeStatus === 'stale'}
           <p class="uid-note"><span aria-hidden="true">i</span> Tema daring gagal diperbarui; memakai tema tersimpan terakhir.</p>
         {/if}

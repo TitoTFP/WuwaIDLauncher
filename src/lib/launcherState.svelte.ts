@@ -556,7 +556,10 @@ export class LauncherState implements ILauncherState {
       themeRuntime.apply(null);
       return;
     }
-    if (!this.remoteTheme || payload.status !== "signed") {
+    // The backend only ever serves a theme it verified, so "stale" and
+    // "unsigned" still carry a trustworthy cached theme and must keep painting
+    // it. "general" is the only status that means there is nothing to apply.
+    if (!this.remoteTheme) {
       themeRuntime.apply(null);
       return;
     }

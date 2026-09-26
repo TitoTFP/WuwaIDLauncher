@@ -21,14 +21,51 @@ compiled into the binary (`TRUSTED_SIGNING_KEYS` in
 - the signature covers the exact manifest bytes that were fetched.
 
 Anything else — no signature, unknown key, bad signature, oversized payload,
-hash mismatch, network failure — leaves the general theme active. Media
-downloads keep their existing sha256-from-manifest trust model and are
-unaffected by any of this, so an unsigned manifest costs you theming, not
-functionality.
+hash mismatch, network failure — leaves whatever theme this launcher last
+verified in place, and says so in Settings. The bundled general theme is what
+ships when nothing verified is cached. Media downloads keep their existing
+sha256-from-manifest trust model and are unaffected by any of this, so an
+unsigned manifest costs you theming, not functionality.
+
+### Withdrawing a theme
+
+Set `"active": false` and the launcher drops the cached theme and returns to the
+general theme on its next launch. That is the only kill switch a shipped theme
+has — there is no other way to pull a look back without releasing the
+launcher, so use it.
+
+`active` is tri-state, and the distinction is deliberate. `"active": true`
+publishes. `"active": false` withdraws. Omitting it means the manifest never
+said which theme is live, which keeps the current theme — so a draft that
+forgets the field fails to appear rather than silently disappearing from every
+install. A missing `theme` block behaves the same way.
+
+Key removal is enforced the same way. The key id that signed a theme is
+recorded in the cache, and a cache whose key is no longer in the keyring is
+discarded on read. Removing a key therefore revokes every theme it signed, on
+launchers that never sync again. That does require a launcher release, since
+the keyring is compiled in.
 
 Key rotation is a keyring, not a single key: stage the incoming public key in
 the second slot, sign with it, and the rotation needs no launcher release.
-Removing a key does require a release.
+
+### A manifest with no theme block
+
+Silence is not a withdrawal. A manifest that omits the `theme` block entirely —
+including the manifests published before this feature existed — leaves the last
+verified theme in place, labelled as such in Settings. A theme block withdraws
+only when it says `"active": false`; one that never set `active` is a draft
+that has not been published, and behaves the same way. Without that
+distinction, publishing one manifest that happened to lack the block would
+silently reset every launcher's look.
+
+### Cache resets
+
+`reset_webview_cache` clears the whole cache directory, which includes the
+verified theme. It re-syncs immediately, so a reachable manifest restores the
+theme within seconds; offline, the launcher falls back to the general theme
+until the next sync. That is the expected behaviour of a cache reset, but it is
+worth knowing before reaching for it while troubleshooting something else.
 
 ## Authoring a theme
 
@@ -130,8 +167,10 @@ failed image cannot leave a blank backdrop.
 ## The stylesheet fragment
 
 `theme.css` is the escape hatch for anything the tokens cannot express. It is
-verified by sha256 like every other asset, capped at 128 KiB, and rejected if
-it contains `@import`, `expression(`, `javascript:`, or `</style`.
+verified by sha256 like every other asset and rejected if it contains
+`@import`, `expression(`, `javascript:`, or `</style`. It must also be 128 KiB
+or smaller; that ceiling is checked once the file has downloaded rather than
+mid-transfer, so an oversized fragment costs a download before it is refused.
 
 Write it scoped to the theme so it composes predictably:
 

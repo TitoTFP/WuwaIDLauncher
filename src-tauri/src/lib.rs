@@ -24,12 +24,11 @@ const PROCESS_HANDOFF_GRACE: Duration = Duration::from_secs(3);
 const MAX_UNRANGED_MEDIA_RESPONSE_BYTES: u64 = 1024 * 1024;
 
 /// Files the media protocol may serve, with the MIME type the webview needs.
-/// Chromium enforces MIME strictly for stylesheets and CSS background images,
-/// so serving these as `application/octet-stream` would silently drop them.
-const MEDIA_PROTOCOL_FILES: [(&str, &str); 4] = [
+/// Chromium enforces MIME strictly for CSS background images, so serving one
+/// as `application/octet-stream` would silently drop it.
+const MEDIA_PROTOCOL_FILES: [(&str, &str); 3] = [
     ("bgm.mp3", "audio/mpeg"),
     ("bg-video.mp4", "video/mp4"),
-    (engine::theme::THEME_CSS_FILE, "text/css; charset=utf-8"),
     (engine::theme::THEME_BACKGROUND_FILE, "image/jpeg"),
 ];
 const TRAY_ICON_ID: &str = "launcher-tray";
@@ -1464,7 +1463,7 @@ fn check_and_sync_media<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
                         // a later offline launch would read it back and apply it
                         // with no signature check at all.
                         manifest.theme = None;
-                        emit_theme_payload(&cache_dir, "", &app_handle, "unsigned");
+                        emit_theme_payload(&cache_dir, &app_handle, "unsigned");
                     }
                 }
 
@@ -1538,43 +1537,65 @@ fn check_and_sync_media<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     Ok(())
 }
 
-/// Activates the theme declared by a signed manifest, or leaves the last
-/// verified one in place. A theme failure never blocks media or the launcher.
+/// Applies what a signed manifest says about theming. A theme failure never
+/// blocks media or the launcher.
 async fn sync_remote_theme<R: Runtime>(
     cache_dir: &Path,
     theme: Option<&engine::theme::ThemeDefinition>,
     key_id: &str,
     app_handle: &AppHandle<R>,
 ) {
-    let Some(theme) = theme.filter(|theme| theme.active) else {
-        emit_theme_payload(cache_dir, key_id, app_handle, "general");
-        return;
-    };
-    match engine::theme::sync_theme(cache_dir, theme).await {
-        Ok(()) => {
-            log::info!("Tema aktif diperbarui: {}", theme.id);
-            emit_theme_payload(cache_dir, key_id, app_handle, "signed");
+    use engine::theme::ThemeAction;
+
+    match engine::theme::resolve_theme_action(theme) {
+        // The author turned the theme off. Turning it back on has to work on
+        // launchers that never re-download anything, so the cache goes.
+        ThemeAction::Withdraw => {
+            if let Err(error) = engine::theme::clear_cached_theme(cache_dir) {
+                log::warn!("Cache tema tidak dapat dibersihkan: {error}");
+            }
+            emit_theme_payload(cache_dir, app_handle, "general");
         }
-        Err(error) => {
-            log::warn!("Sinkronisasi tema gagal: {error}");
-            emit_theme_payload(cache_dir, key_id, app_handle, "stale");
+        // The manifest says nothing about themes, which is not the same as
+        // withdrawing one. Keep serving what was last verified and say so
+        // honestly rather than labelling a live theme "general".
+        ThemeAction::Keep => {
+            log::info!("Manifest tidak menyebut tema; memakai tema tersimpan terakhir.");
+            emit_theme_payload(cache_dir, app_handle, "stale");
+        }
+        ThemeAction::Activate => {
+            let Some(theme) = theme else {
+                return;
+            };
+            match engine::theme::sync_theme(cache_dir, theme, key_id).await {
+                Ok(()) => {
+                    log::info!("Tema aktif diperbarui: {}", theme.id);
+                    emit_theme_payload(cache_dir, app_handle, "signed");
+                }
+                Err(error) => {
+                    log::warn!("Sinkronisasi tema gagal: {error}");
+                    emit_theme_payload(cache_dir, app_handle, "stale");
+                }
+            }
         }
     }
 }
 
-fn emit_theme_payload<R: Runtime>(
-    cache_dir: &Path,
-    key_id: &str,
-    app_handle: &AppHandle<R>,
-    fallback_status: &str,
-) {
-    let mut payload = engine::theme::build_payload(cache_dir, key_id).unwrap_or_else(|error| {
-        log::warn!("Cache tema tidak dapat dibaca: {error}");
-        engine::theme::general_payload("general")
-    });
-    if payload.status != "signed" {
-        payload.status = fallback_status.to_string();
-    }
+fn emit_theme_payload<R: Runtime>(cache_dir: &Path, app_handle: &AppHandle<R>, status: &str) {
+    let mut payload = engine::theme::build_payload(cache_dir, engine::theme::TRUSTED_SIGNING_KEYS)
+        .unwrap_or_else(|error| {
+            log::warn!("Cache tema tidak dapat dibaca: {error}");
+            engine::theme::general_payload("general")
+        });
+    // The status describes what this launch actually established, not what the
+    // cache happens to contain. "stale" still serves the last verified theme —
+    // but only if there is one, so a launcher with nothing cached reports
+    // "general" rather than promising a saved theme that does not exist.
+    payload.status = if payload.id == engine::theme::GENERAL_THEME_ID {
+        engine::theme::GENERAL_THEME_ID.to_string()
+    } else {
+        status.to_string()
+    };
     let _ = app_handle.emit("onThemeReady", payload);
 }
 
@@ -1583,7 +1604,7 @@ fn emit_theme_payload<R: Runtime>(
 #[tauri::command]
 fn get_active_theme() -> Result<engine::theme::ThemePayload, String> {
     let cache_dir = get_appdata_dir().join("Cache");
-    engine::theme::build_payload(&cache_dir, "")
+    engine::theme::build_payload(&cache_dir, engine::theme::TRUSTED_SIGNING_KEYS)
 }
 
 #[tauri::command]
