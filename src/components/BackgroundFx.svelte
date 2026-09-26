@@ -1,6 +1,29 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { appState } from '../lib/launcherState.svelte';
+  import { themeRuntime } from '../lib/themeRuntime.svelte';
+
+  type ParticleTint = 'gold' | 'cyan';
+
+  interface Particle {
+    x: number;
+    y: number;
+    radius: number;
+    vx: number;
+    vy: number;
+    alpha: number;
+    dAlpha: number;
+    tint: ParticleTint;
+    r: number;
+    g: number;
+    b: number;
+  }
+
+  let particles = $state.raw<Particle[]>([]);
+  let particlesMounted = $state(false);
+  // Non-reactive on purpose: the effect below is what refreshes it, so the
+  // animation loop reads a plain array instead of a proxy.
+  let particlePalette = themeRuntime.particlePalette();
 
   let videoElement: HTMLVideoElement | null = $state(null);
   let canvasElement: HTMLCanvasElement | null = $state(null);
@@ -10,7 +33,26 @@
     stop: () => void;
   } | null = null;
 
+  $effect(() => {
+    // Reading the revision subscribes this effect to every applied theme. One
+    // read per theme, not two per particle: the loop below and `resetParticle`
+    // both consume the cached palette.
+    const revision = themeRuntime.revision;
+    particlePalette = themeRuntime.particlePalette();
+    if (!particlesMounted || revision === 0) return;
+    for (const p of particles) {
+      const [r, g, b] = p.tint === 'gold' ? particlePalette.gold : particlePalette.cyan;
+      p.r = r;
+      p.g = g;
+      p.b = b;
+    }
+  });
+
   let isVideoAllowed = $derived(!appState.launcherInTray);
+  // The theme background sits behind the synced video as its poster and
+  // fallback: it shows while the video loads, whenever the video is blocked,
+  // and whenever media is unavailable entirely.
+  let backgroundPoster = $derived(themeRuntime.backgroundUrl());
 
   $effect(() => {
     if (!videoElement) return;
@@ -65,24 +107,11 @@
     };
     window.addEventListener('resize', handleResize);
 
-    interface Particle {
-      x: number;
-      y: number;
-      radius: number;
-      vx: number;
-      vy: number;
-      alpha: number;
-      dAlpha: number;
-      r: number;
-      g: number;
-      b: number;
-    }
-
     const particleCount = 24;
-    const particles: Particle[] = [];
 
     function resetParticle(p: Partial<Particle> = {}): Particle {
-      const isGold = Math.random() > 0.4;
+      const tint: ParticleTint = Math.random() > 0.4 ? 'gold' : 'cyan';
+      const [r, g, b] = tint === 'gold' ? particlePalette.gold : particlePalette.cyan;
       return {
         x: p.x ?? Math.random() * width,
         y: p.y ?? Math.random() * height,
@@ -91,15 +120,15 @@
         vy: -Math.random() * 0.35 - 0.08,
         alpha: Math.random() * 0.35 + 0.1,
         dAlpha: (Math.random() > 0.5 ? 1 : -1) * (Math.random() * 0.004 + 0.001),
-        r: isGold ? 212 : 80,
-        g: isGold ? 176 : 195,
-        b: isGold ? 108 : 220,
+        r,
+        g,
+        b,
+        tint,
       };
     }
 
-    for (let i = 0; i < particleCount; i++) {
-      particles.push(resetParticle());
-    }
+    particles = Array.from({ length: particleCount }, () => resetParticle());
+    particlesMounted = true;
 
     let animFrameId: number | null = null;
 
@@ -159,6 +188,8 @@
 
     return () => {
       particleAnimationControl = null;
+      particles = [];
+      particlesMounted = false;
       stopRender();
       window.removeEventListener('resize', handleResize);
     };
@@ -173,6 +204,7 @@
     loop
     playsinline
     preload="metadata"
+    poster={backgroundPoster}
     onplaying={handleVideoPlaying}
     oncanplay={handleVideoPlaying}
     onerror={handleVideoError}

@@ -8,27 +8,27 @@
         3 3,
         var(--cursor-custom);
 
-    --bg-deep: #07191d;
-    --bg-panel: rgba(7, 26, 30, 0.84);
-    --bg-panel-solid: #0b252a;
-    --bg-hover: rgba(170, 214, 217, 0.1);
+    --bg-deep: rgb(var(--ink-rgb));
+    --bg-panel: rgb(var(--ink-rgb) / 0.84);
+    --bg-panel-solid: rgb(var(--panel-solid-rgb));
+    --bg-hover: rgb(var(--aqua-rgb) / 0.1);
 
-    --glass-border: rgba(184, 231, 230, 0.28);
+    --glass-border: rgb(var(--line-rgb) / 0.28);
 
-    --accent-gold: #e7d394;
-    --accent-peach: #d9a69c;
-    --accent-orange: #79cbd0;
+    --accent-gold: rgb(var(--gold-rgb));
+    --accent-peach: rgb(var(--peach-rgb));
+    --accent-orange: rgb(var(--cyan-rgb));
 
-    --text-1: #e0f0ef;
-    --text-2: rgba(240, 252, 250, 0.72);
-    --text-3: rgba(120, 147, 152, 0.78);
+    --text-1: rgb(var(--text-rgb));
+    --text-2: rgb(var(--text-soft-rgb) / 0.72);
+    --text-3: rgb(var(--text-mute-rgb) / 0.78);
 
-    --green: #a7cbb5;
-    --red: #e89588;
-    --blue: #aad6d9;
+    --green: rgb(var(--jade-rgb));
+    --red: rgb(var(--red-rgb));
+    --blue: rgb(var(--aqua-rgb));
 
-    --cream: #e0f0ef;
-    --cyan-accent: #79cbd0;
+    --cream: rgb(var(--text-rgb));
+    --cyan-accent: rgb(var(--cyan-rgb));
 
     --font-ui: "JetBrains Mono", "Segoe UI", monospace;
 
@@ -41,6 +41,86 @@
     --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
     --dur: 200ms;
     --dur-slow: 400ms;
+}
+
+/*
+ * Palette layer — the remote theming contract.
+ *
+ * Every colour in the launcher resolves through one of these `--*-rgb`
+ * triplets, so a theme repaints the whole UI by overriding triplets (and/or the
+ * semantic tokens above) instead of shipping a new launcher build. Alpha tints
+ * stay in the rules as `rgb(var(--x-rgb) / a)`, so one triplet change moves
+ * every shade derived from it.
+ */
+:root {
+    /* Core mist palette — the primary theme surface. */
+    --ink-rgb: 7 26 30;
+    --aqua-rgb: 170 214 217;
+    --cyan-rgb: 121 203 208;
+    --jade-rgb: 167 203 181;
+    --text-rgb: 224 240 239;
+    --gold-rgb: 231 211 148;
+    --line-rgb: 184 231 230;
+    --slate-rgb: 97 125 130;
+
+    /* Gradient stops for the lantern sweep. */
+    --mist-grad-1-rgb: 214 240 231;
+    --mist-grad-2-rgb: 166 215 208;
+    --mist-grad-3-rgb: 217 204 145;
+
+    /* Ink and surface darks. */
+    --ink-soft-rgb: 7 25 29;
+    --ink-mid-rgb: 4 24 27;
+    --ink-mid-2-rgb: 4 20 23;
+    --ink-deep-rgb: 3 18 21;
+    --ink-deepest-rgb: 1 16 17;
+    --panel-solid-rgb: 11 37 42;
+    --jade-deep-rgb: 35 75 69;
+    --shadow-rgb: 18 16 16;
+    --ink-black-rgb: 17 17 17;
+    --ink-black-2-rgb: 5 5 5;
+    --black-rgb: 0 0 0;
+
+    /* Navy surfaces — historical drift, kept verbatim so themes can reach them. */
+    --navy-rgb: 14 18 52;
+    --navy-scrim-rgb: 5 7 28;
+    --navy-deep-rgb: 4 12 17;
+
+    /* Golds — the launcher carries four, also drift; see docs/theming.md. */
+    --gold-bright-rgb: 244 212 138;
+    --gold-raw-rgb: 212 176 108;
+    --gold-deep-rgb: 232 196 90;
+
+    /* Text and near-whites. */
+    --text-soft-rgb: 240 252 250;
+    --text-mute-rgb: 120 147 152;
+    --white-rgb: 255 255 255;
+    --near-white-rgb: 236 255 249;
+    --near-white-2-rgb: 230 255 250;
+    --near-white-3-rgb: 220 250 244;
+    --warm-white-rgb: 255 245 241;
+    --silver-rgb: 204 204 204;
+
+    /* State colours. */
+    --red-rgb: 232 149 136;
+    --red-strong-rgb: 216 86 74;
+    --red-soft-rgb: 248 113 113;
+    --red-hot-rgb: 255 0 60;
+    --red-deep-rgb: 157 54 55;
+    --green-rgb: 122 202 160;
+    --green-tint-rgb: 200 232 176;
+    --green-tint-2-rgb: 213 240 192;
+    --blue-tint-rgb: 184 208 240;
+    --blue-tint-2-rgb: 200 221 248;
+    --pink-rgb: 255 107 157;
+    --pink-tint-rgb: 216 176 192;
+    --peach-rgb: 217 166 156;
+
+    /* Background image swap point; the bundled general theme owns this value. */
+    --bg-image: url("/images/bg-default.jpg");
+    /* Canvas particle tints — CSS cannot reach <canvas> fills. */
+    --particle-gold-rgb: 212 176 108;
+    --particle-cyan-rgb: 80 195 220;
 }
 
 *,
@@ -86,18 +166,18 @@ input {
     background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-    background: rgba(121, 203, 208, 0.32);
+    background: rgb(var(--cyan-rgb) / 0.32);
     border-radius: 0px;
 }
 ::-webkit-scrollbar-thumb:hover {
-    background: rgba(167, 203, 181, 0.62);
+    background: rgb(var(--jade-rgb) / 0.62);
 }
 
 .bg-layer {
     position: fixed;
     inset: 0;
     z-index: 0;
-    background: url("/images/bg-default.jpg") center / cover no-repeat;
+    background: var(--bg-image, url("/images/bg-default.jpg")) center / cover no-repeat;
     isolation: isolate;
     transform-origin: center center;
 }
@@ -133,18 +213,18 @@ body.game-runtime-readonly a {
     background:
         radial-gradient(
             ellipse 54% 48% at 52% 51%,
-            rgba(220, 250, 244, 0.1) 0%,
+            rgb(var(--near-white-3-rgb) / 0.1) 0%,
             transparent 72%
         ),
         linear-gradient(
             90deg,
-            rgba(4, 24, 27, 0.62) 0%,
+            rgb(var(--ink-mid-rgb) / 0.62) 0%,
             transparent 30%,
             transparent 70%,
-            rgba(4, 24, 27, 0.7) 100%
+            rgb(var(--ink-mid-rgb) / 0.7) 100%
         ),
-        linear-gradient(0deg, rgba(3, 18, 21, 0.72) 0%, transparent 26%),
-        linear-gradient(180deg, rgba(4, 20, 23, 0.58) 0%, transparent 25%);
+        linear-gradient(0deg, rgb(var(--ink-deep-rgb) / 0.72) 0%, transparent 26%),
+        linear-gradient(180deg, rgb(var(--ink-mid-2-rgb) / 0.58) 0%, transparent 25%);
     pointer-events: none;
 }
 
@@ -154,7 +234,7 @@ body.game-runtime-readonly a {
     background: linear-gradient(
         to bottom,
         transparent 50%,
-        rgba(230, 255, 250, 0.06) 51%,
+        rgb(var(--near-white-2-rgb) / 0.06) 51%,
         transparent 51%
     );
     background-size: 100% 4px;
@@ -167,7 +247,7 @@ body.game-runtime-readonly a {
     content: "";
     position: absolute;
     inset: 0;
-    background: rgba(18, 16, 16, 0.05);
+    background: rgb(var(--shadow-rgb) / 0.05);
     opacity: 0;
     animation: crtFlicker 0.15s infinite;
     pointer-events: none;
@@ -205,8 +285,8 @@ body.game-runtime-readonly a {
     padding: 0 var(--edge-gap);
     background: linear-gradient(
         180deg,
-        rgba(5, 5, 5, 0.65) 0%,
-        rgba(5, 5, 5, 0.2) 80%,
+        rgb(var(--ink-black-2-rgb) / 0.65) 0%,
+        rgb(var(--ink-black-2-rgb) / 0.2) 80%,
         transparent 100%
     );
     cursor: var(--cursor-custom);
@@ -242,7 +322,7 @@ body.game-runtime-readonly a {
     height: 28px;
     border-radius: 0px;
     clip-path: polygon(15% 0, 100% 0%, 85% 100%, 0% 100%);
-    color: rgba(255, 255, 255, 0.5);
+    color: rgb(var(--white-rgb) / 0.5);
     transition:
         color var(--dur),
         background var(--dur),
@@ -251,14 +331,14 @@ body.game-runtime-readonly a {
 }
 .top-bar__btn:hover {
     color: var(--text-1);
-    background: rgba(212, 176, 108, 0.15);
-    box-shadow: 0 0 12px rgba(212, 176, 108, 0.2);
+    background: rgb(var(--gold-raw-rgb) / 0.15);
+    box-shadow: 0 0 12px rgb(var(--gold-raw-rgb) / 0.2);
     transform: scale(1.08);
 }
 .top-bar__btn--close:hover {
-    color: #fff;
-    background: #d8564a;
-    box-shadow: 0 0 16px rgba(255, 0, 60, 0.4);
+    color: rgb(var(--white-rgb));
+    background: rgb(var(--red-strong-rgb));
+    box-shadow: 0 0 16px rgb(var(--red-hot-rgb) / 0.4);
 }
 .top-bar__sep {
     width: 1px;
@@ -266,7 +346,7 @@ body.game-runtime-readonly a {
     background: linear-gradient(
         180deg,
         transparent,
-        rgba(212, 176, 108, 0.3),
+        rgb(var(--gold-raw-rgb) / 0.3),
         transparent
     );
     margin: 0 4px;

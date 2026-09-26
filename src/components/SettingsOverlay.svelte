@@ -7,7 +7,7 @@
     isValidUidText,
     MAX_UID_TEXT_LENGTH,
   } from '../lib/types.ts';
-  import type { InstallMethod, UidMode } from '../lib/types.ts';
+  import type { InstallMethod, ThemePreference, UidMode } from '../lib/types.ts';
 
   interface Props {
     open?: boolean;
@@ -46,6 +46,8 @@
   );
 
   let csharpEnvironmentDisabled = $derived(appState.launching || appState.gameRunning);
+
+  let themeDisabled = $derived(appState.launching || appState.gameRunning);
 
   function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
@@ -99,6 +101,17 @@
 
   function selectUidMode(mode: UidMode) {
     applyUidSelection(mode, appState.config.uidText);
+  }
+
+  async function selectThemePreference(preference: ThemePreference) {
+    if (themeDisabled) return;
+    if (appState.config.themePreference === preference) return;
+    try {
+      await appState.setThemePreference(preference);
+      appState.clearStatus();
+    } catch (error) {
+      appState.showToast(`Gagal mengubah tema.\n${errorMessage(error)}`, 'err');
+    }
   }
 
   function handleCustomUidInput(event: Event) {
@@ -267,6 +280,49 @@
         </div>
       </section>
 
+      <section class="settings-section" aria-labelledby="themeHeading">
+        <h2 class="section-title" id="themeHeading">TEMA TAMPILAN</h2>
+        <div class="uid-mode-grid" role="group" aria-label="Tema tampilan">
+          <button
+            class="uid-mode-card"
+            class:active={appState.config.themePreference === 'auto'}
+            aria-pressed={appState.config.themePreference === 'auto'}
+            disabled={themeDisabled}
+            onclick={() => selectThemePreference('auto')}
+            type="button"
+          >
+            <span class="uid-mode-card__top">
+              <span class="uid-mode-card__title">OTOMATIS</span>
+              <span class="uid-mode-card__mark" aria-hidden="true">✓</span>
+            </span>
+            <span class="uid-mode-card__desc">
+              {appState.remoteTheme
+                ? `Ikuti ${appState.remoteTheme.name}`
+                : 'Ikuti tema versi game terbaru'}
+            </span>
+          </button>
+          <button
+            class="uid-mode-card"
+            class:active={appState.config.themePreference === 'general'}
+            aria-pressed={appState.config.themePreference === 'general'}
+            disabled={themeDisabled}
+            onclick={() => selectThemePreference('general')}
+            type="button"
+          >
+            <span class="uid-mode-card__top">
+              <span class="uid-mode-card__title">UMUM</span>
+              <span class="uid-mode-card__mark" aria-hidden="true">✓</span>
+            </span>
+            <span class="uid-mode-card__desc">Selalu pakai desain bawaan launcher</span>
+          </button>
+        </div>
+        {#if appState.themeStatus === 'unsigned'}
+          <p class="uid-note"><span aria-hidden="true">i</span> Tema daring ditolak: manifest tidak ditandatangani dengan kunci tepercaya. Tema Umum tetap dipakai.</p>
+        {:else if appState.themeStatus === 'stale'}
+          <p class="uid-note"><span aria-hidden="true">i</span> Tema daring gagal diperbarui; memakai tema tersimpan terakhir.</p>
+        {/if}
+      </section>
+
       <footer class="settings-footer">
         <span class="save-note"><span class="save-dot" aria-hidden="true"></span>Perubahan tersimpan otomatis</span>
         <button class="done-button" onclick={() => onclose?.()} type="button">SELESAI</button>
@@ -283,7 +339,7 @@
     display: grid;
     place-items: center;
     padding: calc(var(--top-h) + 12px) 24px 24px;
-    background: rgba(5, 7, 28, 0.7);
+    background: rgb(var(--navy-scrim-rgb) / 0.7);
     backdrop-filter: blur(5px);
     -webkit-backdrop-filter: blur(5px);
     -webkit-app-region: no-drag;
@@ -295,10 +351,10 @@
     max-height: calc(100vh - var(--top-h) - 36px);
     overflow: auto;
     padding: 24px 28px 20px;
-    background: rgba(14, 18, 52, 0.98);
-    border: 1px solid rgba(244, 212, 138, 0.58);
+    background: rgb(var(--navy-rgb) / 0.98);
+    border: 1px solid rgb(var(--gold-bright-rgb) / 0.58);
     clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% calc(100% - 18px), calc(100% - 18px) 100%, 0 100%);
-    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.72), 0 0 34px rgba(244, 212, 138, 0.12), inset 0 1px rgba(255, 255, 255, 0.06);
+    box-shadow: 0 24px 70px rgb(var(--black-rgb) / 0.72), 0 0 34px rgb(var(--gold-bright-rgb) / 0.12), inset 0 1px rgb(var(--white-rgb) / 0.06);
     animation: settings-modal-in 300ms var(--ease) both;
   }
 
@@ -307,7 +363,7 @@
   }
 
   .settings-modal::-webkit-scrollbar-thumb {
-    background: rgba(212, 176, 108, 0.45);
+    background: rgb(var(--gold-raw-rgb) / 0.45);
   }
 
   .settings-header {
@@ -315,7 +371,7 @@
     align-items: center;
     gap: 13px;
     padding-bottom: 18px;
-    border-bottom: 1px solid rgba(212, 176, 108, 0.2);
+    border-bottom: 1px solid rgb(var(--gold-raw-rgb) / 0.2);
   }
 
   .settings-icon {
@@ -325,8 +381,8 @@
     height: 42px;
     flex: 0 0 42px;
     color: var(--accent-gold);
-    background: rgba(212, 176, 108, 0.1);
-    border: 1px solid rgba(212, 176, 108, 0.45);
+    background: rgb(var(--gold-raw-rgb) / 0.1);
+    border: 1px solid rgb(var(--gold-raw-rgb) / 0.45);
     clip-path: polygon(7px 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%, 0 7px);
   }
 
@@ -350,7 +406,7 @@
   }
 
   .settings-close:hover {
-    color: #fff;
+    color: rgb(var(--white-rgb));
     background: var(--red);
   }
 
@@ -369,8 +425,8 @@
 
   .uid-editor {
     padding: 14px;
-    background: rgba(255, 255, 255, 0.025);
-    border: 1px solid rgba(212, 176, 108, 0.24);
+    background: rgb(var(--white-rgb) / 0.025);
+    border: 1px solid rgb(var(--gold-raw-rgb) / 0.24);
     clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
   }
 
@@ -400,16 +456,16 @@
     padding: 8px 10px;
     color: var(--text-2);
     text-align: left;
-    background: rgba(255, 255, 255, 0.02);
-    border: 1px solid rgba(212, 176, 108, 0.2);
+    background: rgb(var(--white-rgb) / 0.02);
+    border: 1px solid rgb(var(--gold-raw-rgb) / 0.2);
     clip-path: polygon(7px 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%, 0 7px);
     transition: background var(--dur), border-color var(--dur), color var(--dur), transform var(--dur);
   }
 
   .uid-mode-card:hover:not(:disabled) {
     color: var(--text-1);
-    background: rgba(212, 176, 108, 0.07);
-    border-color: rgba(212, 176, 108, 0.5);
+    background: rgb(var(--gold-raw-rgb) / 0.07);
+    border-color: rgb(var(--gold-raw-rgb) / 0.5);
     transform: translateY(-1px);
   }
 
@@ -419,10 +475,10 @@
   }
 
   .uid-mode-card.active {
-    color: #111;
-    background: linear-gradient(135deg, #aad6d9, #e7d394);
+    color: rgb(var(--ink-black-rgb));
+    background: linear-gradient(135deg, rgb(var(--aqua-rgb)), rgb(var(--gold-rgb)));
     border-color: var(--accent-gold);
-    box-shadow: 0 8px 20px rgba(244, 212, 138, 0.12);
+    box-shadow: 0 8px 20px rgb(var(--gold-bright-rgb) / 0.12);
   }
 
   .uid-mode-card__top {
@@ -448,9 +504,22 @@
     font-size: 10px;
   }
 
+  .uid-mode-card__desc {
+    display: block;
+    margin-top: 4px;
+    color: var(--text-3);
+    font-size: 9px;
+    line-height: 1.4;
+    letter-spacing: 0.02em;
+  }
+
+  .uid-mode-card.active .uid-mode-card__desc {
+    color: rgb(var(--ink-black-rgb) / 0.72);
+  }
+
   .uid-mode-card.active .uid-mode-card__mark {
-    color: #111;
-    background: rgba(255, 255, 255, 0.28);
+    color: rgb(var(--ink-black-rgb));
+    background: rgb(var(--white-rgb) / 0.28);
   }
 
   .uid-input-field {
@@ -464,14 +533,14 @@
     height: 40px;
     margin-top: 6px;
     padding: 0 11px;
-    background: rgba(4, 12, 17, 0.5);
-    border: 1px solid rgba(212, 176, 108, 0.38);
+    background: rgb(var(--navy-deep-rgb) / 0.5);
+    border: 1px solid rgb(var(--gold-raw-rgb) / 0.38);
     transition: border-color var(--dur), box-shadow var(--dur);
   }
 
   .uid-input-shell:focus-within {
     border-color: var(--accent-gold);
-    box-shadow: 0 0 14px rgba(244, 212, 138, 0.1);
+    box-shadow: 0 0 14px rgb(var(--gold-bright-rgb) / 0.1);
   }
 
   .uid-input {
@@ -496,7 +565,7 @@
   .uid-preview {
     margin-top: 12px;
     padding: 10px 11px;
-    background: rgba(121, 203, 208, 0.07);
+    background: rgb(var(--cyan-rgb) / 0.07);
     border-left: 2px solid var(--accent-orange);
   }
 
@@ -552,24 +621,24 @@
     padding: 13px 15px;
     color: var(--text-2);
     text-align: left;
-    background: rgba(255, 255, 255, 0.025);
-    border: 1px solid rgba(212, 176, 108, 0.24);
+    background: rgb(var(--white-rgb) / 0.025);
+    border: 1px solid rgb(var(--gold-raw-rgb) / 0.24);
     clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
     transition: background var(--dur), border-color var(--dur), color var(--dur), transform var(--dur);
   }
 
   .method-card:hover:not(:disabled) {
     color: var(--text-1);
-    background: rgba(212, 176, 108, 0.1);
-    border-color: rgba(212, 176, 108, 0.65);
+    background: rgb(var(--gold-raw-rgb) / 0.1);
+    border-color: rgb(var(--gold-raw-rgb) / 0.65);
     transform: translateY(-1px);
   }
 
   .method-card.active {
-    color: #111;
+    color: rgb(var(--ink-black-rgb));
     background: var(--accent-gold);
     border-color: var(--accent-gold);
-    box-shadow: 0 8px 22px rgba(244, 212, 138, 0.18);
+    box-shadow: 0 8px 22px rgb(var(--gold-bright-rgb) / 0.18);
   }
 
   .method-card:disabled {
@@ -599,8 +668,8 @@
   }
 
   .method-card.active .method-card__check {
-    color: #111;
-    background: rgba(0, 0, 0, 0.08);
+    color: rgb(var(--ink-black-rgb));
+    background: rgb(var(--black-rgb) / 0.08);
   }
 
   .method-card__desc {
@@ -625,16 +694,16 @@
     min-height: 50px;
     padding: 9px 14px;
     color: var(--text-1);
-    background: rgba(255, 255, 255, 0.025);
-    border: 1px solid rgba(212, 176, 108, 0.18);
+    background: rgb(var(--white-rgb) / 0.025);
+    border: 1px solid rgb(var(--gold-raw-rgb) / 0.18);
     clip-path: polygon(7px 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%, 0 7px);
     cursor: var(--cursor-select);
     transition: background var(--dur), border-color var(--dur);
   }
 
   .option-row:hover {
-    background: rgba(212, 176, 108, 0.07);
-    border-color: rgba(212, 176, 108, 0.4);
+    background: rgb(var(--gold-raw-rgb) / 0.07);
+    border-color: rgb(var(--gold-raw-rgb) / 0.4);
   }
 
   .option-name {
@@ -661,8 +730,8 @@
     position: relative;
     width: 100%;
     height: 100%;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: rgb(var(--white-rgb) / 0.1);
+    border: 1px solid rgb(var(--white-rgb) / 0.2);
     transition: background var(--dur), border-color var(--dur), box-shadow var(--dur);
   }
 
@@ -678,18 +747,18 @@
   }
 
   .settings-switch input:checked + .switch-track {
-    background: rgba(244, 212, 138, 0.85);
+    background: rgb(var(--gold-bright-rgb) / 0.85);
     border-color: var(--accent-gold);
-    box-shadow: 0 0 12px rgba(244, 212, 138, 0.24);
+    box-shadow: 0 0 12px rgb(var(--gold-bright-rgb) / 0.24);
   }
 
   .settings-switch input:checked + .switch-track::after {
-    background: #111;
+    background: rgb(var(--ink-black-rgb));
     transform: translateX(19px);
   }
 
   .settings-switch input:focus-visible + .switch-track {
-    outline: 2px solid #fff;
+    outline: 2px solid rgb(var(--white-rgb));
     outline-offset: 3px;
   }
 
@@ -700,7 +769,7 @@
     gap: 14px;
     margin-top: 22px;
     padding-top: 15px;
-    border-top: 1px solid rgba(212, 176, 108, 0.2);
+    border-top: 1px solid rgb(var(--gold-raw-rgb) / 0.2);
   }
 
   .save-note {
@@ -715,13 +784,13 @@
     width: 6px;
     height: 6px;
     background: var(--green);
-    box-shadow: 0 0 8px rgba(122, 202, 160, 0.65);
+    box-shadow: 0 0 8px rgb(var(--green-rgb) / 0.65);
   }
 
   .done-button {
     min-width: 100px;
     padding: 10px 18px;
-    color: #111;
+    color: rgb(var(--ink-black-rgb));
     background: var(--accent-gold);
     clip-path: polygon(7px 0, 100% 0, calc(100% - 7px) 100%, 0 100%);
     font-size: 11px;
@@ -731,7 +800,7 @@
   }
 
   .done-button:hover {
-    background: #fff;
+    background: rgb(var(--white-rgb));
     transform: translateY(-1px);
   }
 

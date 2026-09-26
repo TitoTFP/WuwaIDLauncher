@@ -56,7 +56,7 @@
     display: grid;
     place-items: center;
     padding: 28px;
-    background: rgba(3, 18, 21, 0.78);
+    background: rgb(var(--ink-deep-rgb) / 0.78);
     backdrop-filter: blur(7px) saturate(1.08);
     -webkit-backdrop-filter: blur(7px) saturate(1.08);
   }
@@ -70,7 +70,7 @@
     overflow: hidden;
     margin: 0;
     color: var(--text-1);
-    background: rgba(7, 26, 30, 0.96);
+    background: rgb(var(--ink-rgb) / 0.96);
     border: 1px solid var(--mist-line-strong);
     border-radius: 0;
     clip-path: polygon(
@@ -82,9 +82,9 @@
       0 100%
     );
     box-shadow:
-      0 24px 70px rgba(0, 0, 0, 0.72),
-      0 0 34px rgba(121, 203, 208, 0.14),
-      inset 0 1px 0 rgba(236, 255, 249, 0.08);
+      0 24px 70px rgb(var(--black-rgb) / 0.72),
+      0 0 34px rgb(var(--cyan-rgb) / 0.14),
+      inset 0 1px 0 rgb(var(--near-white-rgb) / 0.08);
   }
 
   .patch-notes-modal::after {
@@ -95,7 +95,7 @@
     height: 1px;
     content: '';
     background: var(--mist-lantern);
-    box-shadow: 0 0 8px rgba(231, 211, 148, 0.42);
+    box-shadow: 0 0 8px rgb(var(--gold-rgb) / 0.42);
     pointer-events: none;
   }
 
@@ -145,14 +145,14 @@
     border: 1px solid var(--mist-line);
     border-radius: 0;
     clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
-    background: rgba(170, 214, 217, 0.06);
+    background: rgb(var(--aqua-rgb) / 0.06);
     color: var(--mist-aqua);
     font-size: 22px;
     cursor: var(--cursor-select);
   }
 
   .patch-notes-modal__close:hover {
-    background: rgba(170, 214, 217, 0.14);
+    background: rgb(var(--aqua-rgb) / 0.14);
     color: var(--mist-jade);
   }
 
@@ -181,7 +181,7 @@
   }
 
   .patch-notes-modal__actions button {
-    border: 1px solid rgba(231, 211, 148, 0.78);
+    border: 1px solid rgb(var(--gold-rgb) / 0.78);
     border-radius: 0;
     clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
     padding: 9px 18px;
@@ -193,7 +193,7 @@
 
   .patch-notes-modal__actions button:hover {
     filter: brightness(1.06);
-    box-shadow: 0 0 18px rgba(170, 214, 217, 0.3);
+    box-shadow: 0 0 18px rgb(var(--aqua-rgb) / 0.3);
   }
 
   @media (max-width: 600px) {

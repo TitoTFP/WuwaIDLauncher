@@ -34,6 +34,7 @@ Dibangun ulang menggunakan **Tauri v2**, **Rust**, dan **Svelte 5** agar tetap c
 - 🎮 **Launch game langsung** dari launcher
 - ⚙️ Pengaturan **Custom UID, DirectX 11, dan C# Environment**
 - 🎬 Background, BGM, dan release notes dinamis
+- 🎨 **Tema tampilan dinamis** — desain per versi game bisa diganti tanpa rilis launcher baru
 - 💤 Otomatis masuk **system tray** saat game berjalan
 - 🧰 Pesan error peluncuran ringkas untuk membantu troubleshooting
 
@@ -92,6 +93,18 @@ Build binary Windows MSVC dari Linux x64:
 
 ```bash
 npm run launcher-build:msvc
+```
+
+### Tema tampilan dinamis
+
+Tema bawaan (Umum) selalu jadi fallback. Tema per versi game dikirim lewat
+`assets.json` dan hanya dipakai bila manifest-nya bertanda tangan Ed25519
+dengan kunci yang tertanam di binary. Cara menulis dan menandatangani tema:
+[`docs/theming.md`](docs/theming.md).
+
+```bash
+node scripts/sign-manifest.mjs --generate   # sekali, kunci privat di scripts/keys/ (git-ignored)
+node scripts/sign-manifest.mjs --in Web/assets.json
 ```
 
 ### Tech Stack

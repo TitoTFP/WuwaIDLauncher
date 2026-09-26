@@ -12,6 +12,7 @@ async fn failed_media_sync_emits_status_without_media_ready() {
 
     let manifest = AssetManifest {
         update_date: None,
+        theme: None,
         assets: vec![AssetEntry {
             name: "bgm.mp3".to_string(),
             url: "http://127.0.0.1:1/missing.mp3".to_string(),
@@ -41,6 +42,7 @@ async fn missing_required_media_emits_error_without_media_ready() {
 
     let manifest = AssetManifest {
         update_date: None,
+        theme: None,
         assets: Vec::new(),
     };
 

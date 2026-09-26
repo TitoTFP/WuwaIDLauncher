@@ -1,5 +1,6 @@
 import { bridge, setupEventBridge } from "./bridge";
 import { isTauriRuntime } from "./runtime";
+import { mediaAssetUrl, themeRuntime } from "./themeRuntime.svelte";
 import {
   compactText,
   createGameExitDeduper,
@@ -13,6 +14,7 @@ import {
   isValidUidText,
   launcherReleaseNotesSeenStorageKey,
   normalizeLauncherConfig,
+  type ThemePreference,
 } from "./types";
 import type {
   ILauncherState,
@@ -29,6 +31,7 @@ import type {
   ToastKind,
   ToastMessage,
   UidMode,
+  ThemePayload,
 } from "./types";
 
 interface ActiveOperation {
@@ -126,6 +129,12 @@ export class LauncherState implements ILauncherState {
   // Live Assets & Release Notes
   bgmUrl: string = $state<string>("");
   videoUrl: string = $state<string>("");
+  themeStatus: string = $state<string>("general");
+  remoteTheme: { id: string; name: string } | null = $state<{
+    id: string;
+    name: string;
+  } | null>(null);
+  private signedTheme: ThemePayload | null = null;
   updateDate: string = $state<string>("");
   releaseNotes: ReleaseNotePayload | null = $state<ReleaseNotePayload | null>(
     null,
@@ -530,6 +539,73 @@ export class LauncherState implements ILauncherState {
     }
   }
 
+  /**
+   * Applies a verified theme payload, honouring the user's preference. The
+   * general theme is always available as a fallback, so a payload that never
+   * arrives, arrives unsigned, or is pinned off leaves the bundled look intact.
+   */
+  private applyThemePayload(payload: ThemePayload): void {
+    themeRuntime.setPreference(this.config.themePreference);
+    this.themeStatus = payload.status || "general";
+    this.remoteTheme =
+      payload.id && payload.id !== "general"
+        ? { id: payload.id, name: payload.name }
+        : null;
+
+    if (this.config.themePreference === "general") {
+      themeRuntime.apply(null);
+      return;
+    }
+    if (!this.remoteTheme || payload.status !== "signed") {
+      themeRuntime.apply(null);
+      return;
+    }
+    themeRuntime.apply({
+      id: payload.id,
+      name: payload.name,
+      tokens: payload.tokens,
+      css: payload.css,
+      // The background is served from the verified local cache, never fetched
+      // from the network by the webview.
+      backgroundUrl: payload.backgroundFile
+        ? mediaAssetUrl(payload.backgroundFile)
+        : "",
+    });
+  }
+
+  async refreshTheme(): Promise<void> {
+    if (!isTauriRuntime()) return;
+    this.signedTheme = await bridge.getActiveTheme();
+    this.applyThemePayload(this.signedTheme);
+  }
+
+  async setThemePreference(preference: ThemePreference): Promise<void> {
+    if (this.config.themePreference === preference) return;
+    const previous = this.config.themePreference;
+    this.config.themePreference = preference;
+    if (!isTauriRuntime()) {
+      this.applyThemePayload(
+        this.signedTheme ?? {
+          id: "general",
+          name: "Tema Umum",
+          keyId: "",
+          tokens: {},
+          css: "",
+          backgroundFile: "",
+          status: "general",
+        },
+      );
+      return;
+    }
+    try {
+      await this.saveConfig();
+      if (this.signedTheme) this.applyThemePayload(this.signedTheme);
+    } catch (error) {
+      this.config.themePreference = previous;
+      throw error;
+    }
+  }
+
   async forceQuitGame(): Promise<boolean> {
     if (!isTauriRuntime()) return false;
 
@@ -849,6 +925,10 @@ export class LauncherState implements ILauncherState {
       onUpdateDate: (dateStr) => {
         this.updateDate = dateStr;
       },
+      onThemeReady: (payload) => {
+        this.signedTheme = payload;
+        this.applyThemePayload(payload);
+      },
       onVHReleaseNotes: (payload) => {
         this.releaseNotes = payload;
         this.releaseNotesLoading = false;
@@ -875,6 +955,15 @@ export class LauncherState implements ILauncherState {
       return;
     }
     this.eventUnlisteners = unlisteners;
+
+    // Paint the last verified theme before the network sync starts, so the
+    // launcher never flashes the general theme on the way to a themed one.
+    try {
+      await this.refreshTheme();
+    } catch {
+      // Theming is optional; the bundled general theme stays active.
+    }
+    if (!isCurrent()) return;
 
     try {
       await this.startMediaSync();

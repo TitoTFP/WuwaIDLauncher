@@ -2,9 +2,15 @@ use crate::engine::downloader::{
     download_file, read_response_body_limited, replace_file_atomically, verify_sha256,
     DownloadProgress,
 };
+use crate::engine::theme::ThemeDefinition;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+/// The two assets the launcher always needs. Every media helper derives its
+/// work from this list so a new asset cannot be added in one place only.
+pub const MEDIA_ASSET_NAMES: [&str; 2] = ["bgm.mp3", "bg-video.mp4"];
 
 pub const ASSETS_URL: &str =
     "https://raw.githubusercontent.com/TitoTFP/WuwaID/refs/heads/main/Web/assets.json";
@@ -21,6 +27,9 @@ pub struct AssetEntry {
 pub struct AssetManifest {
     pub update_date: Option<String>,
     pub assets: Vec<AssetEntry>,
+    /// Optional remote theme. Honoured only when the manifest is signed.
+    #[serde(default)]
+    pub theme: Option<ThemeDefinition>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,14 +44,23 @@ pub fn parse_manifest(json_str: &str) -> Result<AssetManifest, String> {
         .map_err(|e| format!("Gagal mem-parsing assets.json manifest: {}", e))
 }
 
-fn validate_media_asset_url(asset: &AssetEntry) -> Result<(), String> {
+pub fn required_asset<'a>(
+    manifest: &'a AssetManifest,
+    name: &str,
+) -> Result<&'a AssetEntry, String> {
+    manifest
+        .assets
+        .iter()
+        .find(|asset| asset.name == name)
+        .ok_or_else(|| format!("Manifest tidak memuat aset wajib {name}"))
+}
+
+/// Rejects anything that is not an official asset under the launcher repository
+/// (or a loopback fixture during tests), so a manifest can never point the
+/// downloader at an arbitrary host.
+pub fn validate_asset_url(asset: &AssetEntry, suffixes: (&str, &str)) -> Result<(), String> {
     let url = reqwest::Url::parse(&asset.url)
         .map_err(|_| format!("URL media {} tidak valid.", asset.name))?;
-    let expected_suffix = match asset.name.as_str() {
-        "bgm.mp3" => ("/Audio/bgm.mp3", "/bgm.mp3"),
-        "bg-video.mp4" => ("/Video/bg-video.mp4", "/bg-video.mp4"),
-        _ => return Err(format!("Nama aset media tidak dikenal: {}", asset.name)),
-    };
     let has_safe_authority = url.username().is_empty()
         && url.password().is_none()
         && url.query().is_none()
@@ -51,10 +69,10 @@ fn validate_media_asset_url(asset: &AssetEntry) -> Result<(), String> {
         && url.host_str() == Some("raw.githubusercontent.com")
         && url.port().is_none()
         && url.path().starts_with("/TitoTFP/WuwaID/")
-        && url.path().ends_with(expected_suffix.0);
+        && url.path().ends_with(suffixes.0);
     let is_loopback_test_asset = url.scheme() == "http"
         && matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
-        && url.path().ends_with(expected_suffix.1);
+        && url.path().ends_with(suffixes.1);
     if !has_safe_authority || (!is_official_asset && !is_loopback_test_asset) {
         return Err(format!(
             "URL media {} bukan asset GitHub resmi yang diizinkan.",
@@ -64,7 +82,22 @@ fn validate_media_asset_url(asset: &AssetEntry) -> Result<(), String> {
     Ok(())
 }
 
-pub async fn fetch_manifest(client: &reqwest::Client, url: &str) -> Result<AssetManifest, String> {
+fn validate_media_asset_url(asset: &AssetEntry) -> Result<(), String> {
+    let suffixes = match asset.name.as_str() {
+        "bgm.mp3" => ("/Audio/bgm.mp3", "/bgm.mp3"),
+        "bg-video.mp4" => ("/Video/bg-video.mp4", "/bg-video.mp4"),
+        _ => return Err(format!("Nama aset media tidak dikenal: {}", asset.name)),
+    };
+    validate_asset_url(asset, suffixes)
+}
+
+/// Returns the raw manifest bytes alongside the parsed form. Signature
+/// verification must run against these exact bytes, before anything in the
+/// manifest is trusted.
+pub async fn fetch_manifest_bytes(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<(Vec<u8>, AssetManifest), String> {
     let resp = client
         .get(url)
         .header("User-Agent", "WuwaIDLauncher-Tauri")
@@ -88,17 +121,23 @@ pub async fn fetch_manifest(client: &reqwest::Client, url: &str) -> Result<Asset
     let text = String::from_utf8(body.to_vec())
         .map_err(|e| format!("Body manifest assets bukan UTF-8 valid: {}", e))?;
 
-    parse_manifest(&text)
+    Ok((body, parse_manifest(&text)?))
 }
 
+pub async fn fetch_manifest(client: &reqwest::Client, url: &str) -> Result<AssetManifest, String> {
+    fetch_manifest_bytes(client, url)
+        .await
+        .map(|(_, manifest)| manifest)
+}
 pub fn get_cached_media_paths(cache_dir: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
-    let bgm = cache_dir.join("bgm.mp3");
-    let video = cache_dir.join("bg-video.mp4");
-
-    let bgm_opt = bgm.is_file().then_some(bgm);
-    let video_opt = video.is_file().then_some(video);
-
-    (bgm_opt, video_opt)
+    let path_for = |name: &str| {
+        let path = cache_dir.join(name);
+        path.is_file().then_some(path)
+    };
+    (
+        path_for(MEDIA_ASSET_NAMES[0]),
+        path_for(MEDIA_ASSET_NAMES[1]),
+    )
 }
 
 pub fn cached_manifest_path(cache_dir: &Path) -> PathBuf {
@@ -131,8 +170,8 @@ pub fn write_cached_manifest(cache_dir: &Path, manifest: &AssetManifest) -> Resu
 }
 
 pub fn validate_cached_media(cache_dir: &Path, manifest: &AssetManifest) -> Result<bool, String> {
-    for name in ["bgm.mp3", "bg-video.mp4"] {
-        let Some(asset) = manifest.assets.iter().find(|asset| asset.name == name) else {
+    for name in MEDIA_ASSET_NAMES {
+        let Ok(asset) = required_asset(manifest, name) else {
             return Ok(false);
         };
         if asset.sha256.trim().is_empty() {
@@ -165,44 +204,28 @@ where
         let _ = std::fs::create_dir_all(cache_dir);
     }
 
-    // Strictly verify manifest contains both required media assets
-    let bgm_entry = manifest
-        .assets
-        .iter()
-        .find(|a| a.name == "bgm.mp3")
-        .ok_or_else(|| "Manifest tidak memuat aset wajib bgm.mp3".to_string())?;
-
-    let video_entry = manifest
-        .assets
-        .iter()
-        .find(|a| a.name == "bg-video.mp4")
-        .ok_or_else(|| "Manifest tidak memuat aset wajib bg-video.mp4".to_string())?;
-
-    if bgm_entry.sha256.trim().is_empty() {
-        return Err("SHA-256 checksum wajib dicantumkan untuk bgm.mp3".to_string());
+    // Three passes so error precedence stays structural: a missing asset is
+    // reported before a bad checksum or a rejected URL.
+    let mut required: Vec<(&str, &AssetEntry)> = Vec::with_capacity(MEDIA_ASSET_NAMES.len());
+    for name in MEDIA_ASSET_NAMES {
+        required.push((name, required_asset(manifest, name)?));
     }
-    if video_entry.sha256.trim().is_empty() {
-        return Err("SHA-256 checksum wajib dicantumkan untuk bg-video.mp4".to_string());
+    for (name, asset) in &required {
+        if asset.sha256.trim().is_empty() {
+            return Err(format!("SHA-256 checksum wajib dicantumkan untuk {name}"));
+        }
+        validate_media_asset_url(asset)?;
     }
-    validate_media_asset_url(bgm_entry)?;
-    validate_media_asset_url(video_entry)?;
 
     let on_progress = Arc::new(on_progress);
-    let mut bgm_local = String::new();
-    let mut video_local = String::new();
+    let mut resolved: BTreeMap<&str, String> = BTreeMap::new();
 
-    for asset in &[bgm_entry, video_entry] {
-        let dest = cache_dir.join(&asset.name);
-        let mut needs_download = true;
-
-        if dest.exists() && verify_sha256(&dest, &asset.sha256).unwrap_or(false) {
-            needs_download = false;
-        }
-
-        if needs_download {
+    for (name, asset) in required {
+        let dest = cache_dir.join(name);
+        if !dest.is_file() || !verify_sha256(&dest, &asset.sha256).unwrap_or(false) {
             let asset_name = asset.name.clone();
             let cb = Arc::clone(&on_progress);
-            let candidate = cache_dir.join(format!(".{}.candidate", asset.name));
+            let candidate = cache_dir.join(format!(".{name}.candidate"));
             let _ = std::fs::remove_file(&candidate);
             download_file(&asset.url, &candidate, move |p| {
                 cb(&asset_name, p);
@@ -212,30 +235,27 @@ where
             if !verify_sha256(&candidate, &asset.sha256).unwrap_or(false) {
                 let _ = std::fs::remove_file(&candidate);
                 return Err(format!(
-                    "Integritas hash SHA-256 untuk aset {} tidak valid. File dibersihkan.",
-                    asset.name
+                    "Integritas hash SHA-256 untuk aset {name} tidak valid. File dibersihkan."
                 ));
             }
             replace_verified_asset(&candidate, &dest)?;
         }
 
-        let local_str = dest.to_string_lossy().to_string();
-        if asset.name == "bgm.mp3" {
-            bgm_local = local_str;
-        } else if asset.name == "bg-video.mp4" {
-            video_local = local_str;
-        }
+        resolved.insert(name, dest.to_string_lossy().to_string());
     }
 
-    if bgm_local.is_empty() || video_local.is_empty() {
+    let (Some(bgm_local), Some(video_local)) = (
+        resolved.get(MEDIA_ASSET_NAMES[0]),
+        resolved.get(MEDIA_ASSET_NAMES[1]),
+    ) else {
         return Err("Aset media tidak lengkap setelah sinkronisasi.".to_string());
-    }
+    };
 
     write_cached_manifest(cache_dir, manifest)?;
 
     Ok(MediaReadyPayload {
-        bgm_url: bgm_local,
-        video_url: video_local,
+        bgm_url: bgm_local.clone(),
+        video_url: video_local.clone(),
     })
 }
 
@@ -303,6 +323,7 @@ mod tests {
         let temp = tempfile::tempdir()?;
         let manifest = AssetManifest {
             update_date: None,
+            theme: None,
             assets: vec![
                 AssetEntry {
                     name: "bgm.mp3".to_string(),
@@ -329,6 +350,7 @@ mod tests {
 
         let manifest = AssetManifest {
             update_date: None,
+            theme: None,
             assets: vec![
                 AssetEntry {
                     name: "bgm.mp3".to_string(),
@@ -359,6 +381,7 @@ mod tests {
 
         let manifest = AssetManifest {
             update_date: None,
+            theme: None,
             assets: vec![AssetEntry {
                 name: "bgm.mp3".to_string(),
                 url: "https://example.com/bgm.mp3".to_string(),

@@ -135,7 +135,7 @@
 
 <style>
   .lu-overlay {
-    background: rgba(3, 18, 21, 0.78) !important;
+    background: rgb(var(--ink-deep-rgb) / 0.78) !important;
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
   }
@@ -155,11 +155,11 @@
       calc(100% - 20px) 100%,
       0 100%
     ) !important;
-    background: rgba(7, 26, 30, 0.96) !important;
+    background: rgb(var(--ink-rgb) / 0.96) !important;
     box-shadow:
-      0 24px 70px rgba(0, 0, 0, 0.72),
-      0 0 34px rgba(121, 203, 208, 0.14),
-      inset 0 1px 0 rgba(236, 255, 249, 0.08);
+      0 24px 70px rgb(var(--black-rgb) / 0.72),
+      0 0 34px rgb(var(--cyan-rgb) / 0.14),
+      inset 0 1px 0 rgb(var(--near-white-rgb) / 0.08);
   }
 
   .lu-modal::before,
@@ -167,7 +167,7 @@
     display: block !important;
     position: absolute;
     inset: 4px;
-    border: 1px solid rgba(184, 231, 230, 0.08);
+    border: 1px solid rgb(var(--line-rgb) / 0.08);
     content: '';
     pointer-events: none;
   }
@@ -178,7 +178,7 @@
     height: 1px;
     border: 0;
     background: var(--mist-lantern);
-    box-shadow: 0 0 8px rgba(231, 211, 148, 0.42);
+    box-shadow: 0 0 8px rgb(var(--gold-rgb) / 0.42);
   }
 
   .lu-modal__icon {
@@ -194,14 +194,14 @@
       0 100%,
       0 10px
     ) !important;
-    background: rgba(121, 203, 208, 0.1) !important;
+    background: rgb(var(--cyan-rgb) / 0.1) !important;
     color: var(--mist-cyan) !important;
-    box-shadow: 0 0 22px rgba(121, 203, 208, 0.18) !important;
+    box-shadow: 0 0 22px rgb(var(--cyan-rgb) / 0.18) !important;
   }
 
   .lu-modal__ver {
     color: var(--mist-jade) !important;
-    text-shadow: 0 0 10px rgba(167, 203, 181, 0.28) !important;
+    text-shadow: 0 0 10px rgb(var(--jade-rgb) / 0.28) !important;
   }
 
   .lu-modal__desc {
@@ -222,8 +222,8 @@
       calc(100% - 10px) 100%,
       0 100%
     );
-    background: rgba(7, 26, 30, 0.62) !important;
-    box-shadow: inset 0 1px 0 rgba(236, 255, 249, 0.05);
+    background: rgb(var(--ink-rgb) / 0.62) !important;
+    box-shadow: inset 0 1px 0 rgb(var(--near-white-rgb) / 0.05);
     text-align: left;
   }
 
@@ -282,7 +282,7 @@
   }
 
   .lu-pbar__track {
-    background: rgba(170, 214, 217, 0.1) !important;
+    background: rgb(var(--aqua-rgb) / 0.1) !important;
     border-color: var(--mist-line) !important;
   }
 

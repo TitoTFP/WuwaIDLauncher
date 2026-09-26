@@ -9,10 +9,10 @@
     align-items: center;
     gap: 10px;
     padding: 6px 12px 6px 8px;
-    background: rgba(14, 18, 52, 0.85);
+    background: rgb(var(--navy-rgb) / 0.85);
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
-    border: 1px solid rgba(212, 176, 108, 0.2);
+    border: 1px solid rgb(var(--gold-raw-rgb) / 0.2);
     animation: fadeUp 500ms var(--ease) both;
 }
 
@@ -25,7 +25,7 @@
 .ap-vol__track {
     flex: 1;
     height: 3px;
-    background: rgba(255, 255, 255, 0.08);
+    background: rgb(var(--white-rgb) / 0.08);
     border-radius: 0px;
     position: relative;
     cursor: var(--cursor-select);
@@ -55,7 +55,7 @@
     background: var(--accent-gold);
     border: none;
     border-radius: 0px;
-    box-shadow: 0 0 6px rgba(244, 212, 138, 0.8);
+    box-shadow: 0 0 6px rgb(var(--gold-bright-rgb) / 0.8);
 }
 .ap-vol__slider {
     position: absolute;
@@ -87,7 +87,7 @@
     width: 28px;
     height: 28px;
     border-radius: 0px;
-    color: rgba(255, 255, 255, 0.45);
+    color: rgb(var(--white-rgb) / 0.45);
     transition:
         color var(--dur),
         background var(--dur),
@@ -105,7 +105,7 @@
 }
 .ap-btn:hover {
     color: var(--cyan-accent);
-    background: rgba(212, 176, 108, 0.08);
+    background: rgb(var(--gold-raw-rgb) / 0.08);
 }
 .ap-btn--sm {
     width: 24px;
@@ -117,8 +117,8 @@
     height: 32px;
     background: var(--accent-gold);
     border: none;
-    color: #000;
-    box-shadow: 0 0 10px rgba(244, 212, 138, 0.3);
+    color: rgb(var(--black-rgb));
+    box-shadow: 0 0 10px rgb(var(--gold-bright-rgb) / 0.3);
     clip-path: polygon(
         6px 0,
         100% 0,
@@ -130,8 +130,8 @@
 }
 .ap-btn--play:hover {
     transform: translateY(-1px);
-    box-shadow: 0 0 16px rgba(244, 212, 138, 0.5);
-    background: #fff;
+    box-shadow: 0 0 16px rgb(var(--gold-bright-rgb) / 0.5);
+    background: rgb(var(--white-rgb));
     filter: brightness(1.08);
 }
 .ap-btn--play:active {

@@ -22,6 +22,16 @@ const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const PROCESS_HANDOFF_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const PROCESS_HANDOFF_GRACE: Duration = Duration::from_secs(3);
 const MAX_UNRANGED_MEDIA_RESPONSE_BYTES: u64 = 1024 * 1024;
+
+/// Files the media protocol may serve, with the MIME type the webview needs.
+/// Chromium enforces MIME strictly for stylesheets and CSS background images,
+/// so serving these as `application/octet-stream` would silently drop them.
+const MEDIA_PROTOCOL_FILES: [(&str, &str); 4] = [
+    ("bgm.mp3", "audio/mpeg"),
+    ("bg-video.mp4", "video/mp4"),
+    (engine::theme::THEME_CSS_FILE, "text/css; charset=utf-8"),
+    (engine::theme::THEME_BACKGROUND_FILE, "image/jpeg"),
+];
 const TRAY_ICON_ID: &str = "launcher-tray";
 #[cfg(windows)]
 const LAUNCHER_UPDATE_READY_ENV: &str = "WUWAID_LAUNCHER_UPDATE_READY";
@@ -778,25 +788,30 @@ fn registered_media_protocol_response(
 
 fn media_response_from_path(appdata: &Path, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     let path_str = request.uri().path().trim_start_matches('/');
-    if !matches!(path_str, "bgm.mp3" | "bg-video.mp4") {
+    let Some((_, mime)) = MEDIA_PROTOCOL_FILES
+        .iter()
+        .find(|(name, _)| *name == path_str)
+        .copied()
+    else {
         return Response::builder().status(404).body(vec![]).unwrap();
-    }
+    };
     let file_path = appdata.join("Cache").join(path_str);
     if !file_path.is_file() {
         return Response::builder().status(404).body(vec![]).unwrap();
     }
 
-    let mime = if path_str.ends_with(".mp4") {
-        "video/mp4"
-    } else if path_str.ends_with(".mp3") {
-        "audio/mpeg"
-    } else {
-        "application/octet-stream"
-    };
     let total_len = match std::fs::metadata(&file_path) {
         Ok(metadata) => metadata.len(),
         Err(_) => return Response::builder().status(404).body(vec![]).unwrap(),
     };
+    // An empty cache file is a broken entry, not an empty theme: answering 200
+    // would read to the webview as "no theme" with no way to tell it apart.
+    if total_len == 0 {
+        return Response::builder().status(404).body(vec![]).unwrap();
+    }
+    // Stylesheets and background images are fetched without a Range header and
+    // cannot re-request one, so the media cap must not apply to them.
+    let is_ranged_media = matches!(path_str, "bgm.mp3" | "bg-video.mp4");
 
     if let Some(range_val) = request.headers().get("range").and_then(|v| v.to_str().ok()) {
         if let Some((start, end)) = parse_range_header(range_val, total_len) {
@@ -816,16 +831,15 @@ fn media_response_from_path(appdata: &Path, request: &Request<Vec<u8>>) -> Respo
                 .body(data)
                 .unwrap();
         }
-        let mut response = Response::builder()
+        return Response::builder()
             .status(416)
-            .header("Content-Range", format!("bytes */{}", total_len));
-        if total_len == 0 {
-            response = response.header("Content-Length", "0");
-        }
-        return response.body(vec![]).unwrap();
+            .header("Content-Range", format!("bytes */{total_len}"))
+            .header("Content-Length", "0")
+            .body(vec![])
+            .unwrap();
     }
 
-    if total_len > MAX_UNRANGED_MEDIA_RESPONSE_BYTES {
+    if is_ranged_media && total_len > MAX_UNRANGED_MEDIA_RESPONSE_BYTES {
         // ponytail: the Tauri protocol body is Vec<u8>; cap an unsolicited response
         // at 1 MiB and let the media element request subsequent ranges.
         let end = MAX_UNRANGED_MEDIA_RESPONSE_BYTES - 1;
@@ -843,13 +857,8 @@ fn media_response_from_path(appdata: &Path, request: &Request<Vec<u8>>) -> Respo
             .unwrap();
     }
 
-    let full_data = if total_len == 0 {
-        Vec::new()
-    } else {
-        let Ok(data) = read_media_range(&file_path, 0, total_len - 1) else {
-            return Response::builder().status(404).body(vec![]).unwrap();
-        };
-        data
+    let Ok(full_data) = read_media_range(&file_path, 0, total_len - 1) else {
+        return Response::builder().status(404).body(vec![]).unwrap();
     };
     Response::builder()
         .status(200)
@@ -1426,10 +1435,37 @@ fn check_and_sync_media<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
             }
         };
 
-        match engine::media::fetch_manifest(&client, &media_manifest_url()).await {
-            Ok(manifest) => {
-                if let Some(ref update_date) = manifest.update_date {
+        match engine::media::fetch_manifest_bytes(&client, &media_manifest_url()).await {
+            Ok((manifest_bytes, mut manifest)) => {
+                if let Some(update_date) = &manifest.update_date {
                     let _ = app_handle.emit("onUpdateDate", update_date.clone());
+                }
+
+                // The theme block is the only part of the manifest that can
+                // restyle the launcher, so it is honoured only when the
+                // manifest itself is signed by a trusted key. Media sync keeps
+                // its existing sha256 trust model either way.
+                let verified_key = engine::theme::fetch_signature(
+                    &client,
+                    &engine::theme::signature_url(&media_manifest_url()),
+                )
+                .await
+                .and_then(|signature| {
+                    engine::theme::verify_manifest_signature(&manifest_bytes, &signature)
+                });
+                match &verified_key {
+                    Ok(key_id) => {
+                        sync_remote_theme(&cache_dir, manifest.theme.as_ref(), key_id, &app_handle)
+                            .await;
+                    }
+                    Err(error) => {
+                        log::warn!("Manifest theme ditolak: {error}");
+                        // Never let an unverified theme reach the manifest cache:
+                        // a later offline launch would read it back and apply it
+                        // with no signature check at all.
+                        manifest.theme = None;
+                        emit_theme_payload(&cache_dir, "", &app_handle, "unsigned");
+                    }
                 }
 
                 let app_progress = app_handle.clone();
@@ -1500,6 +1536,54 @@ fn check_and_sync_media<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
         }
     });
     Ok(())
+}
+
+/// Activates the theme declared by a signed manifest, or leaves the last
+/// verified one in place. A theme failure never blocks media or the launcher.
+async fn sync_remote_theme<R: Runtime>(
+    cache_dir: &Path,
+    theme: Option<&engine::theme::ThemeDefinition>,
+    key_id: &str,
+    app_handle: &AppHandle<R>,
+) {
+    let Some(theme) = theme.filter(|theme| theme.active) else {
+        emit_theme_payload(cache_dir, key_id, app_handle, "general");
+        return;
+    };
+    match engine::theme::sync_theme(cache_dir, theme).await {
+        Ok(()) => {
+            log::info!("Tema aktif diperbarui: {}", theme.id);
+            emit_theme_payload(cache_dir, key_id, app_handle, "signed");
+        }
+        Err(error) => {
+            log::warn!("Sinkronisasi tema gagal: {error}");
+            emit_theme_payload(cache_dir, key_id, app_handle, "stale");
+        }
+    }
+}
+
+fn emit_theme_payload<R: Runtime>(
+    cache_dir: &Path,
+    key_id: &str,
+    app_handle: &AppHandle<R>,
+    fallback_status: &str,
+) {
+    let mut payload = engine::theme::build_payload(cache_dir, key_id).unwrap_or_else(|error| {
+        log::warn!("Cache tema tidak dapat dibaca: {error}");
+        engine::theme::general_payload("general")
+    });
+    if payload.status != "signed" {
+        payload.status = fallback_status.to_string();
+    }
+    let _ = app_handle.emit("onThemeReady", payload);
+}
+
+/// Returns the last verified theme from cache so the UI can paint it before
+/// the network sync finishes. No network, no side effects.
+#[tauri::command]
+fn get_active_theme() -> Result<engine::theme::ThemePayload, String> {
+    let cache_dir = get_appdata_dir().join("Cache");
+    engine::theme::build_payload(&cache_dir, "")
 }
 
 #[tauri::command]
@@ -2778,6 +2862,7 @@ pub fn run<R: tauri::Runtime>(context: tauri::Context<R>) {
             get_app_version,
             get_vh_version,
             check_and_sync_media,
+            get_active_theme,
             check_launcher_update,
             open_support,
             get_vh_release_notes,
@@ -2953,6 +3038,10 @@ pub mod frontend_fixture {
         .map_err(|error| error.to_string())
     }
 
+    #[tauri::command(rename = "get_active_theme")]
+    fn fixture_get_active_theme() -> crate::engine::theme::ThemePayload {
+        crate::engine::theme::general_payload("general")
+    }
     #[tauri::command(rename = "get_vh_release_notes")]
     fn fixture_get_vh_release_notes() {}
 
@@ -3062,6 +3151,7 @@ pub mod frontend_fixture {
                 check_patch_status,
                 switch_method,
                 fixture_check_and_sync_media,
+                fixture_get_active_theme,
                 fixture_get_vh_release_notes,
                 fixture_get_launcher_release_notes,
                 fixture_emit_launcher_release_notes,
@@ -4032,6 +4122,7 @@ mod tests {
             &cache_dir,
             &engine::media::AssetManifest {
                 update_date: None,
+                theme: None,
                 assets: vec![
                     engine::media::AssetEntry {
                         name: "bgm.mp3".to_string(),
