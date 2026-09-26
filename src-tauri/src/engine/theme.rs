@@ -67,8 +67,8 @@ const FORBIDDEN_IN_CSS: &[&str] = &["@import", "expression(", "javascript:", "</
 /// rather than deleting them immediately.
 pub const TRUSTED_SIGNING_KEYS: &[(&str, &str)] = &[
     (
-        "wuwa-web-2026-01",
-        "e4bf5c507ba36d2e5b51540318ec2743bb24b86c85ede7ce503bdcb2ee1cbd40",
+        "wuwa-web-2026-02",
+        "4f70a538fe23d2172c4faee544ccd8656b438c4279768594c492d9a8a13fc2c7",
     ),
     // ("<key-id-next>", "<64 hex chars>"),
 ];
@@ -628,6 +628,17 @@ mod tests {
         assert_eq!(
             verify_with_keyring(payload, &sign(payload), TRUSTED_KEYRING).unwrap(),
             TEST_KEY_ID
+        );
+    }
+
+    #[test]
+    fn checked_in_manifest_signature_verifies_with_production_keyring() {
+        let manifest = include_bytes!("../../../Web/assets.json");
+        let signature = include_str!("../../../Web/assets.json.sig");
+
+        assert_eq!(
+            verify_manifest_signature(manifest, signature).unwrap(),
+            "wuwa-web-2026-02"
         );
     }
 

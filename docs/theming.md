@@ -72,8 +72,27 @@ discarded on read. Removing a key therefore revokes every theme it signed, on
 launchers that never sync again. That does require a launcher release, since
 the keyring is compiled in.
 
-Key rotation is a keyring, not a single key: stage the incoming public key in
-the second slot, sign with it, and the rotation needs no launcher release.
+Before the first public release, replace the old key directly: no released
+launcher trusts it, so keep only the new public key in `TRUSTED_SIGNING_KEYS`.
+After a key has shipped, rotate in stages: add the incoming public key to the
+second slot, release a launcher that trusts both, then sign with the new key.
+Remove the old key in a later launcher release; removing a trusted key revokes
+the themes it signed for launchers that do not sync again.
+
+Generate each key at a fresh path and give it a unique id. The command refuses
+to overwrite existing key files and records the id beside the key:
+
+```bash
+node scripts/sign-manifest.mjs --generate \
+  --key scripts/keys/web-manifest-2026-03.key.pem \
+  --key-id wuwa-web-2026-03
+node scripts/sign-manifest.mjs --in Web/assets.json \
+  --key scripts/keys/web-manifest-2026-03.key.pem \
+  --key-id wuwa-web-2026-03
+```
+
+Add the printed public key to `TRUSTED_SIGNING_KEYS` before shipping a launcher
+that should accept the new signature. Never commit the private key.
 
 ### A manifest with no theme block
 
