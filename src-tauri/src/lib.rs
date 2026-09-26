@@ -4078,18 +4078,44 @@ mod tests {
         let listener_addr = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener_addr.local_addr().unwrap();
         std::thread::spawn(move || {
-            let (mut stream, _) = listener_addr.accept().unwrap();
             use std::io::{Read, Write};
-            let mut request = [0u8; 1024];
-            let _ = stream.read(&mut request);
-            let body = br#"{"update_date":null,"assets":[]}"#;
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            )
-            .unwrap();
-            stream.write_all(body).unwrap();
+            // The launcher fetches the manifest and then its signature, so the
+            // fixture has to answer both. A repository that has not published a
+            // signature yet gets a 404 for it, which is what an unsigned
+            // manifest looks like from here.
+            for _ in 0..2 {
+                let Ok((mut stream, _)) = listener_addr.accept() else {
+                    return;
+                };
+                let mut request = [0u8; 1024];
+                let read = stream.read(&mut request).unwrap_or(0);
+                let asked_for_signature =
+                    read > 0 && request[..read].windows(4).any(|window| window == b".sig");
+                if asked_for_signature {
+                    if write!(
+                        stream,
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                    .is_err()
+                    {
+                        return;
+                    }
+                    continue;
+                }
+                let body = br#"{"update_date":null,"assets":[]}"#;
+                if write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .is_err()
+                {
+                    return;
+                }
+                if stream.write_all(body).is_err() {
+                    return;
+                }
+            }
         });
 
         std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
