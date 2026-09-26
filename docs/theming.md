@@ -31,10 +31,11 @@ Web/Theme/<id>/bg.jpg    background image
 Web/Theme/<id>/theme.css optional stylesheet fragment
 ```
 
-LFS-tracked media is served from `media.githubusercontent.com/media/…`; small
-files from `raw.githubusercontent.com/…`. The launcher rejects a `raw` URL for an
-LFS path, because that host serves the ~130-byte pointer rather than the media
-and the download would fail its hash check for good.
+Everything is served from `raw.githubusercontent.com/…` as ordinary git objects.
+git-lfs was tried and rejected: this is a public fork, and GitHub refuses LFS
+objects above roughly 5 MB there, while an 11 MB ordinary blob is accepted. The
+16 MB of media therefore lives in this repository's history, which is well under
+GitHub's 100 MB per-file limit and invisible to anyone who downloads a release.
 
 ## Trust model
 
