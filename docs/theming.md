@@ -1,15 +1,40 @@
 # Dynamic Theming
 
-The launcher ships a **general theme** (mist-aqua, jade, lantern, ink) and can
-adopt a **remote theme** published for a game version. A new look is a data
-change in the asset manifest, not a launcher release.
+The launcher ships a **general theme** and adopts a **published theme** for the
+current game version. A new look is a data change in the asset manifest, not a
+launcher release.
+
+## The two themes
+
+There are always two:
+
+- **General theme** — compiled into the launcher, neutral blue-slate, and the
+  fallback whenever nothing verified is cached. It refers to no Wuthering
+  Waves version's art direction, so it stays correct across 3.6, 3.7, and
+  anything after. Users can pin it from Settings.
+- **The published theme** — the current game version's look, fetched and
+  verified from the asset manifest. `Web/Theme/wuwa-3-6/` ships Wuthering
+  Waves 3.6 in mist-aqua, jade, and lantern. Publishing a new version means
+  adding a directory and flipping `"active"`, nothing more.
+
+Both carry their own background, so withdrawing the published theme returns a
+neutral backdrop rather than the withdrawn look's artwork.
+
+Everything the launcher fetches lives in this repository, under `Web/`:
 
 ```
-Web/assets.json          manifest: media assets + optional theme block
+Web/assets.json          manifest: media assets + the theme block
 Web/assets.json.sig      detached Ed25519 signature over the manifest bytes
+Web/Audio/bgm.mp3        git-lfs
+Web/Video/bg-video.mp4   git-lfs
+Web/Theme/<id>/bg.jpg    background image
 Web/Theme/<id>/theme.css optional stylesheet fragment
-Web/Theme/<id>/bg.jpg    optional background image
 ```
+
+LFS-tracked media is served from `media.githubusercontent.com/media/…`; small
+files from `raw.githubusercontent.com/…`. The launcher rejects a `raw` URL for an
+LFS path, because that host serves the ~130-byte pointer rather than the media
+and the download would fail its hash check for good.
 
 ## Trust model
 
@@ -77,8 +102,8 @@ worth knowing before reaching for it while troubleshooting something else.
 {
   "assets": [ /* unchanged: bgm.mp3, bg-video.mp4 */ ],
   "theme": {
-    "id": "wuwa-2-4",
-    "name": "Wuthering Waves 2.4",
+    "id": "wuwa-3-6",
+    "name": "Wuthering Waves 3.6",
     "active": true,
     "tokens": {
       "--gold-rgb": "231 211 148",
@@ -86,12 +111,12 @@ worth knowing before reaching for it while troubleshooting something else.
     },
     "themeCss": {
       "name": "theme.css",
-      "url": "https://raw.githubusercontent.com/TitoTFP/WuwaID/refs/heads/main/Web/Theme/wuwa-2-4/theme.css",
+      "url": "https://raw.githubusercontent.com/TitoTFP/WuwaIDLauncher/refs/heads/main/Web/Theme/wuwa-3-6/theme.css",
       "sha256": "<sha256 of theme.css>"
     },
     "background": {
       "name": "bg.jpg",
-      "url": "https://raw.githubusercontent.com/TitoTFP/WuwaID/refs/heads/main/Web/Theme/wuwa-2-4/bg.jpg",
+      "url": "https://raw.githubusercontent.com/TitoTFP/WuwaIDLauncher/refs/heads/main/Web/Theme/wuwa-3-6/bg.jpg",
       "sha256": "<sha256 of bg.jpg>"
     }
   }
@@ -122,16 +147,16 @@ signature covers the exact bytes GitHub serves. Add `*.json text eol=lf` to
 CRLF.
 
 A theme only needs to override the triplets it actually wants to change; the
-rest keep the general theme's values. The full list, with the values that
-reproduce today's design, is in the palette layer of `styles-base.css`:
+rest keep the general theme's values. The full list, with the values that ship with
+the general theme, is in the palette layer of `styles-base.css`:
 
 | Group | Tokens |
 | --- | --- |
-| Core mist palette | `--ink-rgb` `--aqua-rgb` `--cyan-rgb` `--jade-rgb` `--text-rgb` `--gold-rgb` `--line-rgb` `--slate-rgb` |
-| Gradient stops | `--mist-grad-1-rgb` `--mist-grad-2-rgb` `--mist-grad-3-rgb` |
+| Core palette | `--ink-rgb` `--aqua-rgb` `--cyan-rgb` `--jade-rgb` `--text-rgb` `--gold-rgb` `--line-rgb` `--slate-rgb` |
+| Gradient stops | `--grad-1-rgb` `--grad-2-rgb` `--grad-3-rgb` |
 | Ink and surface darks | `--ink-soft-rgb` `--ink-mid-rgb` `--ink-mid-2-rgb` `--ink-deep-rgb` `--ink-deepest-rgb` `--panel-solid-rgb` `--jade-deep-rgb` `--shadow-rgb` `--ink-black-rgb` `--ink-black-2-rgb` `--black-rgb` |
-| Navy surfaces | `--navy-rgb` `--navy-scrim-rgb` `--navy-deep-rgb` |
-| Golds | `--gold-bright-rgb` `--gold-raw-rgb` `--gold-deep-rgb` |
+| Legacy surfaces | `--navy-rgb` `--navy-scrim-rgb` `--navy-deep-rgb` |
+| Accent shades | `--gold-bright-rgb` `--gold-raw-rgb` `--gold-deep-rgb` |
 | Text and near-whites | `--text-soft-rgb` `--text-mute-rgb` `--white-rgb` `--near-white-rgb` `--near-white-2-rgb` `--near-white-3-rgb` `--warm-white-rgb` `--silver-rgb` |
 | State colours | `--red-rgb` `--red-strong-rgb` `--red-soft-rgb` `--red-hot-rgb` `--red-deep-rgb` `--green-rgb` `--green-tint-rgb` `--green-tint-2-rgb` `--blue-tint-rgb` `--blue-tint-2-rgb` `--pink-rgb` `--pink-tint-rgb` `--peach-rgb` |
 | Canvas particles | `--particle-gold-rgb` `--particle-cyan-rgb` |
@@ -144,9 +169,11 @@ Rules the launcher enforces on a theme:
 - triplet values may be written `231 211 148` or `231, 211, 148`; commas are
   normalised for `-rgb` tokens.
 
-The semantic layer (`--mist-*`, `--accent-gold`, `--text-1`, `--bg-panel`, …)
-still exists for readability and can be overridden directly, but overriding the
-palette is what repaints the whole launcher.
+The semantic layer (`--fg`, `--fg-accent`, `--accent`, `--accent-2`, `--success`,
+`--panel`, `--bg-deep`, `--line`, `--line-strong`, `--grad`) names roles rather
+than hues, and can be overridden directly; overriding the palette is what
+repaints the whole launcher. The pre-paint bootstrap honours exactly these
+names plus the triplets, so a theme does not flash the general theme on start.
 
 ### The background image
 
@@ -175,7 +202,7 @@ mid-transfer, so an oversized fragment costs a download before it is refused.
 Write it scoped to the theme so it composes predictably:
 
 ```css
-body.theme-wuwa-2-4 .start-btn {
+body.theme-wuwa-3-6 .start-btn {
     border-width: 2px !important;
 }
 ```
@@ -210,7 +237,9 @@ WUWAID_ASSETS_URL=http://127.0.0.1:8080/assets.json npm run tauri dev
 
 `WUWAID_ASSETS_URL` points the launcher at a local manifest. Serve
 `assets.json`, `assets.json.sig`, and the theme directory over loopback; the
-media URL validator already permits `http://localhost` for fixtures.
+media URL validator already permits `http://localhost` for fixtures. The
+manifest itself is still signature-checked regardless of host — loopback only
+exempts the asset URLs it points at.
 
 The private key in `scripts/keys/` is local-only and never committed. Its
 public half must be present in `TRUSTED_SIGNING_KEYS` for the launcher to

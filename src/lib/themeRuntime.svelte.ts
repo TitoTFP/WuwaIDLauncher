@@ -1,5 +1,7 @@
-const FALLBACK_PARTICLE_GOLD: readonly [number, number, number] = [212, 176, 108];
-const FALLBACK_PARTICLE_CYAN: readonly [number, number, number] = [80, 195, 220];
+// Mirrors --particle-gold-rgb / --particle-cyan-rgb in styles-base.css; only
+// used if the stylesheet has not loaded, so it cannot drift silently.
+const FALLBACK_PARTICLE_GOLD: readonly [number, number, number] = [196, 186, 164];
+const FALLBACK_PARTICLE_CYAN: readonly [number, number, number] = [110, 160, 210];
 const DEFAULT_BACKGROUND = "/images/bg-default.jpg";
 
 /**

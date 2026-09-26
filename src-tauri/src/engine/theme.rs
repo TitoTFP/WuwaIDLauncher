@@ -688,7 +688,7 @@ mod tests {
             "tokens": { "--gold-rgb": "255 210 90" },
             "themeCss": {
                 "name": "theme.css",
-                "url": "https://raw.githubusercontent.com/TitoTFP/WuwaID/refs/heads/main/Web/Theme/wuwa-2-4/theme.css",
+                "url": "https://raw.githubusercontent.com/TitoTFP/WuwaIDLauncher/refs/heads/main/Web/Theme/wuwa-2-4/theme.css",
                 "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
             }
         }"#;
@@ -777,7 +777,7 @@ mod tests {
     fn theme_definition_validation_accepts_a_palette() {
         let mut theme = definition();
         theme.tokens.insert(
-            "--mist-grad".to_string(),
+            "--grad".to_string(),
             "linear-gradient(135deg, #fff 0%, #000 100%)".to_string(),
         );
         assert!(validate_theme_definition(&theme).is_ok());
@@ -799,7 +799,7 @@ mod tests {
         let mut theme = definition();
         theme.background = Some(AssetEntry {
             name: "something-else.jpg".to_string(),
-            url: "https://raw.githubusercontent.com/TitoTFP/WuwaID/refs/heads/main/Web/Theme/x/something-else.jpg".to_string(),
+            url: "https://raw.githubusercontent.com/TitoTFP/WuwaIDLauncher/refs/heads/main/Web/Theme/x/something-else.jpg".to_string(),
             sha256: "a".repeat(64),
         });
         assert!(validate_theme_definition(&theme).is_err());

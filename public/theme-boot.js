@@ -19,7 +19,7 @@
   // an attacker with local write access can still set a palette token, but that
   // only changes colour — layout, text, and script stay out of reach from here.
   var PALETTE_TOKEN = /^--[a-z0-9-]+-rgb$/;
-  var ALLOWED_EXTRAS = ["--mist-grad", "--bg-deep", "--bg-panel"];
+  var ALLOWED_EXTRAS = ["--grad", "--bg-deep", "--bg-panel"];
 
   // Same rejection set as engine/theme.rs and themeRuntime.svelte.ts, so a
   // value that one layer refuses is never quietly accepted by another.

@@ -9,7 +9,6 @@
         var(--cursor-custom);
 
     --bg-deep: rgb(var(--ink-rgb));
-    --bg-panel: rgb(var(--ink-rgb) / 0.84);
     --bg-panel-solid: rgb(var(--panel-solid-rgb));
     --bg-hover: rgb(var(--aqua-rgb) / 0.1);
 
@@ -53,53 +52,54 @@
  * every shade derived from it.
  */
 :root {
-    /* Core mist palette — the primary theme surface. */
-    --ink-rgb: 7 26 30;
-    --aqua-rgb: 170 214 217;
-    --cyan-rgb: 121 203 208;
-    --jade-rgb: 167 203 181;
-    --text-rgb: 224 240 239;
-    --gold-rgb: 231 211 148;
-    --line-rgb: 184 231 230;
-    --slate-rgb: 97 125 130;
+    /* Core palette — neutral blue-slate. Deliberately refers to no game's
+       art direction, so it stays correct across every Wuthering Waves version. */
+    --ink-rgb: 14 20 28;
+    --aqua-rgb: 130 170 200;
+    --cyan-rgb: 110 160 210;
+    --jade-rgb: 126 178 142;
+    --text-rgb: 232 238 242;
+    --gold-rgb: 190 200 215;
+    --line-rgb: 175 195 215;
+    --slate-rgb: 100 120 140;
 
-    /* Gradient stops for the lantern sweep. */
-    --mist-grad-1-rgb: 214 240 231;
-    --mist-grad-2-rgb: 166 215 208;
-    --mist-grad-3-rgb: 217 204 145;
+    /* Gradient stops for the accent sweep. */
+    --grad-1-rgb: 200 215 230;
+    --grad-2-rgb: 130 170 200;
+    --grad-3-rgb: 190 200 215;
 
     /* Ink and surface darks. */
-    --ink-soft-rgb: 7 25 29;
-    --ink-mid-rgb: 4 24 27;
-    --ink-mid-2-rgb: 4 20 23;
-    --ink-deep-rgb: 3 18 21;
-    --ink-deepest-rgb: 1 16 17;
-    --panel-solid-rgb: 11 37 42;
-    --jade-deep-rgb: 35 75 69;
-    --shadow-rgb: 18 16 16;
-    --ink-black-rgb: 17 17 17;
-    --ink-black-2-rgb: 5 5 5;
+    --ink-soft-rgb: 14 20 28;
+    --ink-mid-rgb: 11 16 23;
+    --ink-mid-2-rgb: 10 15 21;
+    --ink-deep-rgb: 8 12 17;
+    --ink-deepest-rgb: 5 8 12;
+    --panel-solid-rgb: 20 28 38;
+    --jade-deep-rgb: 74 116 90;
+    --shadow-rgb: 12 14 18;
+    --ink-black-rgb: 16 16 18;
+    --ink-black-2-rgb: 6 6 8;
     --black-rgb: 0 0 0;
 
-    /* Navy surfaces — historical drift, kept verbatim so themes can reach them. */
-    --navy-rgb: 14 18 52;
-    --navy-scrim-rgb: 5 7 28;
-    --navy-deep-rgb: 4 12 17;
+    /* Legacy surfaces — historical drift, kept reachable so themes can override. */
+    --navy-rgb: 18 24 36;
+    --navy-scrim-rgb: 6 9 14;
+    --navy-deep-rgb: 5 9 14;
 
-    /* Golds — the launcher carries four, also drift; see docs/theming.md. */
-    --gold-bright-rgb: 244 212 138;
-    --gold-raw-rgb: 212 176 108;
-    --gold-deep-rgb: 232 196 90;
+    /* Accent shades — the launcher carries four, also drift; see docs/theming.md. */
+    --gold-bright-rgb: 205 214 226;
+    --gold-raw-rgb: 168 182 198;
+    --gold-deep-rgb: 196 206 220;
 
     /* Text and near-whites. */
-    --text-soft-rgb: 240 252 250;
-    --text-mute-rgb: 120 147 152;
+    --text-soft-rgb: 240 244 248;
+    --text-mute-rgb: 125 140 156;
     --white-rgb: 255 255 255;
-    --near-white-rgb: 236 255 249;
-    --near-white-2-rgb: 230 255 250;
-    --near-white-3-rgb: 220 250 244;
-    --warm-white-rgb: 255 245 241;
-    --silver-rgb: 204 204 204;
+    --near-white-rgb: 240 244 248;
+    --near-white-2-rgb: 234 240 246;
+    --near-white-3-rgb: 226 234 242;
+    --warm-white-rgb: 246 246 248;
+    --silver-rgb: 200 206 214;
 
     /* State colours. */
     --red-rgb: 232 149 136;
@@ -119,8 +119,8 @@
     /* Background image swap point; the bundled general theme owns this value. */
     --bg-image: url("/images/bg-default.jpg");
     /* Canvas particle tints — CSS cannot reach <canvas> fills. */
-    --particle-gold-rgb: 212 176 108;
-    --particle-cyan-rgb: 80 195 220;
+    --particle-gold-rgb: 196 186 164;
+    --particle-cyan-rgb: 110 160 210;
 }
 
 *,

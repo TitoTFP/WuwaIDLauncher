@@ -12,8 +12,13 @@ use std::sync::Arc;
 /// work from this list so a new asset cannot be added in one place only.
 pub const MEDIA_ASSET_NAMES: [&str; 2] = ["bgm.mp3", "bg-video.mp4"];
 
+/// Repository paths the launcher will download from. Everything is a plain
+/// git blob served by the raw host: git-lfs refuses objects this large on a
+/// public fork, so the media is committed directly.
+pub const OFFICIAL_ASSET_PATHS: &[&str] = &["/TitoTFP/WuwaIDLauncher/"];
+
 pub const ASSETS_URL: &str =
-    "https://raw.githubusercontent.com/TitoTFP/WuwaID/refs/heads/main/Web/assets.json";
+    "https://raw.githubusercontent.com/TitoTFP/WuwaIDLauncher/refs/heads/main/Web/assets.json";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -66,10 +71,11 @@ pub fn validate_asset_url(asset: &AssetEntry, suffixes: (&str, &str)) -> Result<
         && url.query().is_none()
         && url.fragment().is_none();
     let is_official_asset = url.scheme() == "https"
-        && url.host_str() == Some("raw.githubusercontent.com")
         && url.port().is_none()
-        && url.path().starts_with("/TitoTFP/WuwaID/")
-        && url.path().ends_with(suffixes.0);
+        && url.path().ends_with(suffixes.0)
+        && OFFICIAL_ASSET_PATHS
+            .iter()
+            .any(|prefix| url.path().starts_with(prefix));
     let is_loopback_test_asset = url.scheme() == "http"
         && matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
         && url.path().ends_with(suffixes.1);
@@ -292,6 +298,105 @@ mod tests {
         assert_eq!(manifest.assets.len(), 2);
         assert_eq!(manifest.assets[0].name, "bgm.mp3");
         assert_eq!(manifest.assets[1].name, "bg-video.mp4");
+    }
+
+    /// The manifest, the code, and the published URLs must name the same place.
+    /// A manifest fetched from one repository while `ASSETS_URL` and the asset
+    /// allow-list point at another is invisible to the compiler, to clippy, and
+    /// to every other test here: nothing reaches the network during a build.
+    #[test]
+    fn published_manifest_urls_agree_with_the_code() {
+        let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .join("Web/assets.json");
+        let Ok(raw) = std::fs::read_to_string(&manifest_path) else {
+            // Published content is not present in every checkout.
+            return;
+        };
+        let manifest: AssetManifest =
+            serde_json::from_str(&raw).expect("published manifest must parse");
+
+        let base = ASSETS_URL
+            .rsplit_once('/')
+            .map(|(head, _)| head)
+            .expect("ASSETS_URL must end in a file name");
+        assert!(
+            base.ends_with("/TitoTFP/WuwaIDLauncher/refs/heads/main/Web"),
+            "ASSETS_URL points at {base}, not this repository"
+        );
+
+        for asset in &manifest.assets {
+            assert!(
+                asset.url.starts_with(base),
+                "{} points at {} but the code fetches from {base}",
+                asset.name,
+                asset.url
+            );
+            let suffix = format!("/{}", asset.name);
+            assert!(
+                validate_asset_url(asset, (&suffix, &suffix)).is_ok(),
+                "{} must pass the allow-list",
+                asset.name
+            );
+        }
+    }
+
+    #[test]
+    fn asset_hosts_are_restricted_to_the_launcher_repository() {
+        let entry = |url: &str| AssetEntry {
+            name: "bgm.mp3".to_string(),
+            url: url.to_string(),
+            sha256: "a".repeat(64),
+        };
+
+        // Small files: the raw host.
+        assert!(validate_asset_url(
+            &entry("https://raw.githubusercontent.com/TitoTFP/WuwaIDLauncher/refs/heads/main/Web/Audio/bgm.mp3"),
+            ("/Audio/bgm.mp3", "/bgm.mp3")
+        )
+        .is_ok());
+
+        // The lfs media host is not used: this fork refuses LFS objects this
+        // size, so a media-host URL would 404 for a different reason.
+        assert!(validate_asset_url(
+            &entry("https://media.githubusercontent.com/media/TitoTFP/WuwaIDLauncher/refs/heads/main/Web/Audio/bgm.mp3"),
+            ("/Audio/bgm.mp3", "/bgm.mp3")
+        )
+        .is_err());
+
+        // The retired repository is no longer an official source.
+        assert!(validate_asset_url(
+            &entry("https://raw.githubusercontent.com/TitoTFP/WuwaID/refs/heads/main/Web/Audio/bgm.mp3"),
+            ("/Audio/bgm.mp3", "/bgm.mp3")
+        )
+        .is_err());
+
+        // Right host, wrong path suffix.
+        assert!(validate_asset_url(
+            &entry("https://raw.githubusercontent.com/TitoTFP/WuwaIDLauncher/refs/heads/main/Web/Video/bg-video.mp4"),
+            ("/Audio/bgm.mp3", "/bgm.mp3")
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn asset_urls_carry_no_query_or_credentials() {
+        let entry = |url: &str| AssetEntry {
+            name: "bgm.mp3".to_string(),
+            url: url.to_string(),
+            sha256: "a".repeat(64),
+        };
+        for hostile in [
+            "https://raw.githubusercontent.com/TitoTFP/WuwaIDLauncher/refs/heads/main/Web/Audio/bgm.mp3?x=1",
+            "https://user:pw@raw.githubusercontent.com/TitoTFP/WuwaIDLauncher/refs/heads/main/Web/Audio/bgm.mp3",
+            "http://raw.githubusercontent.com/TitoTFP/WuwaIDLauncher/refs/heads/main/Web/Audio/bgm.mp3",
+        ] {
+            assert!(
+                validate_asset_url(&entry(hostile), ("/Audio/bgm.mp3", "/bgm.mp3")).is_err(),
+                "accepted {hostile}"
+            );
+        }
     }
 
     #[test]
