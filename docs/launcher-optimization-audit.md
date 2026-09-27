@@ -22,7 +22,7 @@ Captured before changes:
 
 The post-change gates use these explicit thresholds:
 
-- `npm audit --audit-level=high`: zero reported vulnerabilities (actual result: zero vulnerabilities at all severities).
+- `npm audit --audit-level=high`: zero high or critical vulnerabilities. One moderate advisory remains: `devalue <5.9.1` (GHSA-9rgm-9g3h-6x36, CVSS 5.3), a transitive dependency of `svelte@5.56.9` resolved to `devalue@5.9.0`; a fix is available via `npm audit fix`.
 - `npm run check`: zero Svelte/type/lint errors and warnings; `npm run build`: successful frontend artifact.
 - Rust formatting and `cargo clippy -- -D warnings`: zero failures/warnings; all Rust tests must pass.
 - Manifest bodies are capped at 1 MiB; downloads are capped at 512 MiB and must match expected size plus SHA-256.
@@ -32,7 +32,7 @@ The post-change gates use these explicit thresholds:
 
 | Severity | Finding | Durable closure |
 | --- | --- | --- |
-| High | Development dependency vulnerabilities | Vite/plugin refresh and lockfile update; npm audit now reports zero vulnerabilities. |
+| High | Development dependency vulnerabilities | Vite/plugin refresh and lockfile update; npm audit reports zero high or critical vulnerabilities. |
 | High | Unrestricted download redirects and shell-backed wrappers | Shared GitHub/HTTPS redirect policies and direct Node entrypoint execution. |
 | Medium | Media manifest replacement could delete the last good cache first | Atomic replacement through the existing platform-aware helper. |
 | Medium | Icon-only controls lacked assistive names/state | `aria-label`, `aria-expanded`, and `aria-pressed` plus regression tests. |
@@ -47,7 +47,7 @@ The post-change gates use these explicit thresholds:
 ## Delivered
 
 - Upgraded Vite and the Svelte Vite plugin; refreshed `package-lock.json`.
-- Added `npm run test:security` and ran it in CI and release verification. Local result: `found 0 vulnerabilities`.
+- Added `npm run test:security` and ran it in CI and release verification. Local result: 0 high and 0 critical, 1 moderate (`devalue <5.9.1`); gate exits 0.
 - Disabled implicit package-manager caching in the release setup-node step.
 - Added static regression coverage for icon-only controls and wired it into lifecycle, CI, and release checks.
 - Added accessible names/state to titlebar, audio, panel, and menu controls; decorative SVGs are hidden from assistive technology.
