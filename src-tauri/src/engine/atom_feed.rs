@@ -163,7 +163,8 @@ pub async fn fetch_latest_release_notes(
     let body = read_response_body_limited(resp, MAX_ATOM_FEED_BYTES)
         .await
         .map_err(|error| format!("Gagal membaca response Atom feed: {error}"))?;
-    let text = String::from_utf8(body.to_vec())
+    // The body is already owned and is not needed again, so decoding it moves.
+    let text = String::from_utf8(body)
         .map_err(|e| format!("Response Atom feed bukan UTF-8 valid: {}", e))?;
 
     parse_atom_feed(&text).and_then(|entry| validate_release_note(&entry))

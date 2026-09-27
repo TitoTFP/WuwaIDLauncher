@@ -1,6 +1,6 @@
 use crate::engine::downloader::{
-    download_file, read_response_body_limited, replace_file_atomically, verify_sha256,
-    DownloadProgress,
+    compute_sha256, download_file, read_response_body_limited, replace_file_atomically,
+    verify_sha256, DownloadProgress,
 };
 use crate::engine::theme::ThemeDefinition;
 use serde::{Deserialize, Serialize};
@@ -124,10 +124,14 @@ pub async fn fetch_manifest_bytes(
     let body = read_response_body_limited(resp, MAX_MANIFEST_BYTES)
         .await
         .map_err(|error| format!("Gagal membaca body manifest assets: {error}"))?;
-    let text = String::from_utf8(body.to_vec())
+    // The body is already owned here and is still needed afterwards, so it is
+    // decoded in place and handed back out: a `to_vec()` here would double the
+    // peak memory of a manifest the size cap still allows.
+    let text = String::from_utf8(body)
         .map_err(|e| format!("Body manifest assets bukan UTF-8 valid: {}", e))?;
+    let manifest = parse_manifest(&text)?;
 
-    Ok((body, parse_manifest(&text)?))
+    Ok((text.into_bytes(), manifest))
 }
 
 pub async fn fetch_manifest(client: &reqwest::Client, url: &str) -> Result<AssetManifest, String> {
@@ -175,20 +179,79 @@ pub fn write_cached_manifest(cache_dir: &Path, manifest: &AssetManifest) -> Resu
         .map_err(|error| format!("Gagal mengaktifkan manifest media cache: {error}"))
 }
 
-pub fn validate_cached_media(cache_dir: &Path, manifest: &AssetManifest) -> Result<bool, String> {
-    for name in MEDIA_ASSET_NAMES {
-        let Ok(asset) = required_asset(manifest, name) else {
-            return Ok(false);
-        };
-        if asset.sha256.trim().is_empty() {
-            return Ok(false);
-        }
-        let path = cache_dir.join(name);
-        if !path.is_file() || !verify_sha256(&path, &asset.sha256).unwrap_or(false) {
-            return Ok(false);
+/// What a check of the media cache found, carrying the proof that the files on
+/// disk already match the digests that were checked.
+///
+/// The launch checks the cache before it fetches the manifest, and the media
+/// sync checks the same files against the same digests a moment later. The
+/// answer is handed forward instead of paid for twice. A manifest that carries
+/// anything else — a new asset, a new digest, a missing one — is a real change,
+/// and is checked in full again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedMedia {
+    valid: bool,
+    /// What every required file hashed to when it was checked. These strings
+    /// already existed; keeping them is what makes the proof free.
+    digests: [Option<String>; MEDIA_ASSET_NAMES.len()],
+}
+
+impl CachedMedia {
+    /// The verdict of a check that never ran or could not confirm the cache.
+    pub fn invalid() -> Self {
+        Self {
+            valid: false,
+            digests: std::array::from_fn(|_| None),
         }
     }
-    Ok(true)
+
+    pub fn is_valid(&self) -> bool {
+        self.valid
+    }
+
+    /// Whether `manifest` carries exactly the digests this check passed, which
+    /// is what makes re-hashing the cached files a second read of the same
+    /// bytes to reach the same answer.
+    pub fn covers(&self, manifest: &AssetManifest) -> bool {
+        if !self.valid {
+            return false;
+        }
+        MEDIA_ASSET_NAMES
+            .iter()
+            .zip(self.digests.iter())
+            .all(
+                |(name, digest)| match (required_asset(manifest, name), digest) {
+                    (Ok(asset), Some(digest)) => digest.eq_ignore_ascii_case(asset.sha256.trim()),
+                    _ => false,
+                },
+            )
+    }
+}
+
+pub fn validate_cached_media(
+    cache_dir: &Path,
+    manifest: &AssetManifest,
+) -> Result<CachedMedia, String> {
+    let mut digests: [Option<String>; MEDIA_ASSET_NAMES.len()] = std::array::from_fn(|_| None);
+    for (index, name) in MEDIA_ASSET_NAMES.iter().enumerate() {
+        let Ok(asset) = required_asset(manifest, name) else {
+            return Ok(CachedMedia::invalid());
+        };
+        if asset.sha256.trim().is_empty() {
+            return Ok(CachedMedia::invalid());
+        }
+        let path = cache_dir.join(name);
+        // A file that is not there, and a read that failed, both answer with a
+        // digest that cannot match — the same verdicts `verify_sha256` gave.
+        let digest = compute_sha256(&path).unwrap_or_default();
+        if !path.is_file() || !digest.eq_ignore_ascii_case(asset.sha256.trim()) {
+            return Ok(CachedMedia::invalid());
+        }
+        digests[index] = Some(digest);
+    }
+    Ok(CachedMedia {
+        valid: true,
+        digests,
+    })
 }
 
 fn replace_verified_asset(candidate: &Path, destination: &Path) -> Result<(), String> {
@@ -201,6 +264,7 @@ fn replace_verified_asset(candidate: &Path, destination: &Path) -> Result<(), St
 pub async fn sync_media<F>(
     cache_dir: &Path,
     manifest: &AssetManifest,
+    verified: &CachedMedia,
     on_progress: F,
 ) -> Result<MediaReadyPayload, String>
 where
@@ -226,9 +290,16 @@ where
     let on_progress = Arc::new(on_progress);
     let mut resolved: BTreeMap<&str, String> = BTreeMap::new();
 
+    // A manifest that spells the digests this cache was just verified against
+    // needs no second hash: the files were read and checked, in this same
+    // launch, moments ago. Anything else is verified here in full.
+    let reuse_verified = verified.covers(manifest);
+
     for (name, asset) in required {
         let dest = cache_dir.join(name);
-        if !dest.is_file() || !verify_sha256(&dest, &asset.sha256).unwrap_or(false) {
+        if !dest.is_file()
+            || (!reuse_verified && !verify_sha256(&dest, &asset.sha256).unwrap_or(false))
+        {
             let asset_name = asset.name.clone();
             let cb = Arc::clone(&on_progress);
             let candidate = cache_dir.join(format!(".{name}.candidate"));
@@ -443,7 +514,7 @@ mod tests {
             ],
         };
 
-        let result = sync_media(temp.path(), &manifest, |_, _| {}).await;
+        let result = sync_media(temp.path(), &manifest, &CachedMedia::invalid(), |_, _| {}).await;
         assert!(matches!(result, Err(error) if error.contains("URL media bgm.mp3")));
         Ok(())
     }
@@ -471,7 +542,7 @@ mod tests {
             ],
         };
 
-        let res = sync_media(cache_dir, &manifest, |_, _| {}).await;
+        let res = sync_media(cache_dir, &manifest, &CachedMedia::invalid(), |_, _| {}).await;
         assert!(matches!(
             res,
             Err(error) if error.contains("SHA-256 checksum wajib")
@@ -495,7 +566,7 @@ mod tests {
             }],
         };
 
-        let res = sync_media(cache_dir, &manifest, |_, _| {}).await;
+        let res = sync_media(cache_dir, &manifest, &CachedMedia::invalid(), |_, _| {}).await;
         assert!(res.is_err());
         assert!(matches!(
             res,

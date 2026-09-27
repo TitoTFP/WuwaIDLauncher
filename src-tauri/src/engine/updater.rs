@@ -1089,6 +1089,56 @@ mod tests {
         assert_eq!(exe_path.file_name().unwrap(), RELEASE_EXECUTABLE_NAME);
     }
 
+    /// The update path validates an archive once, inside extraction. That call
+    /// is the only thing standing between a downloaded ZIP and the staging
+    /// directory, so extraction has to reject exactly what a separate
+    /// validation call would have rejected, with the same verdict — not merely
+    /// unpack a well-formed archive.
+    #[test]
+    fn extract_rejects_exactly_what_archive_validation_rejects() {
+        let hostile: Vec<Vec<(&str, &[u8])>> = vec![
+            // An executable nobody published alongside the launcher.
+            vec![
+                (RELEASE_EXECUTABLE_NAME, b"launcher".as_slice()),
+                ("tools/helper.exe", b"other".as_slice()),
+            ],
+            // No launcher at all.
+            vec![("readme.txt", b"nothing to install".as_slice())],
+            // A path that climbs out of the staging directory.
+            vec![
+                (RELEASE_EXECUTABLE_NAME, b"launcher".as_slice()),
+                ("../../escaped.txt", b"climbing".as_slice()),
+            ],
+        ];
+
+        let tmp = tempfile::tempdir().unwrap();
+        for (index, entries) in hostile.into_iter().enumerate() {
+            let archive = zip_with_entries(&entries);
+            let rejected = validate_update_archive(&archive, RELEASE_EXECUTABLE_NAME)
+                .expect_err("the fixture must be an archive validation rejects");
+            let extracted = extract_zip_update(&archive, &tmp.path().join(index.to_string()));
+            assert_eq!(
+                extracted.err(),
+                Some(rejected),
+                "extraction must reject this archive with validation's own verdict"
+            );
+        }
+    }
+
+    fn zip_with_entries(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut buffer = Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buffer);
+            for (name, contents) in entries {
+                zip.start_file(*name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                std::io::Write::write_all(&mut zip, contents).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buffer.into_inner()
+    }
+
     #[test]
     fn recoverable_replacement_rejects_missing_source_without_touching_target() {
         let temp = tempfile::tempdir().unwrap();

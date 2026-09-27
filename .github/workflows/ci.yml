@@ -71,7 +71,7 @@ jobs:
         run: npm run build
 
       - name: Test JavaScript contracts
-        run: node --test scripts/tests/frontend-controls.test.mjs scripts/tests/game-exit-notice.test.mjs scripts/tests/resource-lifecycle.test.mjs scripts/tests/launcher-update-notification.test.mjs scripts/tests/workflow-contract.test.mjs scripts/tests/performance-contract.test.mjs
+        run: node --test scripts/tests/frontend-controls.test.mjs scripts/tests/game-exit-notice.test.mjs scripts/tests/resource-lifecycle.test.mjs scripts/tests/launcher-update-notification.test.mjs scripts/tests/media-theme-ordering.test.mjs scripts/tests/workflow-contract.test.mjs scripts/tests/performance-contract.test.mjs
 
       - name: Test manifest signing and key generation
         run: node --test scripts/tests/sign-manifest.test.mjs
@@ -162,6 +162,94 @@ jobs:
         with:
           name: ci-evidence-rust-${{ github.run_number }}
           path: ${{ runner.temp }}/wuwaid-ci-evidence/rust
+          if-no-files-found: warn
+          retention-days: 14
+
+  perf-probe:
+    name: Portable allocation probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGOFLAGS: --locked
+      RUST_BACKTRACE: "1"
+    steps:
+      - name: Initialize job evidence
+        shell: bash
+        run: mkdir -p "$RUNNER_TEMP/wuwaid-ci-evidence/perf-probe"
+
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: 1.97.1
+
+      - name: Install Linux Tauri dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          workspaces: src-tauri -> target
+
+      # The Windows matrix above samples whole processes; this job answers the
+      # other question — what one function of the launcher costs — on a runner
+      # that needs neither a desktop nor a game.
+      #
+      # The scenarios are #[ignore]d: they are a measuring instrument, not a
+      # correctness test, and they only mean something in a quiet process on
+      # the platform their budgets were cut on. The general suite
+      # (--all-targets, the required Windows check) skips them, so this job runs
+      # them explicitly with --ignored, alone, on ubuntu-latest.
+      #
+      # --test-threads=1 is mandatory: the probe's arm flag is process-wide, so
+      # two scenarios at once would count each other's allocations.
+      - name: Run allocation probe scenarios
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib perf_scenarios -- --test-threads=1 --nocapture --ignored \
+            | tee "$RUNNER_TEMP/wuwaid-ci-evidence/perf-probe/scenarios.txt"
+          # The harness prints each test's captured stdout as a suffix of that
+          # test's own status line — "test perf_scenarios::idle_monitor_tick ...
+          # WUL1|..." — so WUL1| is never at the start of a line and must not be
+          # anchored there. Matching it anywhere also keeps every measurement in
+          # the job log, and grep exiting 1 on no match fails the step: a green
+          # job that printed no measurement is not a measurement.
+          grep -F 'WUL1|' "$RUNNER_TEMP/wuwaid-ci-evidence/perf-probe/scenarios.txt"
+
+      - name: Capture job evidence
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          evidence="$RUNNER_TEMP/wuwaid-ci-evidence/perf-probe"
+          {
+            echo "job=perf-probe"
+            echo "sha=$GITHUB_SHA"
+            echo "event=$GITHUB_EVENT_NAME"
+            git status --short || true
+          } > "$evidence/summary.txt"
+
+      - name: Upload job evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-evidence-perf-probe-${{ github.run_number }}
+          path: ${{ runner.temp }}/wuwaid-ci-evidence/perf-probe
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload allocation probe measurements
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: performance-evidence-${{ github.run_number }}
+          path: ${{ runner.temp }}/wuwaid-ci-evidence/perf-probe/scenarios.txt
           if-no-files-found: warn
           retention-days: 14
 

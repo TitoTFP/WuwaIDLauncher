@@ -1,7 +1,16 @@
 pub mod engine;
 
+// The allocation probe and its scenarios are test-only: nothing here is
+// compiled into the shipped library, and the counting allocator exists only
+// in the test binary. See `docs/launcher-performance.md`.
+#[cfg(test)]
+mod perf_probe;
+#[cfg(test)]
+mod perf_scenarios;
+
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::http::{Request, Response};
@@ -177,6 +186,23 @@ fn get_settings_path() -> PathBuf {
     get_appdata_dir().join("settings.json")
 }
 
+/// Bumped by every write of `settings.json`, and by nothing else. The runtime
+/// monitor resolves the configured game once and keeps it in
+/// `RuntimeCoordinator`, so this counter is what tells it the answer it holds
+/// can no longer be true: the write travels with the data rather than with a
+/// call site that can forget to invalidate.
+static SETTINGS_WRITE_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// The only writer of `settings.json`, in this process. `save_settings` and the
+/// `load_settings` repair are its only callers, which is what makes the epoch
+/// bump an exhaustive invalidation rather than a hopeful one: a new writer
+/// cannot skip it without also not going through here.
+fn persist_settings_file(path: &Path, contents: &str) -> std::io::Result<()> {
+    std::fs::write(path, contents)?;
+    SETTINGS_WRITE_EPOCH.fetch_add(1, Ordering::Relaxed);
+    Ok(())
+}
+
 fn normalized_regular_game_path(game_path: &str) -> Option<PathBuf> {
     let normalized = engine::path::normalize_game_path(game_path)?;
     let canonical = std::fs::canonicalize(normalized).ok()?;
@@ -273,6 +299,13 @@ struct RuntimeCoordinator {
     termination_handle: Mutex<Option<usize>>,
     force_quit_requested: Mutex<bool>,
     tray_mode: Mutex<bool>,
+    /// The configured game directory, resolved once and reused by every monitor
+    /// tick. The outer `Option` is "resolved at all", the inner one is the
+    /// answer, and the number beside it is the `SETTINGS_WRITE_EPOCH` the answer
+    /// was derived at. Deriving costs a read and a parse of `settings.json`, a
+    /// canonicalize and a stat; the tick used to pay all four every two seconds,
+    /// forever, to learn something only a settings write can change.
+    configured_game: Mutex<Option<(u64, Option<PathBuf>)>>,
 }
 
 fn coordinator_launcher_pid<R: Runtime>(app: &AppHandle<R>) -> Option<u32> {
@@ -302,6 +335,35 @@ fn coordinator_launcher_game_identity<R: Runtime>(
             .ok()
             .and_then(|value| *value)
     })
+}
+
+impl RuntimeCoordinator {
+    /// The configured game executable as the monitor tick needs it, taken from
+    /// the resolved value whenever that value is still current.
+    fn configured_game_executable(&self) -> Option<PathBuf> {
+        let epoch = SETTINGS_WRITE_EPOCH.load(Ordering::Relaxed);
+        let mut resolved = self
+            .configured_game
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if resolved
+            .as_ref()
+            .is_none_or(|(held_epoch, _)| *held_epoch != epoch)
+        {
+            *resolved = Some((epoch, configured_game_path()));
+        }
+        let game_path = resolved.as_ref().and_then(|(_, path)| path.as_ref())?;
+        Some(game_path.join(engine::path::GAME_EXE_RELATIVE))
+    }
+}
+
+/// The configured game executable for the monitor tick, read from state rather
+/// than from disk. Falls back to the uncached derivation only before the
+/// coordinator is managed, which is a window no tick runs in.
+fn coordinator_configured_game_executable<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    app.try_state::<RuntimeCoordinator>()
+        .map(|state| state.configured_game_executable())
+        .unwrap_or_else(configured_game_executable)
 }
 
 #[cfg(windows)]
@@ -582,7 +644,7 @@ fn spawn_runtime_monitor<R: Runtime>(app: AppHandle<R>) {
             if app.get_webview_window("main").is_none() {
                 break;
             }
-            let expected_executable = configured_game_executable();
+            let expected_executable = coordinator_configured_game_executable(&app);
             let tracked_pid = coordinator_launcher_pid(&app);
             let inspection = if tracked_pid.is_some() {
                 // The launch monitor already owns this lifecycle and handles
@@ -727,7 +789,8 @@ fn save_settings(settings_json: String) -> Result<(), String> {
     }
     let serialized = serde_json::to_string(&normalized.settings)
         .map_err(|e| format!("Failed to serialize settings: {e}"))?;
-    std::fs::write(&path, serialized).map_err(|e| format!("Failed to save settings: {e}"))?;
+    persist_settings_file(&path, &serialized)
+        .map_err(|e| format!("Failed to save settings: {e}"))?;
     log::info!("Settings saved to {:?}", path);
     Ok(())
 }
@@ -753,7 +816,8 @@ fn load_settings() -> Result<engine::settings::SettingsLoadResult, String> {
         }
         let serialized = serde_json::to_string(&result.settings)
             .map_err(|e| format!("Failed to serialize default settings: {e}"))?;
-        std::fs::write(&path, serialized).map_err(|e| format!("Failed to repair settings: {e}"))?;
+        persist_settings_file(&path, &serialized)
+            .map_err(|e| format!("Failed to repair settings: {e}"))?;
     }
     Ok(result)
 }
@@ -902,11 +966,6 @@ fn get_vh_version() -> String {
         .unwrap_or_default()
 }
 
-fn get_installed_patch_version(game_path: &Path) -> Result<Option<String>, String> {
-    let path = get_appdata_dir().join("versions.json");
-    engine::metadata::read_game_field(&path, game_path, "_vhVersion")
-}
-
 fn known_patch_version(path: &Path, game_path: &Path) -> Option<String> {
     engine::metadata::read_game_field(path, game_path, "_vhVersion")
         .ok()
@@ -916,9 +975,17 @@ fn known_patch_version(path: &Path, game_path: &Path) -> Option<String> {
 
 fn validate_loader_metadata(game_path: &Path) -> Result<(), String> {
     let metadata_path = get_appdata_dir().join("versions.json");
-    let Some(expected_hash) =
-        engine::metadata::read_game_field(&metadata_path, game_path, "_loaderSha256")?
-    else {
+    let metadata = engine::metadata::GameMetadata::load(&metadata_path, game_path);
+    loader_metadata_error(&metadata, game_path)
+}
+
+/// The loader verdict, taken from an already-loaded metadata document so a
+/// caller that needs several fields reads the file once.
+fn loader_metadata_error(
+    metadata: &engine::metadata::GameMetadata,
+    game_path: &Path,
+) -> Result<(), String> {
+    let Some(expected_hash) = metadata.field("_loaderSha256")? else {
         return Err(
             "patch_not_ready: hash loader tidak tersedia pada metadata instalasi".to_string(),
         );
@@ -1394,13 +1461,17 @@ fn check_and_sync_media<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     tauri::async_runtime::spawn(async move {
         let _operation = operation;
         let cache_dir = get_appdata_dir().join("Cache");
-        let cached_valid = engine::media::read_cached_manifest(&cache_dir)
+        // The check carries its own digests forward: the media sync below gets
+        // the answer instead of hashing the same 15.6 MB a second time.
+        let cached_media = engine::media::read_cached_manifest(&cache_dir)
             .ok()
             .flatten()
             .map(|manifest| {
-                engine::media::validate_cached_media(&cache_dir, &manifest).unwrap_or(false)
+                engine::media::validate_cached_media(&cache_dir, &manifest)
+                    .unwrap_or_else(|_| engine::media::CachedMedia::invalid())
             })
-            .unwrap_or(false);
+            .unwrap_or_else(engine::media::CachedMedia::invalid);
+        let cached_valid = cached_media.is_valid();
 
         let _ = app_handle.emit(
             "onMediaStatus",
@@ -1434,41 +1505,65 @@ fn check_and_sync_media<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
             }
         };
 
-        match engine::media::fetch_manifest_bytes(&client, &media_manifest_url()).await {
-            Ok((manifest_bytes, mut manifest)) => {
-                if let Some(update_date) = &manifest.update_date {
-                    let _ = app_handle.emit("onUpdateDate", update_date.clone());
-                }
+        sync_manifest_media_and_theme(
+            &cache_dir,
+            &app_handle,
+            &client,
+            &media_manifest_url(),
+            &cached_media,
+        )
+        .await;
+    });
+    Ok(())
+}
 
-                // The theme block is the only part of the manifest that can
-                // restyle the launcher, so it is honoured only when the
-                // manifest itself is signed by a trusted key. Media sync keeps
-                // its existing sha256 trust model either way.
-                let verified_key = engine::theme::fetch_signature(
-                    &client,
-                    &engine::theme::signature_url(&media_manifest_url()),
-                )
-                .await
-                .and_then(|signature| {
-                    engine::theme::verify_manifest_signature(&manifest_bytes, &signature)
-                });
-                match &verified_key {
-                    Ok(key_id) => {
-                        sync_remote_theme(&cache_dir, manifest.theme.as_ref(), key_id, &app_handle)
-                            .await;
-                    }
-                    Err(error) => {
-                        log::warn!("Manifest theme ditolak: {error}");
-                        // Never let an unverified theme reach the manifest cache:
-                        // a later offline launch would read it back and apply it
-                        // with no signature check at all.
-                        manifest.theme = None;
-                        emit_theme_payload(&cache_dir, &app_handle, "unsigned");
-                    }
-                }
+/// Fetches the manifest, syncs the media, and only then decides the theme.
+///
+/// Media never needed the manifest signature: every byte it downloads is
+/// pinned by a sha256 the manifest itself carried, and the signature only
+/// decides whether the theme may be applied. So the `.sig` fetch runs in the
+/// background while the media downloads instead of in front of them. A proxy
+/// that holds that one URL can no longer add a full client timeout before the
+/// BGM and background video start moving, and the normal case saves a round
+/// trip because both requests are in flight at once.
+///
+/// Because the signature is collected after the media events, `onThemeReady`
+/// can now arrive after `onMediaReady`. The two stay independent: media state
+/// never reads a theme, and a theme payload is served from the verified local
+/// theme cache rather than from the media download.
+async fn sync_manifest_media_and_theme<R: Runtime>(
+    cache_dir: &Path,
+    app_handle: &AppHandle<R>,
+    client: &reqwest::Client,
+    manifest_url: &str,
+    cached_media: &engine::media::CachedMedia,
+) {
+    let cached_valid = cached_media.is_valid();
+    let signature_url = engine::theme::signature_url(manifest_url);
+    let signature_client = client.clone();
+    let signature_task = tauri::async_runtime::spawn(async move {
+        engine::theme::fetch_signature(&signature_client, &signature_url).await
+    });
 
-                let app_progress = app_handle.clone();
-                let res = engine::media::sync_media(&cache_dir, &manifest, move |asset_name, p| {
+    match engine::media::fetch_manifest_bytes(client, manifest_url).await {
+        Ok((manifest_bytes, mut manifest)) => {
+            if let Some(update_date) = &manifest.update_date {
+                let _ = app_handle.emit("onUpdateDate", update_date.clone());
+            }
+
+            // The theme block leaves the manifest before anything can cache
+            // it. An unverified theme must never reach the manifest cache: a
+            // later offline launch would read it back and apply it with no
+            // signature check at all, and the theme is the only part of a
+            // manifest that can restyle the launcher.
+            let theme = manifest.theme.take();
+
+            let app_progress = app_handle.clone();
+            let res = engine::media::sync_media(
+                cache_dir,
+                &manifest,
+                cached_media,
+                move |asset_name, p| {
                     let _ = app_progress.emit(
                         "onMediaProgress",
                         serde_json::json!({
@@ -1478,63 +1573,86 @@ fn check_and_sync_media<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
                             "size": p.status
                         }),
                     );
-                })
-                .await;
+                },
+            )
+            .await;
 
-                match res {
-                    Ok(_) => {
-                        let _ = app_handle.emit(
-                            "onMediaReady",
-                            serde_json::json!({
-                                "bgmUrl": media_url("bgm.mp3"),
-                                "videoUrl": media_url("bg-video.mp4")
-                            }),
-                        );
-                        let _ = app_handle.emit(
-                            "onMediaStatus",
-                            serde_json::json!({
-                                "status": "ready",
-                                "message": ""
-                            }),
-                        );
-                    }
-                    Err(e) => {
-                        log::warn!("Media sync error: {}", e);
-                        let status = if cached_valid { "offline" } else { "error" };
-                        let message = if cached_valid {
-                            format!(
-                                "Media baru gagal diverifikasi; memakai cache valid. Detail: {e}"
-                            )
-                        } else {
-                            e
-                        };
-                        let _ = app_handle.emit(
-                            "onMediaStatus",
-                            serde_json::json!({
-                                "status": status,
-                                "message": message
-                            }),
-                        );
-                    }
+            match res {
+                Ok(_) => {
+                    let _ = app_handle.emit(
+                        "onMediaReady",
+                        serde_json::json!({
+                            "bgmUrl": media_url("bgm.mp3"),
+                            "videoUrl": media_url("bg-video.mp4")
+                        }),
+                    );
+                    let _ = app_handle.emit(
+                        "onMediaStatus",
+                        serde_json::json!({
+                            "status": "ready",
+                            "message": ""
+                        }),
+                    );
+                }
+                Err(e) => {
+                    log::warn!("Media sync error: {}", e);
+                    let status = if cached_valid { "offline" } else { "error" };
+                    let message = if cached_valid {
+                        format!("Media baru gagal diverifikasi; memakai cache valid. Detail: {e}")
+                    } else {
+                        e
+                    };
+                    let _ = app_handle.emit(
+                        "onMediaStatus",
+                        serde_json::json!({
+                            "status": status,
+                            "message": message
+                        }),
+                    );
                 }
             }
-            Err(e) => {
-                log::warn!("Failed to fetch media manifest: {}", e);
-                let _ = app_handle.emit(
-                    "onMediaStatus",
-                    serde_json::json!({
-                        "status": "offline",
-                        "message": if cached_valid {
-                            format!("Tidak terhubung; media cache tetap digunakan. Detail: {e}")
-                        } else {
-                            e
-                        }
-                    }),
-                );
+
+            // The signature has been in flight for the whole media sync. A
+            // fetch that failed, was cancelled, or panicked is reported, not
+            // swallowed, and never unwinds across the command boundary.
+            let verified_key = match signature_task.await {
+                Ok(Ok(signature)) => {
+                    engine::theme::verify_manifest_signature(&manifest_bytes, &signature)
+                }
+                Ok(Err(error)) => Err(format!("Gagal mengambil tanda tangan manifest: {error}")),
+                Err(error) => {
+                    log::warn!("Pencarian tanda tangan manifest gagal: {error}");
+                    Err(format!("Pencarian tanda tangan manifest gagal: {error}"))
+                }
+            };
+            match &verified_key {
+                Ok(key_id) => {
+                    sync_remote_theme(cache_dir, theme.as_ref(), key_id, app_handle).await;
+                }
+                Err(error) => {
+                    log::warn!("Manifest theme ditolak: {error}");
+                    emit_theme_payload(cache_dir, app_handle, "unsigned");
+                }
             }
         }
-    });
-    Ok(())
+        Err(e) => {
+            // There is nothing left to verify the signature against, so stop
+            // the background fetch instead of leaving it running.
+            signature_task.abort();
+            log::warn!("Failed to fetch media manifest: {}", e);
+            let _ = app_handle.emit(
+                "onMediaStatus",
+                serde_json::json!({
+                    "status": "offline",
+                    "message": if cached_valid {
+                        format!("Tidak terhubung; media cache tetap digunakan. Detail: {e}")
+                    } else {
+                        e
+                    }
+                }),
+            );
+        }
+    }
 }
 
 /// Applies what a signed manifest says about theming. A theme failure never
@@ -1806,7 +1924,7 @@ fn perform_launcher_update<R: Runtime>(app: AppHandle<R>, version: String) -> Re
                 return Err("Versi update tidak lebih baru dari launcher saat ini.".to_string());
             }
 
-            engine::downloader::download_file_with_expected_size_limited_policy(
+            let downloaded = engine::downloader::download_file_with_expected_size_limited_policy(
                 &zip_url,
                 &temp_zip,
                 None,
@@ -1827,8 +1945,12 @@ fn perform_launcher_update<R: Runtime>(app: AppHandle<R>, version: String) -> Re
             .await
             .map_err(|error| format!("download: {error}"))?;
 
+            // The archive still has to be in memory to be unpacked, but the
+            // digest comes from the bytes the download wrote rather than from a
+            // second read of the file it wrote.
             let zip_data = std::fs::read(&temp_zip)
                 .map_err(|error| format!("Gagal membaca ZIP update: {error}"))?;
+
             let checksum_body = engine::updater::fetch_official_asset_body(
                 &checksums_url,
                 &tag,
@@ -1843,15 +1965,14 @@ fn perform_launcher_update<R: Runtime>(app: AppHandle<R>, version: String) -> Re
                 .get(&zip_name)
                 .cloned()
                 .ok_or_else(|| format!("Checksum untuk {zip_name} tidak ditemukan."))?;
-            let actual = engine::downloader::compute_sha256(&temp_zip)
-                .map_err(|error| format!("Gagal menghitung checksum update: {error}"))?;
-            if actual != expected {
+            // The digest of the whole archive, resume included, computed while
+            // those bytes were written. `extract_zip_update` below is the
+            // authoritative archive validation: it is its first statement, it
+            // walks the same central directory, and it rejects with the same
+            // strings, so validating here as well only doubled the walk.
+            if downloaded.sha256 != expected {
                 return Err("Checksum ZIP update tidak cocok.".to_string());
             }
-            engine::updater::validate_update_archive(
-                &zip_data,
-                engine::updater::RELEASE_EXECUTABLE_NAME,
-            )?;
 
             if staging.exists() {
                 std::fs::remove_dir_all(&staging)
@@ -2002,16 +2123,21 @@ async fn check_patch_status<R: Runtime>(
 
     let mut local = engine::patch_status::classify_installation(&normalized_path, method)
         .map_err(|error| format!("Gagal memeriksa instalasi patch: {error}"))?;
+    // One read of the installation metadata covers the three fields this check
+    // needs. Reading it per field re-parsed the file and re-canonicalized the
+    // game path three times over.
+    let metadata = engine::metadata::GameMetadata::load(
+        &get_appdata_dir().join("versions.json"),
+        &normalized_path,
+    );
     if method == engine::method::InstallMethod::Loader
         && matches!(local, engine::patch_status::LocalPatchState::Ready)
-        && validate_loader_metadata(&normalized_path).is_err()
+        && loader_metadata_error(&metadata, &normalized_path).is_err()
     {
         local = engine::patch_status::LocalPatchState::Invalid;
     }
     if matches!(local, engine::patch_status::LocalPatchState::Ready) {
-        let metadata_path = get_appdata_dir().join("versions.json");
-        let installed_variant =
-            engine::metadata::read_game_field(&metadata_path, &normalized_path, "_patchVariant")?;
+        let installed_variant = metadata.field("_patchVariant")?;
         if !engine::patch_asset::installed_variant_matches(
             installed_variant.as_deref(),
             desired_variant,
@@ -2019,7 +2145,8 @@ async fn check_patch_status<R: Runtime>(
             local = engine::patch_status::LocalPatchState::Invalid;
         }
     }
-    let current_version = get_installed_patch_version(&normalized_path)
+    let current_version = metadata
+        .field("_vhVersion")
         .map_err(|error| format!("Gagal membaca metadata instalasi patch: {error}"))?;
     let latest_version = if matches!(local, engine::patch_status::LocalPatchState::Ready) {
         get_latest_patch_version().await
@@ -2382,22 +2509,52 @@ fn start_installation<R: Runtime>(
             }),
         );
 
-        if let Err(error) = engine::installer::install_patch_transaction_with_commit(
-            p,
-            method,
-            &cache_pak,
-            loader_cache.as_deref(),
-            || {
-                engine::metadata::update_installation_with_variant(
-                    &versions_path,
-                    p,
-                    Some(&patch_version),
-                    &canonical_method,
-                    loader_sha256.as_deref(),
-                    Some(&patch_variant_id),
-                )
-            },
-        ) {
+        // Snapshotting every pre-existing artifact into memory, copying the
+        // patch in and hashing it three times over is blocking I/O measured in
+        // hundreds of milliseconds and hundreds of megabytes. It runs on a
+        // blocking thread so the runtime stays free for the events the UI is
+        // waiting on; the progress events around it are emitted from the
+        // async task, exactly as before.
+        let install_game_path = p.to_path_buf();
+        let install_pak_source = cache_pak.clone();
+        let install_loader_source = loader_cache.clone();
+        let commit_versions_path = versions_path.clone();
+        let commit_patch_version = patch_version.clone();
+        let commit_method_name = canonical_method.clone();
+        let commit_variant_id = patch_variant_id.clone();
+        let commit_loader_sha256 = loader_sha256.clone();
+        let installed = tauri::async_runtime::spawn_blocking(move || {
+            engine::installer::install_patch_transaction_with_commit(
+                &install_game_path,
+                method,
+                &install_pak_source,
+                install_loader_source.as_deref(),
+                || {
+                    engine::metadata::update_installation_with_variant(
+                        &commit_versions_path,
+                        &install_game_path,
+                        Some(&commit_patch_version),
+                        &commit_method_name,
+                        commit_loader_sha256.as_deref(),
+                        Some(&commit_variant_id),
+                    )
+                },
+            )
+        })
+        .await;
+
+        let installed = match installed {
+            Ok(result) => result,
+            Err(error) => {
+                let _ = app_handle.emit(
+                    "onInstallError",
+                    format!("Transaksi instalasi tidak selesai: {error}"),
+                );
+                return;
+            }
+        };
+
+        if let Err(error) = installed {
             let _ = app_handle.emit("onInstallError", error);
             return;
         }
@@ -2826,7 +2983,6 @@ pub fn run<R: tauri::Runtime>(context: tauri::Context<R>) {
         .manage(RuntimeCoordinator::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_process::init())
         .register_uri_scheme_protocol("media", media_protocol_handler)
         .setup(|app| {
             if let Err(error) = remove_saved_launch_diagnostics(&get_appdata_dir()) {
@@ -4256,6 +4412,366 @@ mod tests {
         std::env::remove_var("WUWAID_E2E_APPDATA");
     }
 
+    fn sha256_hex(bytes: &[u8]) -> String {
+        use sha2::Digest;
+        hex::encode(sha2::Sha256::digest(bytes))
+    }
+
+    /// Holds the `.sig` response until the test lets it through, so a stall
+    /// there costs the test nothing but the test's own patience.
+    struct SignatureGate {
+        released: std::sync::Mutex<bool>,
+        signal: std::sync::Condvar,
+    }
+
+    impl SignatureGate {
+        fn new(released: bool) -> Self {
+            Self {
+                released: std::sync::Mutex::new(released),
+                signal: std::sync::Condvar::new(),
+            }
+        }
+
+        fn hold(&self) {
+            let released = self.released.lock().unwrap();
+            let _ = self
+                .signal
+                .wait_timeout_while(released, Duration::from_secs(30), |released| !*released);
+        }
+
+        fn release(&self) {
+            *self.released.lock().unwrap() = true;
+            self.signal.notify_all();
+        }
+    }
+
+    /// Loopback origin for the media pipeline: the manifest, both media files,
+    /// and a signature endpoint the test can refuse to answer. The manifest
+    /// carries a theme block, so a run that lets it through the cache proves
+    /// the signature gate.
+    struct MediaOrigin {
+        manifest_url: String,
+        signature: std::sync::Arc<SignatureGate>,
+        requests: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl MediaOrigin {
+        fn requested(&self, path: &str) -> usize {
+            self.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|seen| *seen == path)
+                .count()
+        }
+    }
+
+    fn spawn_media_origin(signature_held: bool) -> MediaOrigin {
+        use std::io::{Read, Write};
+
+        fn respond(stream: &mut std::net::TcpStream, status: &str, body: &[u8], send_body: bool) {
+            let head = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            if send_body {
+                let _ = stream.write_all(body);
+            }
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let bgm = b"bgm-audio-bytes".to_vec();
+        let video = b"bg-video-bytes".to_vec();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "update_date": "2026-09-07",
+            "assets": [
+                {
+                    "name": "bgm.mp3",
+                    "url": format!("{base_url}/bgm.mp3"),
+                    "sha256": sha256_hex(&bgm),
+                },
+                {
+                    "name": "bg-video.mp4",
+                    "url": format!("{base_url}/bg-video.mp4"),
+                    "sha256": sha256_hex(&video),
+                },
+            ],
+            "theme": {
+                "id": "fixture-theme",
+                "name": "Fixture Theme",
+                "active": true,
+                "tokens": {"--particle-gold-rgb": "231, 211, 148"},
+            },
+        }))
+        .unwrap();
+        // A body that parses as text and verifies as nothing: the shape a
+        // tampered or placeholder `.sig` file has.
+        let signature_body = b"wuwaid-manifest-v1\nnot-a-real-signature\n".to_vec();
+        let signature = std::sync::Arc::new(SignatureGate::new(!signature_held));
+        let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let served_signature = std::sync::Arc::clone(&signature);
+        let served_requests = std::sync::Arc::clone(&requests);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else {
+                    return;
+                };
+                let signature = std::sync::Arc::clone(&served_signature);
+                let requests = std::sync::Arc::clone(&served_requests);
+                let manifest = manifest.clone();
+                let bgm = bgm.clone();
+                let video = video.clone();
+                let signature_body = signature_body.clone();
+                std::thread::spawn(move || {
+                    let mut buffer = [0u8; 2048];
+                    let read = stream.read(&mut buffer).unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buffer[..read]).into_owned();
+                    let mut parts = request
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .split_whitespace();
+                    let is_head = parts.next() == Some("HEAD");
+                    let path = parts.next().unwrap_or("/").to_string();
+                    requests.lock().unwrap().push(path.clone());
+                    match path.as_str() {
+                        "/assets.json" => respond(&mut stream, "200 OK", &manifest, !is_head),
+                        "/bgm.mp3" => respond(&mut stream, "200 OK", &bgm, !is_head),
+                        "/bg-video.mp4" => respond(&mut stream, "200 OK", &video, !is_head),
+                        // A proxy that accepts this one URL and then says
+                        // nothing: exactly what the media sync must outlive.
+                        "/assets.json.sig" => {
+                            signature.hold();
+                            respond(&mut stream, "200 OK", &signature_body, !is_head);
+                        }
+                        _ => respond(&mut stream, "404 Not Found", b"", false),
+                    }
+                });
+            }
+        });
+
+        MediaOrigin {
+            manifest_url: format!("{base_url}/assets.json"),
+            signature,
+            requests,
+        }
+    }
+
+    /// Records every media/theme event in the order the launcher emitted it.
+    struct EventOrder {
+        events: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    }
+
+    impl EventOrder {
+        fn record(app: &tauri::App<tauri::test::MockRuntime>, names: &[&str]) -> Self {
+            let events: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>> =
+                std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            for name in names {
+                let name = name.to_string();
+                let sink = std::sync::Arc::clone(&events);
+                app.listen_any(name.clone(), move |event| {
+                    let payload: serde_json::Value =
+                        serde_json::from_str(event.payload()).unwrap_or(serde_json::Value::Null);
+                    let status = payload
+                        .get("status")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default();
+                    sink.lock()
+                        .unwrap()
+                        .push((name.clone(), status.to_string()));
+                });
+            }
+            Self { events }
+        }
+
+        fn names(&self) -> Vec<String> {
+            self.events
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect()
+        }
+
+        /// Waits for `count` events and reports them, so an assertion failure
+        /// names the events that did arrive instead of just a timeout.
+        fn wait_for(&self, count: usize, what: &str) -> Vec<(String, String)> {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                let events = self.events.lock().unwrap().clone();
+                if events.len() >= count {
+                    return events;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "{what}: only {:?} arrived",
+                    self.names()
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_stalled_signature_does_not_hold_media_and_theme_follows_it() {
+        let appdata = tempfile::tempdir().unwrap();
+        let cache_dir = appdata.path().join("Cache");
+        let origin = spawn_media_origin(true);
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let order = EventOrder::record(&app, &["onMediaReady", "onMediaStatus", "onThemeReady"]);
+        // The signature is only answered when this test says so, so the media
+        // events below can only arrive if the pipeline never waited for it.
+        let client = engine::downloader::official_github_client(Duration::from_secs(20)).unwrap();
+        let manifest_url = origin.manifest_url.clone();
+
+        let pipeline = tauri::async_runtime::spawn({
+            let app = app.handle().clone();
+            let cache_dir = cache_dir.clone();
+            async move {
+                sync_manifest_media_and_theme(
+                    &cache_dir,
+                    &app,
+                    &client,
+                    &manifest_url,
+                    &engine::media::CachedMedia::invalid(),
+                )
+                .await;
+            }
+        });
+
+        // The signature is still being withheld here, so nothing may report a
+        // theme yet — and the media must already be done.
+        let before_release = order.wait_for(2, "media did not sync while the signature stalled");
+        assert_eq!(
+            before_release,
+            vec![
+                ("onMediaReady".to_string(), String::new()),
+                ("onMediaStatus".to_string(), "ready".to_string()),
+            ],
+            "media events were not emitted while the signature stalled"
+        );
+        assert!(
+            !order.names().contains(&"onThemeReady".to_string()),
+            "a theme was reported before its signature was known"
+        );
+
+        origin.signature.release();
+        let after_release = order.wait_for(3, "theme event never followed the media events");
+        assert_eq!(
+            after_release.last().map(|(name, _)| name.as_str()),
+            Some("onThemeReady"),
+            "onThemeReady must be reported after the media events: {after_release:?}"
+        );
+
+        let cached_manifest =
+            std::fs::read_to_string(engine::media::cached_manifest_path(&cache_dir))
+                .expect("the verified media sync wrote its manifest");
+        let cached: serde_json::Value = serde_json::from_str(&cached_manifest).unwrap();
+        assert!(
+            cached.get("theme").is_none_or(|theme| theme.is_null()),
+            "an unverified theme reached the manifest cache: {cached_manifest}"
+        );
+        pipeline.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_rejected_signature_still_reports_media_before_the_theme() {
+        let appdata = tempfile::tempdir().unwrap();
+        let cache_dir = appdata.path().join("Cache");
+        let origin = spawn_media_origin(false);
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let order = EventOrder::record(&app, &["onMediaReady", "onMediaStatus", "onThemeReady"]);
+        let client = engine::downloader::official_github_client(Duration::from_secs(20)).unwrap();
+
+        sync_manifest_media_and_theme(
+            &cache_dir,
+            app.handle(),
+            &client,
+            &origin.manifest_url,
+            &engine::media::CachedMedia::invalid(),
+        )
+        .await;
+
+        let events = order.wait_for(3, "a rejected signature swallowed the media report");
+        assert_eq!(
+            events,
+            vec![
+                ("onMediaReady".to_string(), String::new()),
+                ("onMediaStatus".to_string(), "ready".to_string()),
+                // The manifest was not signed by a trusted key, so the only
+                // theme this launcher can serve is the bundled general one.
+                ("onThemeReady".to_string(), "general".to_string()),
+            ],
+            "a rejected signature must still report media first, then the theme"
+        );
+        assert!(cache_dir.join("bgm.mp3").is_file());
+        assert!(cache_dir.join("bg-video.mp4").is_file());
+    }
+
+    #[tokio::test]
+    async fn test_second_media_command_is_refused_while_the_signature_is_still_in_flight() {
+        let _env_lock = lock_test_environment();
+        let appdata = tempfile::tempdir().unwrap();
+        let origin = spawn_media_origin(true);
+        std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
+        std::env::set_var("WUWAID_ASSETS_URL", &origin.manifest_url);
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+
+        let mut started = false;
+        for _ in 0..80 {
+            match check_and_sync_media(app.handle().clone()) {
+                Ok(()) => {
+                    started = true;
+                    break;
+                }
+                Err(error) if error.starts_with("busy:") => {
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                Err(error) => panic!("unexpected media command error: {error}"),
+            }
+        }
+        assert!(started, "media operation did not become available");
+
+        let refused = check_and_sync_media(app.handle().clone());
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|error| error.starts_with("busy:")),
+            "a second media sync started while the first was still running: {refused:?}"
+        );
+
+        origin.signature.release();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while engine::operations::global().active_operation().is_some() {
+            assert!(Instant::now() < deadline, "media sync never finished");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            origin.requested("/assets.json"),
+            1,
+            "the refused call started a second manifest fetch"
+        );
+        assert_eq!(
+            origin.requested("/assets.json.sig"),
+            1,
+            "the refused call started a second signature fetch"
+        );
+
+        std::env::remove_var("WUWAID_ASSETS_URL");
+        std::env::remove_var("WUWAID_E2E_APPDATA");
+    }
+
     #[test]
     fn test_registered_media_response_supports_range_and_404() {
         let appdata = tempfile::tempdir().unwrap();
@@ -4391,6 +4907,57 @@ mod tests {
         );
 
         std::env::remove_var("WUWAID_E2E_APPDATA");
+    }
+
+    /// The monitor tick's cached game path is only safe if every write of
+    /// `settings.json` retires it. This covers both writers: the `save_settings`
+    /// command the UI uses when the player points the launcher at another
+    /// folder, and the `load_settings` repair that rewrites a damaged file.
+    #[test]
+    fn monitor_game_path_cache_follows_every_settings_write() {
+        let _env_lock = lock_test_environment();
+        let appdata = tempfile::tempdir().unwrap();
+        std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
+        let coordinator = RuntimeCoordinator::default();
+
+        let (_first_dir, first) = configured_game_directory();
+        save_settings(serde_json::json!({"gamePath": first.to_string_lossy()}).to_string())
+            .unwrap();
+        assert_eq!(
+            coordinator.configured_game_executable(),
+            Some(first.join(engine::path::GAME_EXE_RELATIVE))
+        );
+
+        let (_second_dir, second) = configured_game_directory();
+        save_settings(serde_json::json!({"gamePath": second.to_string_lossy()}).to_string())
+            .unwrap();
+        assert_eq!(
+            coordinator.configured_game_executable(),
+            Some(second.join(engine::path::GAME_EXE_RELATIVE)),
+            "saving a new game path must retire the value the monitor already holds"
+        );
+
+        std::fs::write(appdata.path().join("settings.json"), b"{").unwrap();
+        assert!(load_settings().unwrap().repaired);
+        assert_eq!(
+            coordinator.configured_game_executable(),
+            None,
+            "the repair writes default settings, so the monitor must stop watching the old folder"
+        );
+
+        std::env::remove_var("WUWAID_E2E_APPDATA");
+    }
+
+    /// A canonical game directory the path validators accept, with the
+    /// temporary directory that owns it returned alongside so the caller keeps
+    /// it alive for the length of the assertion.
+    fn configured_game_directory() -> (tempfile::TempDir, PathBuf) {
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join(engine::path::GAME_EXE_RELATIVE);
+        std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        std::fs::write(&executable, b"monitor cache fixture game executable").unwrap();
+        let canonical = std::fs::canonicalize(root.path()).unwrap();
+        (root, canonical)
     }
 
     #[test]
