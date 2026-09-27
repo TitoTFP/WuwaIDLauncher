@@ -199,15 +199,29 @@ jobs:
 
       # The Windows matrix above samples whole processes; this job answers the
       # other question — what one function of the launcher costs — on a runner
-      # that needs neither a desktop nor a game. --test-threads=1 is mandatory:
-      # the probe's arm flag is process-wide.
+      # that needs neither a desktop nor a game.
+      #
+      # The scenarios are #[ignore]d: they are a measuring instrument, not a
+      # correctness test, and they only mean something in a quiet process on
+      # the platform their budgets were cut on. The general suite
+      # (--all-targets, the required Windows check) skips them, so this job runs
+      # them explicitly with --ignored, alone, on ubuntu-latest.
+      #
+      # --test-threads=1 is mandatory: the probe's arm flag is process-wide, so
+      # two scenarios at once would count each other's allocations.
       - name: Run allocation probe scenarios
         shell: bash
         run: |
-          set -o pipefail
-          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib perf_scenarios -- --test-threads=1 --nocapture \
+          set -euo pipefail
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib perf_scenarios -- --test-threads=1 --nocapture --ignored \
             | tee "$RUNNER_TEMP/wuwaid-ci-evidence/perf-probe/scenarios.txt"
-          grep '^WUL1|' "$RUNNER_TEMP/wuwaid-ci-evidence/perf-probe/scenarios.txt"
+          # The harness prints each test's captured stdout as a suffix of that
+          # test's own status line — "test perf_scenarios::idle_monitor_tick ...
+          # WUL1|..." — so WUL1| is never at the start of a line and must not be
+          # anchored there. Matching it anywhere also keeps every measurement in
+          # the job log, and grep exiting 1 on no match fails the step: a green
+          # job that printed no measurement is not a measurement.
+          grep -F 'WUL1|' "$RUNNER_TEMP/wuwaid-ci-evidence/perf-probe/scenarios.txt"
 
       - name: Capture job evidence
         if: ${{ always() }}

@@ -39,8 +39,8 @@ The post-change gates use these explicit thresholds:
 | Medium | CI/release omitted security/control regressions | Gates are now required in CI, release, and the Windows workflow contract. |
 | Medium | Shell command substitution was unsafe for the deterministic auditor | Added `node scripts/tests/workflow-contract.test.mjs`, a literal-argument check for hosted runners and manual real-game acceptance. |
 | Medium | Media sync waited for the manifest signature before downloading anything | The `.sig` fetch runs in the background and is collected after the media sync, so a stalled or rejected signature can no longer delay the media download or the media status events. |
-| Medium | Startup hashed the cached media twice and copied whole response bodies | The cached-media check now carries its digests forward, so the media sync reuses the verdict instead of re-hashing; theme and metadata reads navigate the document they already parsed; four full-buffer `to_vec` copies became moves. A `#[cfg(test)]` allocation probe with per-scenario budgets guards all of it. |
-| Medium | The idle tick re-derived the game path from disk, and the update and install paths did their I/O twice | The monitor tick now reads a resolved game path from `RuntimeCoordinator`, retired by a settings-write counter that travels with the only two writers of `settings.json`; the launcher update carries its SHA-256 out of the download write loop and validates the archive once, inside extraction; the install transaction runs on a blocking thread. The two-second cadence, the size caps, the redirect policy, the rollback semantics and every error string are unchanged, and the allocation probe holds each path to a budget. |
+| Medium | Startup hashed the cached media twice and copied whole response bodies | The cached-media check now carries its digests forward, so the media sync reuses the verdict instead of re-hashing; theme and metadata reads navigate the document they already parsed; four full-buffer `to_vec` copies became moves. A `#[cfg(test)]` allocation probe with per-scenario budgets covers all of it; the scenarios are `#[ignore]`d, so they measure in a dedicated opt-in CI job rather than running inside the general correctness suite. |
+| Medium | The idle tick re-derived the game path from disk, and the update and install paths did their I/O twice | The monitor tick now reads a resolved game path from `RuntimeCoordinator`, retired by a settings-write counter that travels with the only two writers of `settings.json`; the launcher update carries its SHA-256 out of the download write loop and validates the archive once, inside extraction; the install transaction runs on a blocking thread. The two-second cadence, the size caps, the redirect policy, the rollback semantics and every error string are unchanged, and the allocation probe holds each path to a budget in that same opt-in job. |
 | Medium | The shipped payload carried a 270,398-byte favicon the Windows build already embeds, and the derived repack cache was unbounded | `public/images/app.ico` is re-emitted as a 16/32/48 PNG-in-ICO of 10,018 bytes at the same path, taking the `dist/` tree from 554,141 to 293,761 bytes. `retain_derived_pak_cache` keeps only the PAK being installed and its `.sha256` marker, and `remove_orphaned_repack_artifacts` reclaims repack work directories and interrupted atomic-write temporaries whose owning process is provably gone or that are older than 6 hours, never one this process owns. `scripts/tests/resource-lifecycle.test.mjs` caps the `public/` tree and per-file size and fails if any file duplicates `src-tauri/icons/icon.ico`. |
 | Medium | `tauri-plugin-process` was registered, granted `process:default` and linked into the release binary, but never invoked | The registration, the capability entry, the `Cargo.toml` dependency and the `gen/schemas` regenerated from it are removed; the launcher closes through `app.exit(0)` and spawns children with `std::process::Command`. |
 
@@ -84,7 +84,7 @@ npm run test:version
 npm run test:tray
 (cd src-tauri && cargo fmt --all -- --check)
 cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1
-cargo test --locked --manifest-path src-tauri/Cargo.toml --lib perf_scenarios -- --test-threads=1 --nocapture
+cargo test --locked --manifest-path src-tauri/Cargo.toml --lib perf_scenarios -- --ignored --test-threads=1 --nocapture
 cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 git diff --check
 test -s docs/launcher-optimization-audit.md
@@ -95,7 +95,7 @@ grep -q Residual docs/launcher-optimization-audit.md
 grep -q GitHub-hosted docs/launcher-optimization-audit.md
 ```
 
-The Rust test matrix passed 237 tests: 183 in the library target, which includes the 12 allocation-probe scenarios, and 54 across the eleven integration binaries, the largest being the 12-test downloader integration suite. Fresh primary LSP diagnostics for `src/` and the changed Rust files are clean.
+The Rust test matrix passed 225 tests: 171 in the library target and 54 across the eleven integration binaries, the largest being the 12-test downloader integration suite. The 12 allocation-probe scenarios are `#[ignore]`d, so that same `--all-targets` run reports them as `12 ignored` and does not execute them; they are a measuring instrument rather than a correctness test, and the dedicated `ubuntu-latest` probe job is where they run, alone, with `--ignored`. Fresh primary LSP diagnostics for `src/` and the changed Rust files are clean.
 
 ## Residual review items
 

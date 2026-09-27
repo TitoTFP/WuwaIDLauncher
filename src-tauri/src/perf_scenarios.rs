@@ -10,14 +10,44 @@
 //! average. Every budget here uses the cheapest iteration in its window; the
 //! one exception, and why it is one, is written out at that scenario.
 //!
-//! Run them single-threaded and with output captured:
+//! # Every scenario is opt-in
+//!
+//! All twelve are `#[ignore]`d, so the general correctness suite
+//! (`cargo test --all-targets`, the Windows required check) skips them, and the
+//! dedicated probe job runs them on their own:
 //!
 //! ```text
-//! cargo test --locked --manifest-path src-tauri/Cargo.toml --lib perf_scenarios -- --test-threads=1 --nocapture
+//! cargo test --locked --manifest-path src-tauri/Cargo.toml --lib perf_scenarios -- --ignored --test-threads=1 --nocapture
 //! ```
 //!
 //! `--test-threads=1` is not optional: the probe's arm flag is process-wide, so
 //! two scenarios at once would count each other's allocations.
+//!
+//! A scenario is a measuring instrument, not a correctness test, and it only
+//! means something where the process is quiet and the platform is the one its
+//! budgets were measured on. The general suite breaks both of those.
+//!
+//! **The arm flag is process-wide.** About 180 library tests run before these
+//! in the same process, and they build Tauri mock apps, start tokio runtimes
+//! and spawn threads. Whatever a background thread allocates lands in the
+//! armed window, and the per-iteration minimum only discounts a *one-off* — a
+//! thread that allocates continuously defeats it, because then every
+//! iteration is contaminated and so is the cheapest of them.
+//!
+//! **The budgets are one platform's numbers.** Some of the bodies these
+//! scenarios measure are not the same work everywhere.
+//! `runtime::inspect_runtime_processes_with_cache` is the clearest case: it is
+//! `#[cfg(windows)]` inside, and on Linux it discards its arguments and
+//! returns a default struct without doing anything, while on Windows it walks
+//! the entire process table through `CreateToolhelp32Snapshot` and allocates a
+//! `String` per process. Measured over the same allocation shape, a 145-process
+//! machine costs 298 allocations per walk — against a budget of 8. The tick
+//! this scenario is named for costs 3 on Linux because the inspection is not
+//! there, not because the tick is cheap.
+//!
+//! The dedicated job runs on `ubuntu-latest`, which is the worktree every
+//! budget in `docs/launcher-performance.md` was measured on, so the numbers it
+//! asserts are the numbers that were written down.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -154,6 +184,7 @@ fn as_keyring<'a>(owned: &'a [(&'static str, String)]) -> Vec<(&'static str, &'a
 /// of once per tick: what is left per tick is the cached read, a path clone
 /// and the process reconciliation.
 #[test]
+#[ignore = "opt-in measurement, not a correctness test: the arm flag is process-wide and the budgets are one platform's; runs in the dedicated perf-probe job"]
 fn idle_monitor_tick() {
     const ITERATIONS: u64 = 64;
     // Reading a resolved path out of the coordinator costs one lock, one clone
@@ -213,6 +244,7 @@ fn idle_monitor_tick() {
 /// A settings read and parse: what the UI asks for on every panel open, and
 /// what the monitor tick does before anything else.
 #[test]
+#[ignore = "opt-in measurement, not a correctness test: the arm flag is process-wide and the budgets are one platform's; runs in the dedicated perf-probe job"]
 fn idle_settings_read_parse() {
     const ITERATIONS: u64 = 64;
     // A nine-field settings object is a handful of small allocations and
@@ -258,6 +290,7 @@ fn idle_settings_read_parse() {
 /// nothing to download and never awaits, so `block_on` drives it to completion
 /// in one go.
 #[test]
+#[ignore = "opt-in measurement, not a correctness test: the arm flag is process-wide and the budgets are one platform's; runs in the dedicated perf-probe job"]
 fn startup_cached_media_validate() {
     const ITERATIONS: u64 = 4;
     // The two media files are hashed once between the two calls, never twice:
@@ -324,6 +357,7 @@ fn startup_cached_media_validate() {
 /// which is twice per launch. It is the launcher's only path that reads and
 /// re-validates a file it has already read.
 #[test]
+#[ignore = "opt-in measurement, not a correctness test: the arm flag is process-wide and the budgets are one platform's; runs in the dedicated perf-probe job"]
 fn startup_theme_cache_read() {
     const ITERATIONS: u64 = 64;
     // A signed theme with a 16 KiB fragment: the metadata record, one read of
@@ -406,6 +440,7 @@ fn startup_theme_cache_read() {
 /// median measures 5,416,193 to 5,694,969 bytes with the body moved and
 /// 6,464,686 to 6,710,606 with it copied, so the budget below separates them.
 #[test]
+#[ignore = "opt-in measurement, not a correctness test: the arm flag is process-wide and the budgets are one platform's; runs in the dedicated perf-probe job"]
 fn startup_manifest_fetch_body() {
     const ITERATIONS: u64 = 16;
     // A body of `MAX_MANIFEST_BYTES` carrying a real manifest plus a padding
@@ -448,6 +483,7 @@ fn startup_manifest_fetch_body() {
 /// is a small tree, and reading a string out of it must not clone the tree to
 /// do it.
 #[test]
+#[ignore = "opt-in measurement, not a correctness test: the arm flag is process-wide and the budgets are one platform's; runs in the dedicated perf-probe job"]
 fn update_check_read_game_field_only() {
     const ITERATIONS: u64 = 256;
     // One parse of a three-field entry and one clone of the leaf. The old shape
@@ -496,6 +532,7 @@ fn update_check_read_game_field_only() {
 /// The whole-file read behind a download. One buffer, grown once; the cost is
 /// the file, and the budget is that file and nothing beside it.
 #[test]
+#[ignore = "opt-in measurement, not a correctness test: the arm flag is process-wide and the budgets are one platform's; runs in the dedicated perf-probe job"]
 fn download_fs_read_32mib() {
     const ITERATIONS: u64 = 4;
     // A 32 MiB read allocates one buffer, and the allocator doubles it on the
@@ -521,6 +558,7 @@ fn download_fs_read_32mib() {
 
 /// The SHA-256 over a downloaded patch, streamed through a fixed stack buffer.
 #[test]
+#[ignore = "opt-in measurement, not a correctness test: the arm flag is process-wide and the budgets are one platform's; runs in the dedicated perf-probe job"]
 fn download_compute_sha256_32mib() {
     const ITERATIONS: u64 = 4;
     // The digest of a file is a hex string and nothing else. The read buffer
@@ -550,6 +588,7 @@ fn download_compute_sha256_32mib() {
 /// fixed stack buffer, and the cost stays a buffer and a hex string whatever
 /// the file weighs.
 #[test]
+#[ignore = "opt-in measurement, not a correctness test: the arm flag is process-wide and the budgets are one platform's; runs in the dedicated perf-probe job"]
 fn download_resume_prefix_digest() {
     const ITERATIONS: u64 = 4;
     // A digest and nothing else. Reading the skipped prefix into memory to hash
@@ -594,6 +633,7 @@ fn download_resume_prefix_digest() {
 /// The archive inspection that runs on a downloaded update before anything is
 /// unpacked. It is pure metadata work: a bounded walk of the central directory.
 #[test]
+#[ignore = "opt-in measurement, not a correctness test: the arm flag is process-wide and the budgets are one platform's; runs in the dedicated perf-probe job"]
 fn download_validate_archive() {
     const ITERATIONS: u64 = 16;
     // One walk of the archive, measured at 19 allocations. The update path used
@@ -642,6 +682,7 @@ fn update_archive_fixture() -> Vec<u8> {
 /// The SHA-256 over the patch payload the install path verifies before it
 /// touches the game.
 #[test]
+#[ignore = "opt-in measurement, not a correctness test: the arm flag is process-wide and the budgets are one platform's; runs in the dedicated perf-probe job"]
 fn install_sha256_16mib_once() {
     const ITERATIONS: u64 = 4;
     // The same shape as the download digest and the same budget: one hex
@@ -676,6 +717,7 @@ fn install_sha256_16mib_once() {
 /// is the work parked on the thread the install blocks on instead of the work
 /// stalling the runtime.
 #[test]
+#[ignore = "opt-in measurement, not a correctness test: the arm flag is process-wide and the budgets are one platform's; runs in the dedicated perf-probe job"]
 fn install_repak_round_trip() {
     const ITERATIONS: u64 = 4;
     // Three small entries in, three out, measured at 133 allocations. The cost

@@ -180,14 +180,51 @@ is not, and the two shapes it has to tell apart do not overlap: the median
 measures 5,105,025 to 5,694,969 bytes with the body moved and 6,464,686 to
 6,710,606 with it copied, and the 6,000,000-byte budget sits between them.
 
-Run them single-threaded and with output captured:
+### The scenarios are opt-in
+
+Every scenario carries `#[ignore = "..."]`, so `cargo test --all-targets` — the
+general correctness suite, and the required Windows check — skips them. The
+dedicated job runs them on their own:
 
 ```bash
-cargo test --locked --manifest-path src-tauri/Cargo.toml --lib perf_scenarios -- --test-threads=1 --nocapture
+cargo test --locked --manifest-path src-tauri/Cargo.toml --lib perf_scenarios -- --ignored --test-threads=1 --nocapture
 ```
 
 `--test-threads=1` is mandatory: the probe's arm flag is process-wide, so two
 scenarios at once would count each other's allocations.
+
+This is not a convenience. A scenario is a measurement instrument, not a
+correctness test, and it is only meaningful in a process that is quiet and on
+the platform its budget was cut on. The general suite breaks both, in two
+separate ways.
+
+**The process is not quiet.** About 180 library tests run before the scenarios
+in the same process, and they build Tauri mock apps, start tokio runtimes and
+spawn threads. Anything a background thread allocates lands in the armed
+window. The cheapest-iteration rule handles a *one-off* — the tokio worker boot
+described above — but it cannot handle a thread that allocates for the whole
+window, because then every iteration carries some of that traffic and so does
+the minimum. Measured directly, one continuously allocating background thread
+over a 320 ms window moved the cheapest of sixteen iterations from 3
+allocations to 247,683.
+
+**The budgets are one platform's numbers.** Several of the bodies these
+scenarios measure are not the same work everywhere.
+`runtime::inspect_runtime_processes_with_cache` is the clearest case: it is
+`#[cfg(windows)]` inside, and on Linux it discards its arguments and returns a
+default struct without doing any work, while on Windows it walks the whole
+process table through `CreateToolhelp32Snapshot` and allocates a `String` per
+process. Reconstructing that exact allocation shape, a 145-process machine
+costs 298 allocations per walk — against `idle.monitor_tick`'s budget of 8. The
+3 allocations it measures on Linux are the tick being cheap *on Linux*, not the
+tick being cheap. The same applies to the canonicalize-and-compare work in
+`idle.settings_read_parse`, which behaves differently once a Windows
+`canonicalize` returns a `\\?\` verbatim path.
+
+That is why the probe job runs on `ubuntu-latest`: the same worktree every
+figure in this section was measured on. The scenarios are not disabled because
+they are unreliable; they are disabled because they answer a question about one
+platform in one process, and the general suite asks a different question.
 
 ### Measured on a Linux x64 debug worktree
 
@@ -255,11 +292,23 @@ probe runs beside it in a dedicated `ubuntu-latest` job, because a question
 about the cost of one function does not need a desktop, a game or WebView2:
 
 ```bash
-cargo test --locked --manifest-path src-tauri/Cargo.toml --lib perf_scenarios -- --test-threads=1 --nocapture
+cargo test --locked --manifest-path src-tauri/Cargo.toml --lib perf_scenarios -- --test-threads=1 --nocapture --ignored
 ```
+
+`--ignored` is what makes it the probe rather than an empty run: the scenarios
+are `#[ignore]`d so the general suite skips them, and this job is where they
+actually run. It is also the only place they run, which is the point — see
+[The scenarios are opt-in](#the-scenarios-are-opt-in).
 
 The job prints the `WUL1|` lines into its log and uploads the whole run output
 as the retained `performance-evidence` artifact, next to the Windows matrix's
-own evidence, so two runs of either can be diffed directly. A budget breach
-fails the job: the run is piped through `tee` under `set -o pipefail`, so the
-test exit code is not swallowed by the pipe.
+own evidence, so two runs of either can be diffed directly.
+
+A budget breach fails the job. The step sets `set -euo pipefail` before running
+the tests, so `cargo test | tee` cannot hand a failing test's exit code to
+`tee` and report success. The final `grep -F 'WUL1|'` is a second gate: the
+test harness prints a scenario's captured stdout as a *suffix* of that test's
+own status line, so the marker appears mid-line and an anchored `^WUL1|` would
+match nothing and fail the step even when every scenario passed. Matching it
+anywhere both keeps the measurements in the job log and fails the step if a
+green run somehow printed none.
