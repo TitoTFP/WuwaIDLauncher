@@ -234,7 +234,8 @@ async fn test_mock_http_download_success_and_sha_verification() {
         .await
         .unwrap();
 
-    assert_eq!(downloaded_bytes, payload.len() as u64);
+    assert_eq!(downloaded_bytes.bytes, payload.len() as u64);
+    assert_eq!(downloaded_bytes.sha256, hash);
     assert!(dest.exists());
 
     // 3. Verify SHA-256
@@ -372,10 +373,12 @@ async fn test_download_resumes_after_stream_error() {
     .await
     .unwrap();
 
-    assert_eq!(downloaded, payload.len() as u64);
+    assert_eq!(downloaded.bytes, payload.len() as u64);
     assert_eq!(std::fs::read(&dest).unwrap(), payload);
     let expected_hash = hex::encode(sha2::Sha256::digest(&payload));
+    assert_eq!(downloaded.sha256, expected_hash);
     assert!(verify_sha256(&dest, &expected_hash).unwrap());
+
     let requests = requests.lock().unwrap().clone();
     assert!(requests.len() >= 2);
     assert!(requests[0].to_ascii_lowercase().contains("get /asset.pak"));
@@ -385,6 +388,51 @@ async fn test_download_resumes_after_stream_error() {
     assert!(requests[1].to_ascii_lowercase().contains("range: bytes=4-"));
     assert!(!tmp.path().join(".asset.pak.part").exists());
     assert!(!tmp.path().join(".asset.pak.part.json").exists());
+}
+
+/// The digest a download reports has to cover the bytes it skipped as well as
+/// the bytes it fetched: a resume that only hashes its own tail would vouch for
+/// an archive the launcher never fully read.
+#[tokio::test]
+async fn test_resumed_download_digest_matches_a_single_shot_download() {
+    let payload: Vec<u8> = (0..4096u32).map(|value| (value % 251) as u8).collect();
+    let expected_digest = hex::encode(sha2::Sha256::digest(&payload)).to_lowercase();
+
+    // The first server drops its first response after four bytes, so this
+    // download is assembled from a resume; the second never drops, so it is a
+    // single shot over the same bytes.
+    let (resumed_url, _resumed_requests, _resumed_server) =
+        spawn_resumable_router(payload.clone(), 1, ResumeMode::Resume).await;
+    let (single_url, _single_requests, _single_server) =
+        spawn_resumable_router(payload.clone(), 0, ResumeMode::Resume).await;
+    let tmp = tempdir().unwrap();
+    let resumed_dest = tmp.path().join("resumed.pak");
+    let single_dest = tmp.path().join("single.pak");
+
+    let resumed = download_file_with_expected_size(
+        &format!("{resumed_url}/asset.pak"),
+        &resumed_dest,
+        Some(payload.len() as u64),
+        |_| {},
+    )
+    .await
+    .unwrap();
+    let single = download_file_with_expected_size(
+        &format!("{single_url}/asset.pak"),
+        &single_dest,
+        Some(payload.len() as u64),
+        |_| {},
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(std::fs::read(&resumed_dest).unwrap(), payload);
+    assert_eq!(resumed.sha256, expected_digest);
+    assert_eq!(
+        resumed.sha256, single.sha256,
+        "a resumed download must carry the digest of the whole file"
+    );
+    assert!(verify_sha256(&resumed_dest, &resumed.sha256).unwrap());
 }
 
 #[tokio::test]

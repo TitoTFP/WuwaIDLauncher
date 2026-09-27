@@ -20,9 +20,10 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use super::perf_probe::{measure, report};
-use crate::configured_game_executable;
-use crate::engine::downloader::compute_sha256;
+use crate::engine::downloader::{compute_sha256, hash_downloaded_prefix};
 use crate::engine::{installer, media, metadata, repak, runtime, settings, theme, updater};
+use crate::RuntimeCoordinator;
+use sha2::{Digest, Sha256};
 
 // -----------------------------------------------------------------------------
 // Fixtures
@@ -144,29 +145,34 @@ fn as_keyring<'a>(owned: &'a [(&'static str, String)]) -> Vec<(&'static str, &'a
 /// every launcher, whether or not a game is running. This is the tick body
 /// without the two Tauri calls around it — the window handle and the event
 /// emit — neither of which allocates.
+///
+/// The coordinator lives as long as the app does, exactly as it does in the
+/// monitor loop, so the resolution of the configured game is paid once instead
+/// of once per tick: what is left per tick is the cached read, a path clone
+/// and the process reconciliation.
 #[test]
 fn idle_monitor_tick() {
     const ITERATIONS: u64 = 64;
-    // A tick resolves the configured game from disk and reconciles the runtime
-    // state. It is allowed to allocate, but it is not allowed to allocate a
-    // list: the honest ceiling for "read settings.json, parse it, canonicalize
-    // the game path" is a few dozen small allocations, and anything that starts
-    // collecting per tick is a regression this budget should catch.
-    // Caching settings across ticks belongs to a later batch and will land far
-    // below this number: re-cut it when that lands.
-    const ALLOCS_PER_RUN: u64 = 48;
+    // Reading a resolved path out of the coordinator costs one lock, one clone
+    // and one join. Anything that grows with the tick — a settings read, a
+    // parse, a canonicalize — belongs in the first tick, not in the thirty per
+    // minute that follow it.
+    const ALLOCS_PER_RUN: u64 = 8;
+    const BYTES_PER_RUN: u64 = 1_024;
 
     let appdata = tempfile::tempdir().unwrap();
     let game = tempfile::tempdir().unwrap();
     let game = fake_game(game.path());
+    let canonical_game = std::fs::canonicalize(&game).unwrap();
     let _appdata = Appdata::enter(appdata.path());
     write_settings(appdata.path(), &game);
 
+    let coordinator = RuntimeCoordinator::default();
     // One cache for the whole run, exactly as the monitor loop keeps between
     // ticks: a cache rebuilt per tick would hide its own cost.
     let mut cache = runtime::ProcessSnapshotCache::default();
     let metrics = measure(ITERATIONS, || {
-        let expected_executable = configured_game_executable();
+        let expected_executable = coordinator.configured_game_executable();
         let inspection = runtime::inspect_runtime_processes_with_cache(
             None,
             None,
@@ -179,10 +185,20 @@ fn idle_monitor_tick() {
         runtime::reconcile_runtime_state(None, inspection.detected_pid);
     });
     report("idle.monitor_tick", ITERATIONS, metrics);
+    assert_eq!(
+        coordinator.configured_game_executable(),
+        Some(canonical_game.join(crate::engine::path::GAME_EXE_RELATIVE)),
+        "the cached path must still be the configured game the tick watches"
+    );
     assert!(
         metrics.allocs_per_run(ITERATIONS) <= ALLOCS_PER_RUN,
         "idle.monitor_tick allocated {} times per tick, budget {ALLOCS_PER_RUN}",
         metrics.allocs_per_run(ITERATIONS)
+    );
+    assert!(
+        metrics.bytes_per_run(ITERATIONS) <= BYTES_PER_RUN,
+        "idle.monitor_tick handed out {} bytes per tick, budget {BYTES_PER_RUN}",
+        metrics.bytes_per_run(ITERATIONS)
     );
 }
 
@@ -493,16 +509,66 @@ fn download_compute_sha256_32mib() {
     );
 }
 
+/// The bytes a resumed download does not fetch. The digest a download reports
+/// has to cover them, or a checksum would vouch for a file the launcher never
+/// read end to end — so they are hashed from the partial file through the same
+/// fixed stack buffer, and the cost stays a buffer and a hex string whatever
+/// the file weighs.
+#[test]
+fn download_resume_prefix_digest() {
+    const ITERATIONS: u64 = 4;
+    // A digest and nothing else. Reading the skipped prefix into memory to hash
+    // it would cost a whole copy of it, which no allocation budget this small
+    // can absorb.
+    const ALLOCS_PER_RUN: u64 = 4;
+    const BYTES_PER_RUN: u64 = 1_024;
+
+    const SKIPPED_BYTES: u64 = 12 * 1024 * 1024;
+    let temp = tempfile::tempdir().unwrap();
+    let partial = temp.path().join("update.zip.part");
+    let bytes = filler(16 * 1024 * 1024);
+    std::fs::write(&partial, &bytes).unwrap();
+    let expected = hex::encode(Sha256::digest(&bytes[..SKIPPED_BYTES as usize])).to_lowercase();
+
+    let metrics = measure(ITERATIONS, || {
+        let mut hasher = Sha256::new();
+        hash_downloaded_prefix(&partial, SKIPPED_BYTES, &mut hasher).unwrap();
+        std::hint::black_box(hex::encode(hasher.finalize()));
+    });
+    report("download.resume_prefix_digest", ITERATIONS, metrics);
+
+    let mut hasher = Sha256::new();
+    hash_downloaded_prefix(&partial, SKIPPED_BYTES, &mut hasher).unwrap();
+    assert_eq!(
+        hex::encode(hasher.finalize()).to_lowercase(),
+        expected,
+        "a resumed download must hash the bytes it skipped over"
+    );
+    assert!(
+        metrics.allocs_per_run(ITERATIONS) <= ALLOCS_PER_RUN,
+        "download.resume_prefix_digest allocated {} times, budget {ALLOCS_PER_RUN}",
+        metrics.allocs_per_run(ITERATIONS)
+    );
+    assert!(
+        metrics.bytes_per_run(ITERATIONS) <= BYTES_PER_RUN,
+        "download.resume_prefix_digest handed out {} bytes, budget {BYTES_PER_RUN}: the skipped prefix is being buffered",
+        metrics.bytes_per_run(ITERATIONS)
+    );
+}
+
 /// The archive inspection that runs on a downloaded update before anything is
 /// unpacked. It is pure metadata work: a bounded walk of the central directory.
 #[test]
 fn download_validate_archive() {
     const ITERATIONS: u64 = 16;
-    // One entry, one walk, measured at 19 allocations. The duplicate-entry set
-    // and the path handling are what make this worth bounding, because both
-    // grow with entry count; a second pass over the same archive is a later
-    // batch's job and will land above this budget, which must be re-cut then.
-    const ALLOCS_PER_RUN: u64 = 24;
+    // One walk of the archive, measured at 19 allocations. The update path used
+    // to pay this twice — once in `perform_launcher_update` and again inside
+    // `extract_zip_update`, which validates as its first statement and rejects
+    // with the same strings — and the duplicate call is gone, so the budget is
+    // one walk plus a small platform margin, not two walks' worth of room.
+    // The duplicate-entry set and the path handling are what make this worth
+    // bounding, because both grow with entry count.
+    const ALLOCS_PER_RUN: u64 = 21;
 
     let archive = update_archive_fixture();
     let metrics = measure(ITERATIONS, || {
@@ -568,15 +634,22 @@ fn install_sha256_16mib_once() {
 /// Extract a v12 pak and build it back, the way a loader-method install
 /// rewrites the patch archive, plus the SHA-1 index check that decides whether
 /// the result is usable at all.
+///
+/// This is the body the install transaction runs, and it is now run on a
+/// blocking thread rather than on a runtime worker: the archive rewrite is
+/// unchanged, so the allocations are unchanged, and what the budget now bounds
+/// is the work parked on the thread the install blocks on instead of the work
+/// stalling the runtime.
 #[test]
 fn install_repak_round_trip() {
     const ITERATIONS: u64 = 4;
-    // Three small entries in, three out. The cost is the directory walk and
-    // the per-entry buffers, so the budget is proportional to the entries and
-    // not to the bytes: an extract that starts holding a whole archive in
-    // memory breaches it. Moving this work off the async runtime belongs to a
-    // later batch and will change these numbers; re-cut the budget then.
-    const ALLOCS_PER_RUN: u64 = 200;
+    // Three small entries in, three out, measured at 133 allocations. The cost
+    // is the directory walk and the per-entry buffers, so the budget is
+    // proportional to the entries and not to the bytes: an extract that starts
+    // holding a whole archive in memory breaches it. Re-cut around the measured
+    // value once the work moved off the runtime, with headroom for the same
+    // three entries on another platform.
+    const ALLOCS_PER_RUN: u64 = 160;
 
     let temp = tempfile::tempdir().unwrap();
     let source_dir = temp.path().join("source");

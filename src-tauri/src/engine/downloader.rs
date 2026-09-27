@@ -66,6 +66,18 @@ pub struct DownloadProgress {
     pub status: String,
 }
 
+/// What a completed download produced: its size, and the SHA-256 of the bytes
+/// on disk. The digest is computed in the write loop that produced those bytes,
+/// so a caller that needs to check the download does not read the file again
+/// just to hash it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadOutcome {
+    /// Bytes in the promoted file.
+    pub bytes: u64,
+    /// Lowercase hex SHA-256 of the whole file, resume included.
+    pub sha256: String,
+}
+
 pub async fn read_response_body_limited(
     mut response: reqwest::Response,
     max_bytes: u64,
@@ -129,6 +141,36 @@ pub fn compute_sha256(file_path: &Path) -> Result<String, std::io::Error> {
     Ok(hex::encode(hasher.finalize()).to_lowercase())
 }
 
+/// Feeds the first `length` bytes of `path` into `hasher`, through the same
+/// fixed stack buffer `compute_sha256` uses.
+///
+/// A resumed download skips the bytes a previous attempt already wrote, so
+/// without this the digest would cover the tail it happened to fetch and not
+/// the file it promoted. Hashing what was skipped keeps the digest of a
+/// resumed download identical to the digest of a single-shot one.
+pub(crate) fn hash_downloaded_prefix(
+    path: &Path,
+    length: u64,
+    hasher: &mut Sha256,
+) -> std::io::Result<()> {
+    let mut file = File::open(path)?;
+    let mut buffer = [0u8; 64 * 1024];
+    let mut remaining = length;
+    while remaining > 0 {
+        let wanted = buffer.len().min(remaining as usize);
+        let count = file.read(&mut buffer[..wanted])?;
+        if count == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                format!("File sebagian {path:?} lebih pendek dari offset resume {length}"),
+            ));
+        }
+        hasher.update(&buffer[..count]);
+        remaining -= count as u64;
+    }
+    Ok(())
+}
+
 /// The digest `compute_sha256` produces, for bytes the caller already holds.
 /// A file that was just read into memory must not be read from disk a second
 /// time to be hashed.
@@ -190,7 +232,7 @@ pub async fn download_file_with_expected_size<F>(
     dest_path: &Path,
     expected_size: Option<u64>,
     on_progress: F,
-) -> Result<u64, String>
+) -> Result<DownloadOutcome, String>
 where
     F: Fn(DownloadProgress) + Send + 'static,
 {
@@ -220,7 +262,7 @@ pub async fn download_file_with_expected_size_limited_policy<F>(
     max_bytes: u64,
     redirect_policy: DownloadRedirectPolicy,
     on_progress: F,
-) -> Result<u64, String>
+) -> Result<DownloadOutcome, String>
 where
     F: Fn(DownloadProgress) + Send + 'static,
 {
@@ -297,9 +339,17 @@ where
 
         if let Some(metadata) = resume_metadata.as_ref() {
             if offset == metadata.total_size {
+                // The bytes were already on disk when this process started, so
+                // there is no in-flight hasher to carry forward: this promotion
+                // is the one place a complete file is read back to be hashed.
+                let sha256 = compute_sha256(&partial_path)
+                    .map_err(|error| format!("Gagal menghitung checksum download: {error}"))?;
                 promote_download(&partial_path, dest_path).await?;
                 let _ = remove_file_if_exists(&metadata_path).await;
-                return Ok(offset);
+                return Ok(DownloadOutcome {
+                    bytes: offset,
+                    sha256,
+                });
             }
             if offset > 0 {
                 on_progress(DownloadProgress {
@@ -331,10 +381,10 @@ where
         })
         .await
         {
-            Ok(downloaded) => {
+            Ok(outcome) => {
                 promote_download(&partial_path, dest_path).await?;
                 let _ = remove_file_if_exists(&metadata_path).await;
-                return Ok(downloaded);
+                return Ok(outcome);
             }
             Err(error) => {
                 last_error = Some(error.message.clone());
@@ -363,7 +413,9 @@ where
     }
 }
 
-async fn download_attempt<F>(attempt: DownloadAttempt<'_, F>) -> Result<u64, DownloadAttemptError>
+async fn download_attempt<F>(
+    attempt: DownloadAttempt<'_, F>,
+) -> Result<DownloadOutcome, DownloadAttemptError>
 where
     F: Fn(DownloadProgress),
 {
@@ -518,6 +570,19 @@ where
         open_partial_for_full_response(partial_path, metadata_path, &metadata).await?
     };
 
+    // The hasher sees every byte of the file, not just this attempt's: a resume
+    // starts from what is already on disk.
+    let mut hasher = Sha256::new();
+    if write_offset > 0 {
+        hash_downloaded_prefix(partial_path, write_offset, &mut hasher).map_err(|error| {
+            DownloadAttemptError::new(
+                format!("Failed to hash partial download: {error}"),
+                false,
+                true,
+            )
+        })?;
+    }
+
     let start_time = Instant::now();
     let mut last_emit = Instant::now();
     let mut downloaded = write_offset;
@@ -549,6 +614,7 @@ where
             ));
             break;
         }
+
         if let Err(error) = file.write_all(&chunk).await {
             stream_error = Some(DownloadAttemptError::new(
                 format!("Write file error: {error}"),
@@ -557,6 +623,8 @@ where
             ));
             break;
         }
+
+        hasher.update(&chunk);
 
         downloaded += chunk.len() as u64;
         if last_emit.elapsed().as_millis() >= 350 || downloaded == total_size {
@@ -606,7 +674,10 @@ where
         ));
     }
 
-    Ok(downloaded)
+    Ok(DownloadOutcome {
+        bytes: downloaded,
+        sha256: hex::encode(hasher.finalize()).to_lowercase(),
+    })
 }
 
 fn validate_download_size(

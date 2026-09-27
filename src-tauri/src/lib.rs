@@ -10,6 +10,7 @@ mod perf_scenarios;
 
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::http::{Request, Response};
@@ -185,6 +186,23 @@ fn get_settings_path() -> PathBuf {
     get_appdata_dir().join("settings.json")
 }
 
+/// Bumped by every write of `settings.json`, and by nothing else. The runtime
+/// monitor resolves the configured game once and keeps it in
+/// `RuntimeCoordinator`, so this counter is what tells it the answer it holds
+/// can no longer be true: the write travels with the data rather than with a
+/// call site that can forget to invalidate.
+static SETTINGS_WRITE_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// The only writer of `settings.json`, in this process. `save_settings` and the
+/// `load_settings` repair are its only callers, which is what makes the epoch
+/// bump an exhaustive invalidation rather than a hopeful one: a new writer
+/// cannot skip it without also not going through here.
+fn persist_settings_file(path: &Path, contents: &str) -> std::io::Result<()> {
+    std::fs::write(path, contents)?;
+    SETTINGS_WRITE_EPOCH.fetch_add(1, Ordering::Relaxed);
+    Ok(())
+}
+
 fn normalized_regular_game_path(game_path: &str) -> Option<PathBuf> {
     let normalized = engine::path::normalize_game_path(game_path)?;
     let canonical = std::fs::canonicalize(normalized).ok()?;
@@ -281,6 +299,13 @@ struct RuntimeCoordinator {
     termination_handle: Mutex<Option<usize>>,
     force_quit_requested: Mutex<bool>,
     tray_mode: Mutex<bool>,
+    /// The configured game directory, resolved once and reused by every monitor
+    /// tick. The outer `Option` is "resolved at all", the inner one is the
+    /// answer, and the number beside it is the `SETTINGS_WRITE_EPOCH` the answer
+    /// was derived at. Deriving costs a read and a parse of `settings.json`, a
+    /// canonicalize and a stat; the tick used to pay all four every two seconds,
+    /// forever, to learn something only a settings write can change.
+    configured_game: Mutex<Option<(u64, Option<PathBuf>)>>,
 }
 
 fn coordinator_launcher_pid<R: Runtime>(app: &AppHandle<R>) -> Option<u32> {
@@ -310,6 +335,35 @@ fn coordinator_launcher_game_identity<R: Runtime>(
             .ok()
             .and_then(|value| *value)
     })
+}
+
+impl RuntimeCoordinator {
+    /// The configured game executable as the monitor tick needs it, taken from
+    /// the resolved value whenever that value is still current.
+    fn configured_game_executable(&self) -> Option<PathBuf> {
+        let epoch = SETTINGS_WRITE_EPOCH.load(Ordering::Relaxed);
+        let mut resolved = self
+            .configured_game
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if resolved
+            .as_ref()
+            .is_none_or(|(held_epoch, _)| *held_epoch != epoch)
+        {
+            *resolved = Some((epoch, configured_game_path()));
+        }
+        let game_path = resolved.as_ref().and_then(|(_, path)| path.as_ref())?;
+        Some(game_path.join(engine::path::GAME_EXE_RELATIVE))
+    }
+}
+
+/// The configured game executable for the monitor tick, read from state rather
+/// than from disk. Falls back to the uncached derivation only before the
+/// coordinator is managed, which is a window no tick runs in.
+fn coordinator_configured_game_executable<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    app.try_state::<RuntimeCoordinator>()
+        .map(|state| state.configured_game_executable())
+        .unwrap_or_else(configured_game_executable)
 }
 
 #[cfg(windows)]
@@ -590,7 +644,7 @@ fn spawn_runtime_monitor<R: Runtime>(app: AppHandle<R>) {
             if app.get_webview_window("main").is_none() {
                 break;
             }
-            let expected_executable = configured_game_executable();
+            let expected_executable = coordinator_configured_game_executable(&app);
             let tracked_pid = coordinator_launcher_pid(&app);
             let inspection = if tracked_pid.is_some() {
                 // The launch monitor already owns this lifecycle and handles
@@ -735,7 +789,8 @@ fn save_settings(settings_json: String) -> Result<(), String> {
     }
     let serialized = serde_json::to_string(&normalized.settings)
         .map_err(|e| format!("Failed to serialize settings: {e}"))?;
-    std::fs::write(&path, serialized).map_err(|e| format!("Failed to save settings: {e}"))?;
+    persist_settings_file(&path, &serialized)
+        .map_err(|e| format!("Failed to save settings: {e}"))?;
     log::info!("Settings saved to {:?}", path);
     Ok(())
 }
@@ -761,7 +816,8 @@ fn load_settings() -> Result<engine::settings::SettingsLoadResult, String> {
         }
         let serialized = serde_json::to_string(&result.settings)
             .map_err(|e| format!("Failed to serialize default settings: {e}"))?;
-        std::fs::write(&path, serialized).map_err(|e| format!("Failed to repair settings: {e}"))?;
+        persist_settings_file(&path, &serialized)
+            .map_err(|e| format!("Failed to repair settings: {e}"))?;
     }
     Ok(result)
 }
@@ -1868,7 +1924,7 @@ fn perform_launcher_update<R: Runtime>(app: AppHandle<R>, version: String) -> Re
                 return Err("Versi update tidak lebih baru dari launcher saat ini.".to_string());
             }
 
-            engine::downloader::download_file_with_expected_size_limited_policy(
+            let downloaded = engine::downloader::download_file_with_expected_size_limited_policy(
                 &zip_url,
                 &temp_zip,
                 None,
@@ -1889,8 +1945,12 @@ fn perform_launcher_update<R: Runtime>(app: AppHandle<R>, version: String) -> Re
             .await
             .map_err(|error| format!("download: {error}"))?;
 
+            // The archive still has to be in memory to be unpacked, but the
+            // digest comes from the bytes the download wrote rather than from a
+            // second read of the file it wrote.
             let zip_data = std::fs::read(&temp_zip)
                 .map_err(|error| format!("Gagal membaca ZIP update: {error}"))?;
+
             let checksum_body = engine::updater::fetch_official_asset_body(
                 &checksums_url,
                 &tag,
@@ -1905,15 +1965,14 @@ fn perform_launcher_update<R: Runtime>(app: AppHandle<R>, version: String) -> Re
                 .get(&zip_name)
                 .cloned()
                 .ok_or_else(|| format!("Checksum untuk {zip_name} tidak ditemukan."))?;
-            let actual = engine::downloader::compute_sha256(&temp_zip)
-                .map_err(|error| format!("Gagal menghitung checksum update: {error}"))?;
-            if actual != expected {
+            // The digest of the whole archive, resume included, computed while
+            // those bytes were written. `extract_zip_update` below is the
+            // authoritative archive validation: it is its first statement, it
+            // walks the same central directory, and it rejects with the same
+            // strings, so validating here as well only doubled the walk.
+            if downloaded.sha256 != expected {
                 return Err("Checksum ZIP update tidak cocok.".to_string());
             }
-            engine::updater::validate_update_archive(
-                &zip_data,
-                engine::updater::RELEASE_EXECUTABLE_NAME,
-            )?;
 
             if staging.exists() {
                 std::fs::remove_dir_all(&staging)
@@ -2450,22 +2509,52 @@ fn start_installation<R: Runtime>(
             }),
         );
 
-        if let Err(error) = engine::installer::install_patch_transaction_with_commit(
-            p,
-            method,
-            &cache_pak,
-            loader_cache.as_deref(),
-            || {
-                engine::metadata::update_installation_with_variant(
-                    &versions_path,
-                    p,
-                    Some(&patch_version),
-                    &canonical_method,
-                    loader_sha256.as_deref(),
-                    Some(&patch_variant_id),
-                )
-            },
-        ) {
+        // Snapshotting every pre-existing artifact into memory, copying the
+        // patch in and hashing it three times over is blocking I/O measured in
+        // hundreds of milliseconds and hundreds of megabytes. It runs on a
+        // blocking thread so the runtime stays free for the events the UI is
+        // waiting on; the progress events around it are emitted from the
+        // async task, exactly as before.
+        let install_game_path = p.to_path_buf();
+        let install_pak_source = cache_pak.clone();
+        let install_loader_source = loader_cache.clone();
+        let commit_versions_path = versions_path.clone();
+        let commit_patch_version = patch_version.clone();
+        let commit_method_name = canonical_method.clone();
+        let commit_variant_id = patch_variant_id.clone();
+        let commit_loader_sha256 = loader_sha256.clone();
+        let installed = tauri::async_runtime::spawn_blocking(move || {
+            engine::installer::install_patch_transaction_with_commit(
+                &install_game_path,
+                method,
+                &install_pak_source,
+                install_loader_source.as_deref(),
+                || {
+                    engine::metadata::update_installation_with_variant(
+                        &commit_versions_path,
+                        &install_game_path,
+                        Some(&commit_patch_version),
+                        &commit_method_name,
+                        commit_loader_sha256.as_deref(),
+                        Some(&commit_variant_id),
+                    )
+                },
+            )
+        })
+        .await;
+
+        let installed = match installed {
+            Ok(result) => result,
+            Err(error) => {
+                let _ = app_handle.emit(
+                    "onInstallError",
+                    format!("Transaksi instalasi tidak selesai: {error}"),
+                );
+                return;
+            }
+        };
+
+        if let Err(error) = installed {
             let _ = app_handle.emit("onInstallError", error);
             return;
         }
@@ -4818,6 +4907,57 @@ mod tests {
         );
 
         std::env::remove_var("WUWAID_E2E_APPDATA");
+    }
+
+    /// The monitor tick's cached game path is only safe if every write of
+    /// `settings.json` retires it. This covers both writers: the `save_settings`
+    /// command the UI uses when the player points the launcher at another
+    /// folder, and the `load_settings` repair that rewrites a damaged file.
+    #[test]
+    fn monitor_game_path_cache_follows_every_settings_write() {
+        let _env_lock = lock_test_environment();
+        let appdata = tempfile::tempdir().unwrap();
+        std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
+        let coordinator = RuntimeCoordinator::default();
+
+        let (_first_dir, first) = configured_game_directory();
+        save_settings(serde_json::json!({"gamePath": first.to_string_lossy()}).to_string())
+            .unwrap();
+        assert_eq!(
+            coordinator.configured_game_executable(),
+            Some(first.join(engine::path::GAME_EXE_RELATIVE))
+        );
+
+        let (_second_dir, second) = configured_game_directory();
+        save_settings(serde_json::json!({"gamePath": second.to_string_lossy()}).to_string())
+            .unwrap();
+        assert_eq!(
+            coordinator.configured_game_executable(),
+            Some(second.join(engine::path::GAME_EXE_RELATIVE)),
+            "saving a new game path must retire the value the monitor already holds"
+        );
+
+        std::fs::write(appdata.path().join("settings.json"), b"{").unwrap();
+        assert!(load_settings().unwrap().repaired);
+        assert_eq!(
+            coordinator.configured_game_executable(),
+            None,
+            "the repair writes default settings, so the monitor must stop watching the old folder"
+        );
+
+        std::env::remove_var("WUWAID_E2E_APPDATA");
+    }
+
+    /// A canonical game directory the path validators accept, with the
+    /// temporary directory that owns it returned alongside so the caller keeps
+    /// it alive for the length of the assertion.
+    fn configured_game_directory() -> (tempfile::TempDir, PathBuf) {
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join(engine::path::GAME_EXE_RELATIVE);
+        std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        std::fs::write(&executable, b"monitor cache fixture game executable").unwrap();
+        let canonical = std::fs::canonicalize(root.path()).unwrap();
+        (root, canonical)
     }
 
     #[test]

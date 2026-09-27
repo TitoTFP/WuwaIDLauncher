@@ -40,6 +40,7 @@ The post-change gates use these explicit thresholds:
 | Medium | Shell command substitution was unsafe for the deterministic auditor | Added `node scripts/tests/workflow-contract.test.mjs`, a literal-argument check for hosted runners and manual real-game acceptance. |
 | Medium | Media sync waited for the manifest signature before downloading anything | The `.sig` fetch runs in the background and is collected after the media sync, so a stalled or rejected signature can no longer delay the media download or the media status events. |
 | Medium | Startup hashed the cached media twice and copied whole response bodies | The cached-media check now carries its digests forward, so the media sync reuses the verdict instead of re-hashing; theme and metadata reads navigate the document they already parsed; four full-buffer `to_vec` copies became moves. A `#[cfg(test)]` allocation probe with per-scenario budgets guards all of it. |
+| Medium | The idle tick re-derived the game path from disk, and the update and install paths did their I/O twice | The monitor tick now reads a resolved game path from `RuntimeCoordinator`, retired by a settings-write counter that travels with the only two writers of `settings.json`; the launcher update carries its SHA-256 out of the download write loop and validates the archive once, inside extraction; the install transaction runs on a blocking thread. The two-second cadence, the size caps, the redirect policy, the rollback semantics and every error string are unchanged, and the allocation probe holds each path to a budget. |
 
 ## Delivered
 
@@ -61,6 +62,7 @@ The post-change gates use these explicit thresholds:
 - Extended the Windows workflow contract to require dependency auditing and frontend-control regressions.
 - Media sync no longer waits on the manifest signature: the `.sig` fetch runs in the background, the media sync and its status events finish first, and the theme is resolved from the collected signature afterwards — which also means `onThemeReady` can now arrive after `onMediaReady`.
 - Removed duplicate work rather than changing cadence: the 2-second runtime monitor still ticks every 2 seconds, and every media, theme, metadata, and update-response byte is read once instead of two or three times, with an in-crate allocation probe (`perf_probe`/`perf_scenarios`) holding each path to a budget.
+- Kept the cadence and cut the work per tick: `settings.json` is read and parsed once instead of thirty times a minute, a downloaded update is hashed in the write loop that produced its bytes and its archive is walked once instead of twice, and the install transaction's snapshot, copy and hash passes no longer occupy a runtime worker. The probe's re-cut budgets fail against the pre-fix shapes (42 allocations per tick against a budget of 8, 38 per archive against 21) and run in a new `ubuntu-latest` CI job beside the unchanged Windows matrix.
 
 ## Verification
 

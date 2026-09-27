@@ -171,8 +171,57 @@ bytes, `download.compute_sha256_32mib` 2 / 128, `download.validate_archive`
 19 / 108,250, `install.sha256_16mib_once` 2 / 128, and
 `install.repak_round_trip` 133 / 49,522.
 
-Three of these budgets are written for the shape that exists today and will need
-re-cutting when a later batch lands: `idle.monitor_tick` (caching settings
-across ticks moves it a long way), `download.validate_archive` (a second
-validation pass roughly doubles it), and `install.repak_round_trip` (moving the
-extract off the async runtime changes its numbers).
+### The second batch: the idle, update, download and install paths
+
+The states the first batch did not touch are now bounded by what the code
+actually does, measured on the same Linux x64 debug worktree, as
+`allocs/run` / `bytes/run` / `us/run`:
+
+```text
+idle.monitor_tick                 42 / 1590     / 21       ->  3 / 108       / 0
+download.validate_archive         19 / 108250   / 10       ->  19 / 108250   / 10
+install.repak_round_trip         133 / 49522    / 300      ->  133 / 49522    / 317
+download.resume_prefix_digest     --            --        ->  1 / 64         / 327394
+```
+
+The budgets re-cut with them, and why:
+
+| Scenario | Was | Now | Justification |
+| --- | ---: | ---: | --- |
+| `idle.monitor_tick` | 48 allocs | 8 allocs / 1,024 bytes | The tick reads a resolved path out of `RuntimeCoordinator` instead of re-reading and re-parsing `settings.json`, canonicalizing and stat-ing on every tick. Measured 3 allocations and 108 bytes: a lock, a `PathBuf` clone and a `join`. At the unchanged two-second cadence that is ~90 allocations a minute instead of ~1,260. |
+| `download.validate_archive` | 24 allocs | 21 allocs | `perform_launcher_update` no longer calls `validate_update_archive` before `extract_zip_update`, which validates as its first statement and rejects with the same strings. One walk is 19 allocations; two walks are 38, which is what this budget now refuses. |
+| `install.repak_round_trip` | 200 allocs | 160 allocs | The install transaction body did not change — it moved onto a blocking thread — so the allocation count is the same 133. The budget is re-cut around that measured value because what it now bounds is the work parked on the thread the install blocks on. |
+
+`download.resume_prefix_digest` is new and covers the digest a resumed
+download carries: the bytes a resume skips are hashed from the partial file
+through the same fixed stack buffer, so the cost is 1 allocation and 64 bytes
+whatever the file weighs, and a resumed download produces the same digest as a
+single-shot one. Both halves are asserted — the budget, and the digest itself
+against the digest of the same bytes hashed in memory.
+
+What this batch removed, in the update path: a second full read of the archive
+(`compute_sha256` over the file the download had just written, now carried out
+in the write loop that produced those bytes) and a second walk of the same
+central directory. What it moved, in the install path: the snapshot, copy and
+hash passes of `install_patch_transaction_with_commit` off the async runtime,
+so a 10 ms heartbeat scheduled on the same runtime is delayed 6,177 ms by the
+pre-fix shape and 11 ms by the fixed one. The probe cannot see that difference
+— it counts allocations, and a thread change allocates nothing — so the install
+scenario is bounded by its allocations and the thread placement is bounded by
+the install's own transaction and rollback tests.
+
+### The probe in CI
+
+The Windows matrix above is still the authoritative gate and is unchanged. The
+probe runs beside it in a dedicated `ubuntu-latest` job, because a question
+about the cost of one function does not need a desktop, a game or WebView2:
+
+```bash
+cargo test --locked --manifest-path src-tauri/Cargo.toml --lib perf_scenarios -- --test-threads=1 --nocapture
+```
+
+The job prints the `WUL1|` lines into its log and uploads the whole run output
+as the retained `performance-evidence` artifact, next to the Windows matrix's
+own evidence, so two runs of either can be diffed directly. A budget breach
+fails the job: the run is piped through `tee` under `set -o pipefail`, so the
+test exit code is not swallowed by the pipe.
