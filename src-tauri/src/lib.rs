@@ -2867,7 +2867,6 @@ pub fn run<R: tauri::Runtime>(context: tauri::Context<R>) {
         .manage(RuntimeCoordinator::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_process::init())
         .register_uri_scheme_protocol("media", media_protocol_handler)
         .setup(|app| {
             if let Err(error) = remove_saved_launch_diagnostics(&get_appdata_dir()) {

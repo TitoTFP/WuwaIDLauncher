@@ -8,7 +8,6 @@
     "core:window:allow-start-dragging",
     "dialog:default",
     "notification:default",
-    "process:default",
     "app-commands"
   ]
 }
