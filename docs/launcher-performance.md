@@ -117,14 +117,21 @@ no `cfg` in a shipped code path. They are in-crate rather than in
 *without* `cfg(test)`, so the allocator would be invisible, and the scenarios
 could not reach the private seams they measure.
 
-What a scenario reports, per iteration:
+What a scenario reports:
 
 | Field | Meaning |
 | --- | --- |
-| `allocs/run` | Allocation events inside the armed window |
-| `bytes/run` | Bytes handed out inside the armed window |
+| `allocs/run` | Allocation events inside the armed window, divided by the iterations |
+| `bytes/run` | Bytes handed out inside the armed window, divided by the iterations |
+| `min_allocs/run`, `min_bytes/run` | The cheapest single iteration — the per-launch figure a budget asserts on |
+| `median_allocs/run`, `median_bytes/run` | The middle iteration; what one scenario asserts on instead (below) |
+| `max_allocs/run`, `max_bytes/run` | The dearest iteration, so a spread across the window is visible |
 | `peak_live` | Most live payload bytes at any instant of the window |
 | `us/run` | Wall clock, printed for a human to read |
+
+`allocs/run` and `bytes/run` are the window's average, and are kept as the two
+columns this document has always recorded so two runs stay diffable. They are
+not what a budget is written against.
 
 What it does **not** measure, and cannot: WebView2 process accounting, UAC
 elevation, the self-update restart, and the per-request `media://` protocol
@@ -135,12 +142,43 @@ in the printed `us/run`, not in an allocation budget.
 
 ### Budgets, not timings
 
-Every scenario asserts on `allocs` and `bytes` only. Those are deterministic:
-the same body allocates the same number of times, in the same order, on every
-run. `us/run` is recorded and printed under `--nocapture` and is deliberately
-never asserted on — wall-clock time moves with the CPU, the filesystem, and
-whatever else the machine is doing, and a gate that fails at random stops being
-believed.
+Every scenario asserts on allocation counts and bytes only. `us/run` is
+recorded and printed under `--nocapture` and is deliberately never asserted on
+— wall-clock time moves with the CPU, the filesystem, and whatever else the
+machine is doing, and a gate that fails at random stops being believed.
+
+### The rule: a budget is the cheapest iteration, not the average
+
+The arm flag is process-wide, and a process is never quiet. The first
+`tauri::async_runtime::block_on` in a test binary builds a multi-threaded tokio
+runtime, and its worker threads allocate on their first scheduling pass — on
+threads the measured body is not running on, at moments the body does not
+control. That traffic lands in the armed window whenever it happens to
+overlap it, so a scenario's window average moved with the machine's load rather
+than with the code: `startup.cached_media_validate` measured 4,711 bytes per
+launch on a warm run and 6,838 on a cold one, and the extra 2,127 bytes were
+`tokio-rt-worker` boot allocations rather than launcher work. A budget written
+against the average therefore described the average contamination of a run, not
+the cost of a launch.
+
+So a budget is asserted against a per-iteration figure that a one-off can only
+make larger. That is the **cheapest** iteration, which is the only figure
+guaranteed to describe one launch doing nothing but the work under test: a
+one-off initialisation can only push an iteration up, so it cannot raise the
+minimum, while a real regression — a second hash pass, a copied body, a
+per-tick settings read — is paid by every iteration and so raises the minimum
+by exactly its own cost. The rule makes budgets describe the same thing every
+run; it does not make them easier to pass.
+
+`startup.manifest_fetch_body` is the one scenario that asserts on the **median**
+instead. Every other body is synchronous with a fixed per-iteration cost — its
+minimum, median and maximum are the same number on every run — so the cheapest
+iteration is a representative launch there. A socket fetch is not: the loopback
+hands the body over in chunks, and the cheapest of sixteen fetches samples the
+luckiest read rather than a typical one. The median is tight where the minimum
+is not, and the two shapes it has to tell apart do not overlap: the median
+measures 5,105,025 to 5,694,969 bytes with the body moved and 6,464,686 to
+6,710,606 with it copied, and the 6,000,000-byte budget sits between them.
 
 Run them single-threaded and with output captured:
 

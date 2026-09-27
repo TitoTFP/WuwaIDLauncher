@@ -5,7 +5,10 @@
 //! download, and install/extract. Each scenario builds a real fixture, measures
 //! the code path a launch would actually take, prints a `WUL1|` line, and
 //! asserts on allocations and bytes only — see the policy note in
-//! `super::perf_probe` for why a timing is never an assertion.
+//! `super::perf_probe` for why a timing is never an assertion, and for why a
+//! budget is asserted against a per-iteration figure rather than the window's
+//! average. Every budget here uses the cheapest iteration in its window; the
+//! one exception, and why it is one, is written out at that scenario.
 //!
 //! Run them single-threaded and with output captured:
 //!
@@ -157,6 +160,11 @@ fn idle_monitor_tick() {
     // and one join. Anything that grows with the tick — a settings read, a
     // parse, a canonicalize — belongs in the first tick, not in the thirty per
     // minute that follow it.
+    // Re-derived against the cheapest-iteration rule: 3 allocations and 108
+    // bytes, the same on every iteration of every run. Re-deriving the game
+    // path per tick instead of caching it costs 42 allocations and 1,590
+    // bytes on every iteration, so both budgets below reject it — checked by
+    // reverting the coordinator's cache.
     const ALLOCS_PER_RUN: u64 = 8;
     const BYTES_PER_RUN: u64 = 1_024;
 
@@ -184,21 +192,21 @@ fn idle_monitor_tick() {
         );
         runtime::reconcile_runtime_state(None, inspection.detected_pid);
     });
-    report("idle.monitor_tick", ITERATIONS, metrics);
+    report("idle.monitor_tick", ITERATIONS, &metrics);
     assert_eq!(
         coordinator.configured_game_executable(),
         Some(canonical_game.join(crate::engine::path::GAME_EXE_RELATIVE)),
         "the cached path must still be the configured game the tick watches"
     );
     assert!(
-        metrics.allocs_per_run(ITERATIONS) <= ALLOCS_PER_RUN,
+        metrics.min_allocs_per_run() <= ALLOCS_PER_RUN,
         "idle.monitor_tick allocated {} times per tick, budget {ALLOCS_PER_RUN}",
-        metrics.allocs_per_run(ITERATIONS)
+        metrics.min_allocs_per_run()
     );
     assert!(
-        metrics.bytes_per_run(ITERATIONS) <= BYTES_PER_RUN,
+        metrics.min_bytes_per_run() <= BYTES_PER_RUN,
         "idle.monitor_tick handed out {} bytes per tick, budget {BYTES_PER_RUN}",
-        metrics.bytes_per_run(ITERATIONS)
+        metrics.min_bytes_per_run()
     );
 }
 
@@ -227,16 +235,16 @@ fn idle_settings_read_parse() {
         let loaded = settings::normalize_settings_json(&raw);
         std::hint::black_box(&loaded);
     });
-    report("idle.settings_read_parse", ITERATIONS, metrics);
+    report("idle.settings_read_parse", ITERATIONS, &metrics);
     assert!(
-        metrics.allocs_per_run(ITERATIONS) <= ALLOCS_PER_RUN,
+        metrics.min_allocs_per_run() <= ALLOCS_PER_RUN,
         "idle.settings_read_parse allocated {} times per read, budget {ALLOCS_PER_RUN}",
-        metrics.allocs_per_run(ITERATIONS)
+        metrics.min_allocs_per_run()
     );
     assert!(
-        metrics.bytes_per_run(ITERATIONS) <= BYTES_PER_RUN,
+        metrics.min_bytes_per_run() <= BYTES_PER_RUN,
         "idle.settings_read_parse handed out {} bytes per read, budget {BYTES_PER_RUN}",
-        metrics.bytes_per_run(ITERATIONS)
+        metrics.min_bytes_per_run()
     );
 }
 
@@ -260,6 +268,11 @@ fn startup_cached_media_validate() {
     // through a stack buffer, so the allocation counter only sees the digest
     // strings: this budget is deliberately close, and the I/O saving is what
     // the Windows matrix's read-I/O row measures.
+    // Re-derived against the cheapest-iteration rule: this is the scenario the
+    // rule exists for, and its cheapest iteration is 32 allocations and 4,711
+    // bytes on every run, whether or not the tokio workers behind `block_on`
+    // boot inside the window. A second hash pass raises that to 38 and 5,095,
+    // so both budgets below reject it — checked by reverting the reuse.
     const ALLOCS_PER_RUN: u64 = 36;
     const BYTES_PER_RUN: u64 = 4_800;
 
@@ -294,16 +307,16 @@ fn startup_cached_media_validate() {
         .expect("a warm cache must sync without downloading anything");
         std::hint::black_box((verified, payload));
     });
-    report("startup.cached_media_validate", ITERATIONS, metrics);
+    report("startup.cached_media_validate", ITERATIONS, &metrics);
     assert!(
-        metrics.allocs_per_run(ITERATIONS) <= ALLOCS_PER_RUN,
+        metrics.min_allocs_per_run() <= ALLOCS_PER_RUN,
         "startup.cached_media_validate allocated {} times per launch, budget {ALLOCS_PER_RUN}",
-        metrics.allocs_per_run(ITERATIONS)
+        metrics.min_allocs_per_run()
     );
     assert!(
-        metrics.bytes_per_run(ITERATIONS) <= BYTES_PER_RUN,
+        metrics.min_bytes_per_run() <= BYTES_PER_RUN,
         "startup.cached_media_validate handed out {} bytes per launch, budget {BYTES_PER_RUN}",
-        metrics.bytes_per_run(ITERATIONS)
+        metrics.min_bytes_per_run()
     );
 }
 
@@ -348,21 +361,21 @@ fn startup_theme_cache_read() {
         let payload = theme::build_payload(temp.path(), &keyring).unwrap();
         std::hint::black_box(&payload);
     });
-    report("startup.theme_cache_read", ITERATIONS, metrics);
+    report("startup.theme_cache_read", ITERATIONS, &metrics);
     assert_eq!(
         theme::build_payload(temp.path(), &keyring).unwrap().css,
         css,
         "the payload must still carry the verified fragment"
     );
     assert!(
-        metrics.allocs_per_run(ITERATIONS) <= ALLOCS_PER_RUN,
+        metrics.min_allocs_per_run() <= ALLOCS_PER_RUN,
         "startup.theme_cache_read allocated {} times per read, budget {ALLOCS_PER_RUN}",
-        metrics.allocs_per_run(ITERATIONS)
+        metrics.min_allocs_per_run()
     );
     assert!(
-        metrics.bytes_per_run(ITERATIONS) <= BYTES_PER_RUN,
+        metrics.min_bytes_per_run() <= BYTES_PER_RUN,
         "startup.theme_cache_read handed out {} bytes per read, budget {BYTES_PER_RUN}: the fragment is being copied again",
-        metrics.bytes_per_run(ITERATIONS)
+        metrics.min_bytes_per_run()
     );
 }
 
@@ -371,6 +384,27 @@ fn startup_theme_cache_read() {
 /// The fixture is a manifest at the size cap `fetch_manifest_bytes` enforces,
 /// so the copy this guards against is one whole body and cannot hide in the
 /// noise a socket adds.
+///
+/// This is the one scenario that asserts on the **median** iteration rather
+/// than the cheapest, and the reason is that its per-iteration cost genuinely
+/// varies. Every other scenario is a synchronous body with a fixed cost, so
+/// the cheapest iteration is a representative launch and the rule is the
+/// strictest available. A fetch is not: the loopback socket hands the body
+/// over in chunks, and how many chunks a run gets is not something the code
+/// controls. Measured over 20 runs, the cheapest iteration ranges 4,412,159 to
+/// 5,256,255 bytes and the median ranges 5,416,193 to 5,694,969 — so the
+/// cheapest iteration samples the luckiest read rather than what a launch
+/// costs, and a budget written against it would have to sit a full megabyte
+/// above the real figure to absorb the spread.
+///
+/// The median is what a budget wants: a launch that does nothing but the work
+/// under test. A one-off lazy initialisation can only make an iteration more
+/// expensive, and a minority of expensive iterations cannot move the middle of
+/// sixteen, so the tokio worker boot that made this probe flaky in the first
+/// place cannot breach it. A regression is different in kind — a duplicated
+/// body is paid by every fetch — and the two shapes do not overlap: the
+/// median measures 5,416,193 to 5,694,969 bytes with the body moved and
+/// 6,464,686 to 6,710,606 with it copied, so the budget below separates them.
 #[test]
 fn startup_manifest_fetch_body() {
     const ITERATIONS: u64 = 16;
@@ -379,8 +413,9 @@ fn startup_manifest_fetch_body() {
     // headroom is well under one body: a duplicated body of memory does not
     // fit inside it.
     const BYTES_PER_RUN: u64 = 6_000_000;
-    // Measured: 5,419,148 bytes per fetch with the body moved rather than
-    // copied, and 6,500,470 with the copy. The budget sits between the two.
+    // Measured: median 5,694,969 bytes per fetch with the body moved rather
+    // than copied, and 6,464,686 with the copy. The budget sits between them,
+    // with room for the socket-chunking spread at both ends.
 
     let padding = "a".repeat(1024 * 1024 - 256);
     let body = format!(r#"{{"update_date":null,"assets":[],"padding":"{padding}"}}"#).into_bytes();
@@ -397,11 +432,11 @@ fn startup_manifest_fetch_body() {
         let fetched = tauri::async_runtime::block_on(media::fetch_manifest_bytes(&client, &url));
         std::hint::black_box(&fetched);
     });
-    report("startup.manifest_fetch_body", ITERATIONS, metrics);
+    report("startup.manifest_fetch_body", ITERATIONS, &metrics);
     assert!(
-        metrics.bytes_per_run(ITERATIONS) <= BYTES_PER_RUN,
+        metrics.median_bytes_per_run() <= BYTES_PER_RUN,
         "startup.manifest_fetch_body handed out {} bytes per fetch, budget {BYTES_PER_RUN}",
-        metrics.bytes_per_run(ITERATIONS)
+        metrics.median_bytes_per_run()
     );
 }
 
@@ -441,16 +476,16 @@ fn update_check_read_game_field_only() {
         let field = metadata::read_game_field(&versions, &game, "_vhVersion");
         std::hint::black_box(&field);
     });
-    report("update_check.read_game_field_only", ITERATIONS, metrics);
+    report("update_check.read_game_field_only", ITERATIONS, &metrics);
     assert!(
-        metrics.allocs_per_run(ITERATIONS) <= ALLOCS_PER_RUN,
+        metrics.min_allocs_per_run() <= ALLOCS_PER_RUN,
         "update_check.read_game_field_only allocated {} times per read, budget {ALLOCS_PER_RUN}",
-        metrics.allocs_per_run(ITERATIONS)
+        metrics.min_allocs_per_run()
     );
     assert!(
-        metrics.bytes_per_run(ITERATIONS) <= BYTES_PER_RUN,
+        metrics.min_bytes_per_run() <= BYTES_PER_RUN,
         "update_check.read_game_field_only handed out {} bytes per read, budget {BYTES_PER_RUN}: the document is being cloned again",
-        metrics.bytes_per_run(ITERATIONS)
+        metrics.min_bytes_per_run()
     );
 }
 
@@ -476,11 +511,11 @@ fn download_fs_read_32mib() {
         let data = std::fs::read(&archive).unwrap();
         std::hint::black_box(&data);
     });
-    report("download.fs_read_32mib", ITERATIONS, metrics);
+    report("download.fs_read_32mib", ITERATIONS, &metrics);
     assert!(
-        metrics.bytes_per_run(ITERATIONS) <= BYTES_PER_RUN,
+        metrics.min_bytes_per_run() <= BYTES_PER_RUN,
         "download.fs_read_32mib handed out {} bytes per read, budget {BYTES_PER_RUN}",
-        metrics.bytes_per_run(ITERATIONS)
+        metrics.min_bytes_per_run()
     );
 }
 
@@ -501,11 +536,11 @@ fn download_compute_sha256_32mib() {
         let digest = compute_sha256(&patch).unwrap();
         std::hint::black_box(&digest);
     });
-    report("download.compute_sha256_32mib", ITERATIONS, metrics);
+    report("download.compute_sha256_32mib", ITERATIONS, &metrics);
     assert!(
-        metrics.allocs_per_run(ITERATIONS) <= ALLOCS_PER_RUN,
+        metrics.min_allocs_per_run() <= ALLOCS_PER_RUN,
         "download.compute_sha256_32mib allocated {} times per hash, budget {ALLOCS_PER_RUN}",
-        metrics.allocs_per_run(ITERATIONS)
+        metrics.min_allocs_per_run()
     );
 }
 
@@ -535,7 +570,7 @@ fn download_resume_prefix_digest() {
         hash_downloaded_prefix(&partial, SKIPPED_BYTES, &mut hasher).unwrap();
         std::hint::black_box(hex::encode(hasher.finalize()));
     });
-    report("download.resume_prefix_digest", ITERATIONS, metrics);
+    report("download.resume_prefix_digest", ITERATIONS, &metrics);
 
     let mut hasher = Sha256::new();
     hash_downloaded_prefix(&partial, SKIPPED_BYTES, &mut hasher).unwrap();
@@ -545,14 +580,14 @@ fn download_resume_prefix_digest() {
         "a resumed download must hash the bytes it skipped over"
     );
     assert!(
-        metrics.allocs_per_run(ITERATIONS) <= ALLOCS_PER_RUN,
+        metrics.min_allocs_per_run() <= ALLOCS_PER_RUN,
         "download.resume_prefix_digest allocated {} times, budget {ALLOCS_PER_RUN}",
-        metrics.allocs_per_run(ITERATIONS)
+        metrics.min_allocs_per_run()
     );
     assert!(
-        metrics.bytes_per_run(ITERATIONS) <= BYTES_PER_RUN,
+        metrics.min_bytes_per_run() <= BYTES_PER_RUN,
         "download.resume_prefix_digest handed out {} bytes, budget {BYTES_PER_RUN}: the skipped prefix is being buffered",
-        metrics.bytes_per_run(ITERATIONS)
+        metrics.min_bytes_per_run()
     );
 }
 
@@ -575,11 +610,11 @@ fn download_validate_archive() {
         let checked = updater::validate_update_archive(&archive, updater::RELEASE_EXECUTABLE_NAME);
         std::hint::black_box(&checked);
     });
-    report("download.validate_archive", ITERATIONS, metrics);
+    report("download.validate_archive", ITERATIONS, &metrics);
     assert!(
-        metrics.allocs_per_run(ITERATIONS) <= ALLOCS_PER_RUN,
+        metrics.min_allocs_per_run() <= ALLOCS_PER_RUN,
         "download.validate_archive allocated {} times per validation, budget {ALLOCS_PER_RUN}",
-        metrics.allocs_per_run(ITERATIONS)
+        metrics.min_allocs_per_run()
     );
 }
 
@@ -623,11 +658,11 @@ fn install_sha256_16mib_once() {
         let digest = compute_sha256(&payload).unwrap();
         std::hint::black_box(&digest);
     });
-    report("install.sha256_16mib_once", ITERATIONS, metrics);
+    report("install.sha256_16mib_once", ITERATIONS, &metrics);
     assert!(
-        metrics.allocs_per_run(ITERATIONS) <= ALLOCS_PER_RUN,
+        metrics.min_allocs_per_run() <= ALLOCS_PER_RUN,
         "install.sha256_16mib_once allocated {} times per hash, budget {ALLOCS_PER_RUN}",
-        metrics.allocs_per_run(ITERATIONS)
+        metrics.min_allocs_per_run()
     );
 }
 
@@ -672,10 +707,10 @@ fn install_repak_round_trip() {
         let valid = installer::validate_pak_file(&rebuilt).unwrap();
         std::hint::black_box(valid);
     });
-    report("install.repak_round_trip", ITERATIONS, metrics);
+    report("install.repak_round_trip", ITERATIONS, &metrics);
     assert!(
-        metrics.allocs_per_run(ITERATIONS) <= ALLOCS_PER_RUN,
+        metrics.min_allocs_per_run() <= ALLOCS_PER_RUN,
         "install.repak_round_trip allocated {} times per round trip, budget {ALLOCS_PER_RUN}",
-        metrics.allocs_per_run(ITERATIONS)
+        metrics.min_allocs_per_run()
     );
 }

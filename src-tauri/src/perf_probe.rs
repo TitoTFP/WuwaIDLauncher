@@ -13,20 +13,56 @@
 //! only the measured body runs.
 //!
 //! What it deliberately does not measure, because no in-process probe can:
-//! WebView2 process accounting, UAC elevation, the self-update restart, and the
-//! per-request `media://` protocol cost. Those stay Windows-only, in the matrix.
+//! WebView2 process accounting, UAC elevation, the self-update restart, and
+//! the per-request `media://` protocol cost. Those stay Windows-only, in the matrix.
 //!
 //! # Budgets, not timings
 //!
-//! A scenario asserts on allocations and bytes, never on microseconds. Those
-//! two are deterministic — the same body allocates the same number of times on
-//! every run on every machine — so a budget over them catches a real
-//! regression. Wall-clock time is the opposite: it moves with the CPU, the
-//! filesystem and whatever else the machine is doing, so a scenario that failed
-//! on it would be a coin flip. `measure` still records it and `report` still
-//! prints it, for a human to read between two runs, and no assertion anywhere
-//! reads it. A flaky performance gate is worse than none, because the next
-//! gate gets ignored too.
+//! A scenario asserts on allocations and bytes, never on microseconds. Wall
+//! clock moves with the CPU, the filesystem and whatever else the machine is
+//! doing, so a scenario that failed on it would be a coin flip. `measure` still
+//! records it and `report` still prints it, for a human to read between two
+//! runs, and no assertion anywhere reads it. A flaky performance gate is worse
+//! than none, because the next gate gets ignored too.
+//!
+//! # Why the budget is the cheapest iteration, not the average
+//!
+//! The window is process-wide, and a process is never quiet. Every
+//! `tauri::async_runtime::block_on` builds a multi-threaded tokio runtime on
+//! first use, and those worker threads allocate on their first scheduling pass
+//! — on a thread the measured body is not even running on, at a moment the body
+//! does not control. That traffic lands in the armed window whenever it
+//! happens to overlap it, which is why the same scenario measured 4,711
+//! bytes/run on a warm run and 6,838 on a cold one: the extra 2,127 bytes were
+//! `tokio-rt-worker` boot allocations, not launcher work.
+//!
+//! Averaging cannot fix that, because the contamination is unbounded: it adds
+//! a fixed one-off cost divided by the iteration count, so it moves the figure
+//! the budget is written against. `measure` therefore keeps every iteration's
+//! own cost separately, and a budget is asserted against the **cheapest**
+//! iteration in the window — `Metrics::min_allocs_per_run` and
+//! `Metrics::min_bytes_per_run`.
+//!
+//! The cheapest iteration is the right figure because it is the only one that
+//! is guaranteed to describe one launch doing nothing but the work under test.
+//! A one-off initialisation, wherever it lands, can only ever make an
+//! iteration *more* expensive, so it cannot raise the minimum. A real
+//! regression is different in kind: a second hash pass, a copied body, a
+//! per-tick settings read is paid by *every* iteration, so it raises the
+//! minimum by exactly its own cost. The rule is not a way to make budgets
+//! easier to pass — it is a way to make them describe the same thing every
+//! run.
+//!
+//! One scenario, `startup.manifest_fetch_body`, asserts on the **median**
+//! instead, because its per-iteration cost genuinely varies: the socket
+//! decides how a response body arrives, so the cheapest of sixteen fetches
+//! samples the luckiest read rather than a typical one. The reason is written
+//! out at that scenario.
+//!
+//! The cheapest iteration is also, by construction, the honest answer to
+//! "what does one launch of this path cost". `report` still prints the
+//! window's average, because that is the figure `docs/launcher-performance.md`
+//! has recorded all along and two runs have to stay diffable.
 //!
 //! `ARMED` is process-wide, so the scenarios are single-threaded on purpose:
 //! `cargo test --lib perf_scenarios -- --test-threads=1 --nocapture`.
@@ -103,8 +139,9 @@ unsafe impl GlobalAlloc for CountingAllocator {
     }
 }
 
-/// One armed window, as totals across every iteration in it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One armed window: the window's totals, and what each iteration in it cost
+/// on its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Metrics {
     /// Allocation events, armed window total.
     pub allocs: u64,
@@ -114,17 +151,75 @@ pub struct Metrics {
     pub peak_live: u64,
     /// Wall clock for the window. Printed for a human, never asserted on.
     pub micros: u64,
+    /// Allocation events per iteration, in the order they ran. A budget is
+    /// written against the cheapest of these, never their sum.
+    per_iteration_allocs: Vec<u64>,
+    /// Bytes per iteration, likewise.
+    per_iteration_bytes: Vec<u64>,
 }
 
 impl Metrics {
-    /// Allocation events per iteration, which is the unit a budget is written in.
+    /// Allocation events per iteration averaged over the window, which is what
+    /// `report` prints. Every iteration is included, so a one-off cost from
+    /// another thread is spread across them — readable, and not what a budget
+    /// should be written against. See the module note.
     pub fn allocs_per_run(&self, iterations: u64) -> u64 {
         self.allocs / iterations
     }
 
-    /// Bytes per iteration, likewise.
+    /// Bytes per iteration averaged over the window, likewise.
     pub fn bytes_per_run(&self, iterations: u64) -> u64 {
         self.bytes / iterations
+    }
+
+    /// The cheapest iteration's allocation count: the cost of one launch that
+    /// did nothing but the work under test. This is what a budget asserts on.
+    pub fn min_allocs_per_run(&self) -> u64 {
+        self.per_iteration_allocs
+            .iter()
+            .copied()
+            .min()
+            .unwrap_or_default()
+    }
+
+    /// The cheapest iteration's bytes, likewise.
+    pub fn min_bytes_per_run(&self) -> u64 {
+        self.per_iteration_bytes
+            .iter()
+            .copied()
+            .min()
+            .unwrap_or_default()
+    }
+
+    /// The median iteration's allocation count. Used only where a scenario's
+    /// per-iteration cost genuinely varies — see the note on the manifest
+    /// fetch — because there the cheapest iteration is the luckiest of the
+    /// window rather than a representative launch.
+    pub fn median_allocs_per_run(&self) -> u64 {
+        median(&self.per_iteration_allocs)
+    }
+
+    /// The median iteration's bytes, likewise.
+    pub fn median_bytes_per_run(&self) -> u64 {
+        median(&self.per_iteration_bytes)
+    }
+
+    /// The dearest iteration's allocation count, for reading.
+    pub fn max_allocs_per_run(&self) -> u64 {
+        self.per_iteration_allocs
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or_default()
+    }
+
+    /// The dearest iteration's bytes, for reading.
+    pub fn max_bytes_per_run(&self) -> u64 {
+        self.per_iteration_bytes
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or_default()
     }
 
     /// Microseconds per iteration. For reading, not for asserting.
@@ -133,12 +228,28 @@ impl Metrics {
     }
 }
 
+/// The middle of a set of per-iteration costs, rounding up. A minority of
+/// contaminated iterations cannot move it: with `n` iterations, at most half
+/// can sit on either side of the middle.
+fn median(values: &[u64]) -> u64 {
+    if values.is_empty() {
+        return 0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    sorted[sorted.len() / 2]
+}
+
 /// Runs `body` once to warm up, then `iterations` times inside an armed
 /// window, and reports what the window cost.
 ///
 /// The warm-up call is not counted on purpose: the first call into any of these
 /// paths faults in pages, initialises statics and warms the allocator's free
-/// lists, and none of that is the cost the scenario is about.
+/// lists, and none of that is the cost the scenario is about. One call is
+/// enough for that, and no more is used to paper over a second entry into a
+/// lazily-built dependency: the per-iteration minimum already discounts a
+/// one-off cost wherever it lands, so buying determinism with extra warm-up
+/// iterations would only make the window slower without making it stricter.
 pub fn measure<F: FnMut()>(iterations: u64, mut body: F) -> Metrics {
     assert!(iterations > 0, "a probe needs at least one iteration");
 
@@ -149,10 +260,19 @@ pub fn measure<F: FnMut()>(iterations: u64, mut body: F) -> Metrics {
     LIVE.store(0, Ordering::Relaxed);
     PEAK_LIVE.store(0, Ordering::Relaxed);
 
+    // Allocated before the window arms, so recording an iteration's own cost
+    // is never itself counted as part of it.
+    let mut per_iteration_allocs = Vec::with_capacity(iterations as usize);
+    let mut per_iteration_bytes = Vec::with_capacity(iterations as usize);
+
     let started = Instant::now();
     ARMED.store(true, Ordering::Relaxed);
     for _ in 0..iterations {
+        let allocs_before = ALLOCS.load(Ordering::Relaxed);
+        let bytes_before = BYTES.load(Ordering::Relaxed);
         body();
+        per_iteration_allocs.push(ALLOCS.load(Ordering::Relaxed) - allocs_before);
+        per_iteration_bytes.push(BYTES.load(Ordering::Relaxed) - bytes_before);
     }
     ARMED.store(false, Ordering::Relaxed);
     // Read the counters after disarming, so the probe never counts itself.
@@ -161,16 +281,28 @@ pub fn measure<F: FnMut()>(iterations: u64, mut body: F) -> Metrics {
         bytes: BYTES.load(Ordering::Relaxed),
         peak_live: PEAK_LIVE.load(Ordering::Relaxed),
         micros: started.elapsed().as_micros() as u64,
+        per_iteration_allocs,
+        per_iteration_bytes,
     }
 }
 
 /// One `WUL1|` line per scenario, so two runs of the probe can be diffed
-/// directly.
-pub fn report(label: &str, iterations: u64, metrics: Metrics) {
+/// directly. The `allocs/run` and `bytes/run` columns stay the window's
+/// average, which is what `docs/launcher-performance.md` has always recorded;
+/// the `min_*` and `median_*` columns are the per-iteration figures budgets
+/// are written against, and `max_*` is printed so a spread across a window is
+/// visible rather than inferred.
+pub fn report(label: &str, iterations: u64, metrics: &Metrics) {
     println!(
-        "WUL1|{label}|iters={iterations}|allocs/run={}|bytes/run={}|peak_live={}|us/run={}",
+        "WUL1|{label}|iters={iterations}|allocs/run={}|bytes/run={}|min_allocs/run={}|min_bytes/run={}|median_allocs/run={}|median_bytes/run={}|max_allocs/run={}|max_bytes/run={}|peak_live={}|us/run={}",
         metrics.allocs_per_run(iterations),
         metrics.bytes_per_run(iterations),
+        metrics.min_allocs_per_run(),
+        metrics.min_bytes_per_run(),
+        metrics.median_allocs_per_run(),
+        metrics.median_bytes_per_run(),
+        metrics.max_allocs_per_run(),
+        metrics.max_bytes_per_run(),
         metrics.peak_live,
         metrics.micros_per_run(iterations),
     );
