@@ -24,6 +24,12 @@ test("launcher state survives onThemeReady before and after onMediaReady", async
   const previousWindow = globalThis.window;
   const previousTauriInternals = globalThis.__TAURI_INTERNALS__;
   const previousLocalStorage = globalThis.localStorage;
+  // Node 21+ exposes `navigator` as a getter-only global, so a plain
+  // assignment throws under strict mode; save and restore it by descriptor.
+  const previousNavigator = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "navigator",
+  );
   const store = new Map();
   globalThis.__testState = (value) => value;
   globalThis.window = globalThis;
@@ -33,6 +39,18 @@ test("launcher state survives onThemeReady before and after onMediaReady", async
     setItem: (key, value) => store.set(key, String(value)),
     removeItem: (key) => store.delete(key),
   };
+  // mediaAssetUrl() reads the bare `navigator` global, exactly as a WebView
+  // provides it; `globalThis.window = globalThis` does not stand in for it.
+  Object.defineProperty(globalThis, "navigator", {
+    value: {
+      // A non-Windows WebView, so the asset origin matches the media:// URLs
+      // the backend sends in MEDIA_READY.
+      userAgent:
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+    },
+    configurable: true,
+    writable: true,
+  });
 
   try {
     await build({
@@ -90,6 +108,8 @@ test("launcher state survives onThemeReady before and after onMediaReady", async
     else globalThis.__TAURI_INTERNALS__ = previousTauriInternals;
     if (previousLocalStorage === undefined) delete globalThis.localStorage;
     else globalThis.localStorage = previousLocalStorage;
+    if (previousNavigator === undefined) delete globalThis.navigator;
+    else Object.defineProperty(globalThis, "navigator", previousNavigator);
     delete globalThis.__mediaThemeOrderScenario;
     await rm(outDir, { recursive: true, force: true });
   }

@@ -73,8 +73,9 @@ function assertTheme(order: string, id: string) {
     `${order}: the theme runtime did not paint ${id}`,
   );
   assert(
-    themeRuntime.backgroundUrl().includes("bg.jpg"),
-    `${order}: the theme background did not come from the verified cache`,
+    themeRuntime.backgroundUrl() === "media://localhost/bg.jpg",
+    `${order}: the theme background was ${themeRuntime.backgroundUrl()}, ` +
+      "not the verified-cache media origin",
   );
 }
 
