@@ -38,6 +38,7 @@ The post-change gates use these explicit thresholds:
 | Medium | Icon-only controls lacked assistive names/state | `aria-label`, `aria-expanded`, and `aria-pressed` plus regression tests. |
 | Medium | CI/release omitted security/control regressions | Gates are now required in CI, release, and the Windows workflow contract. |
 | Medium | Shell command substitution was unsafe for the deterministic auditor | Added `node scripts/tests/workflow-contract.test.mjs`, a literal-argument check for hosted runners and manual real-game acceptance. |
+| Medium | Media sync waited for the manifest signature before downloading anything | The `.sig` fetch runs in the background and is collected after the media sync, so a stalled or rejected signature can no longer delay the media download or the media status events. |
 
 ## Delivered
 
@@ -57,6 +58,7 @@ The post-change gates use these explicit thresholds:
 - Removed shell-backed process spawning from the frontend/Tauri wrapper scripts; Node now launches the package entrypoints directly (with a fixed Windows npm fallback).
 - Preserved SHA-256 verification, expected-size checks, resumable-download validators, bounded response bodies, archive validation, and local-only diagnostics behavior.
 - Extended the Windows workflow contract to require dependency auditing and frontend-control regressions.
+- Media sync no longer waits on the manifest signature: the `.sig` fetch runs in the background, the media sync and its status events finish first, and the theme is resolved from the collected signature afterwards — which also means `onThemeReady` can now arrive after `onMediaReady`.
 
 ## Verification
 

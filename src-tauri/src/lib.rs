@@ -1434,107 +1434,148 @@ fn check_and_sync_media<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
             }
         };
 
-        match engine::media::fetch_manifest_bytes(&client, &media_manifest_url()).await {
-            Ok((manifest_bytes, mut manifest)) => {
-                if let Some(update_date) = &manifest.update_date {
-                    let _ = app_handle.emit("onUpdateDate", update_date.clone());
-                }
-
-                // The theme block is the only part of the manifest that can
-                // restyle the launcher, so it is honoured only when the
-                // manifest itself is signed by a trusted key. Media sync keeps
-                // its existing sha256 trust model either way.
-                let verified_key = engine::theme::fetch_signature(
-                    &client,
-                    &engine::theme::signature_url(&media_manifest_url()),
-                )
-                .await
-                .and_then(|signature| {
-                    engine::theme::verify_manifest_signature(&manifest_bytes, &signature)
-                });
-                match &verified_key {
-                    Ok(key_id) => {
-                        sync_remote_theme(&cache_dir, manifest.theme.as_ref(), key_id, &app_handle)
-                            .await;
-                    }
-                    Err(error) => {
-                        log::warn!("Manifest theme ditolak: {error}");
-                        // Never let an unverified theme reach the manifest cache:
-                        // a later offline launch would read it back and apply it
-                        // with no signature check at all.
-                        manifest.theme = None;
-                        emit_theme_payload(&cache_dir, &app_handle, "unsigned");
-                    }
-                }
-
-                let app_progress = app_handle.clone();
-                let res = engine::media::sync_media(&cache_dir, &manifest, move |asset_name, p| {
-                    let _ = app_progress.emit(
-                        "onMediaProgress",
-                        serde_json::json!({
-                            "percent": p.percent,
-                            "text": format!("Mengunduh {}", asset_name),
-                            "speed": p.speed_mbps,
-                            "size": p.status
-                        }),
-                    );
-                })
-                .await;
-
-                match res {
-                    Ok(_) => {
-                        let _ = app_handle.emit(
-                            "onMediaReady",
-                            serde_json::json!({
-                                "bgmUrl": media_url("bgm.mp3"),
-                                "videoUrl": media_url("bg-video.mp4")
-                            }),
-                        );
-                        let _ = app_handle.emit(
-                            "onMediaStatus",
-                            serde_json::json!({
-                                "status": "ready",
-                                "message": ""
-                            }),
-                        );
-                    }
-                    Err(e) => {
-                        log::warn!("Media sync error: {}", e);
-                        let status = if cached_valid { "offline" } else { "error" };
-                        let message = if cached_valid {
-                            format!(
-                                "Media baru gagal diverifikasi; memakai cache valid. Detail: {e}"
-                            )
-                        } else {
-                            e
-                        };
-                        let _ = app_handle.emit(
-                            "onMediaStatus",
-                            serde_json::json!({
-                                "status": status,
-                                "message": message
-                            }),
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                log::warn!("Failed to fetch media manifest: {}", e);
-                let _ = app_handle.emit(
-                    "onMediaStatus",
-                    serde_json::json!({
-                        "status": "offline",
-                        "message": if cached_valid {
-                            format!("Tidak terhubung; media cache tetap digunakan. Detail: {e}")
-                        } else {
-                            e
-                        }
-                    }),
-                );
-            }
-        }
+        sync_manifest_media_and_theme(
+            &cache_dir,
+            &app_handle,
+            &client,
+            &media_manifest_url(),
+            cached_valid,
+        )
+        .await;
     });
     Ok(())
+}
+
+/// Fetches the manifest, syncs the media, and only then decides the theme.
+///
+/// Media never needed the manifest signature: every byte it downloads is
+/// pinned by a sha256 the manifest itself carried, and the signature only
+/// decides whether the theme may be applied. So the `.sig` fetch runs in the
+/// background while the media downloads instead of in front of them. A proxy
+/// that holds that one URL can no longer add a full client timeout before the
+/// BGM and background video start moving, and the normal case saves a round
+/// trip because both requests are in flight at once.
+///
+/// Because the signature is collected after the media events, `onThemeReady`
+/// can now arrive after `onMediaReady`. The two stay independent: media state
+/// never reads a theme, and a theme payload is served from the verified local
+/// theme cache rather than from the media download.
+async fn sync_manifest_media_and_theme<R: Runtime>(
+    cache_dir: &Path,
+    app_handle: &AppHandle<R>,
+    client: &reqwest::Client,
+    manifest_url: &str,
+    cached_valid: bool,
+) {
+    let signature_url = engine::theme::signature_url(manifest_url);
+    let signature_client = client.clone();
+    let signature_task = tauri::async_runtime::spawn(async move {
+        engine::theme::fetch_signature(&signature_client, &signature_url).await
+    });
+
+    match engine::media::fetch_manifest_bytes(client, manifest_url).await {
+        Ok((manifest_bytes, mut manifest)) => {
+            if let Some(update_date) = &manifest.update_date {
+                let _ = app_handle.emit("onUpdateDate", update_date.clone());
+            }
+
+            // The theme block leaves the manifest before anything can cache
+            // it. An unverified theme must never reach the manifest cache: a
+            // later offline launch would read it back and apply it with no
+            // signature check at all, and the theme is the only part of a
+            // manifest that can restyle the launcher.
+            let theme = manifest.theme.take();
+
+            let app_progress = app_handle.clone();
+            let res = engine::media::sync_media(cache_dir, &manifest, move |asset_name, p| {
+                let _ = app_progress.emit(
+                    "onMediaProgress",
+                    serde_json::json!({
+                        "percent": p.percent,
+                        "text": format!("Mengunduh {}", asset_name),
+                        "speed": p.speed_mbps,
+                        "size": p.status
+                    }),
+                );
+            })
+            .await;
+
+            match res {
+                Ok(_) => {
+                    let _ = app_handle.emit(
+                        "onMediaReady",
+                        serde_json::json!({
+                            "bgmUrl": media_url("bgm.mp3"),
+                            "videoUrl": media_url("bg-video.mp4")
+                        }),
+                    );
+                    let _ = app_handle.emit(
+                        "onMediaStatus",
+                        serde_json::json!({
+                            "status": "ready",
+                            "message": ""
+                        }),
+                    );
+                }
+                Err(e) => {
+                    log::warn!("Media sync error: {}", e);
+                    let status = if cached_valid { "offline" } else { "error" };
+                    let message = if cached_valid {
+                        format!("Media baru gagal diverifikasi; memakai cache valid. Detail: {e}")
+                    } else {
+                        e
+                    };
+                    let _ = app_handle.emit(
+                        "onMediaStatus",
+                        serde_json::json!({
+                            "status": status,
+                            "message": message
+                        }),
+                    );
+                }
+            }
+
+            // The signature has been in flight for the whole media sync. A
+            // fetch that failed, was cancelled, or panicked is reported, not
+            // swallowed, and never unwinds across the command boundary.
+            let verified_key = match signature_task.await {
+                Ok(Ok(signature)) => {
+                    engine::theme::verify_manifest_signature(&manifest_bytes, &signature)
+                }
+                Ok(Err(error)) => Err(format!("Gagal mengambil tanda tangan manifest: {error}")),
+                Err(error) => {
+                    log::warn!("Pencarian tanda tangan manifest gagal: {error}");
+                    Err(format!("Pencarian tanda tangan manifest gagal: {error}"))
+                }
+            };
+            match &verified_key {
+                Ok(key_id) => {
+                    sync_remote_theme(cache_dir, theme.as_ref(), key_id, app_handle).await;
+                }
+                Err(error) => {
+                    log::warn!("Manifest theme ditolak: {error}");
+                    emit_theme_payload(cache_dir, app_handle, "unsigned");
+                }
+            }
+        }
+        Err(e) => {
+            // There is nothing left to verify the signature against, so stop
+            // the background fetch instead of leaving it running.
+            signature_task.abort();
+            log::warn!("Failed to fetch media manifest: {}", e);
+            let _ = app_handle.emit(
+                "onMediaStatus",
+                serde_json::json!({
+                    "status": "offline",
+                    "message": if cached_valid {
+                        format!("Tidak terhubung; media cache tetap digunakan. Detail: {e}")
+                    } else {
+                        e
+                    }
+                }),
+            );
+        }
+    }
 }
 
 /// Applies what a signed manifest says about theming. A theme failure never
@@ -4252,6 +4293,360 @@ mod tests {
 
         app.unlisten(ready_listener);
         app.unlisten(status_listener);
+        std::env::remove_var("WUWAID_ASSETS_URL");
+        std::env::remove_var("WUWAID_E2E_APPDATA");
+    }
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        use sha2::Digest;
+        hex::encode(sha2::Sha256::digest(bytes))
+    }
+
+    /// Holds the `.sig` response until the test lets it through, so a stall
+    /// there costs the test nothing but the test's own patience.
+    struct SignatureGate {
+        released: std::sync::Mutex<bool>,
+        signal: std::sync::Condvar,
+    }
+
+    impl SignatureGate {
+        fn new(released: bool) -> Self {
+            Self {
+                released: std::sync::Mutex::new(released),
+                signal: std::sync::Condvar::new(),
+            }
+        }
+
+        fn hold(&self) {
+            let released = self.released.lock().unwrap();
+            let _ = self
+                .signal
+                .wait_timeout_while(released, Duration::from_secs(30), |released| !*released);
+        }
+
+        fn release(&self) {
+            *self.released.lock().unwrap() = true;
+            self.signal.notify_all();
+        }
+    }
+
+    /// Loopback origin for the media pipeline: the manifest, both media files,
+    /// and a signature endpoint the test can refuse to answer. The manifest
+    /// carries a theme block, so a run that lets it through the cache proves
+    /// the signature gate.
+    struct MediaOrigin {
+        manifest_url: String,
+        signature: std::sync::Arc<SignatureGate>,
+        requests: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl MediaOrigin {
+        fn requested(&self, path: &str) -> usize {
+            self.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|seen| *seen == path)
+                .count()
+        }
+    }
+
+    fn spawn_media_origin(signature_held: bool) -> MediaOrigin {
+        use std::io::{Read, Write};
+
+        fn respond(stream: &mut std::net::TcpStream, status: &str, body: &[u8], send_body: bool) {
+            let head = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            if send_body {
+                let _ = stream.write_all(body);
+            }
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let bgm = b"bgm-audio-bytes".to_vec();
+        let video = b"bg-video-bytes".to_vec();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "update_date": "2026-09-07",
+            "assets": [
+                {
+                    "name": "bgm.mp3",
+                    "url": format!("{base_url}/bgm.mp3"),
+                    "sha256": sha256_hex(&bgm),
+                },
+                {
+                    "name": "bg-video.mp4",
+                    "url": format!("{base_url}/bg-video.mp4"),
+                    "sha256": sha256_hex(&video),
+                },
+            ],
+            "theme": {
+                "id": "fixture-theme",
+                "name": "Fixture Theme",
+                "active": true,
+                "tokens": {"--particle-gold-rgb": "231, 211, 148"},
+            },
+        }))
+        .unwrap();
+        // A body that parses as text and verifies as nothing: the shape a
+        // tampered or placeholder `.sig` file has.
+        let signature_body = b"wuwaid-manifest-v1\nnot-a-real-signature\n".to_vec();
+        let signature = std::sync::Arc::new(SignatureGate::new(!signature_held));
+        let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let served_signature = std::sync::Arc::clone(&signature);
+        let served_requests = std::sync::Arc::clone(&requests);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else {
+                    return;
+                };
+                let signature = std::sync::Arc::clone(&served_signature);
+                let requests = std::sync::Arc::clone(&served_requests);
+                let manifest = manifest.clone();
+                let bgm = bgm.clone();
+                let video = video.clone();
+                let signature_body = signature_body.clone();
+                std::thread::spawn(move || {
+                    let mut buffer = [0u8; 2048];
+                    let read = stream.read(&mut buffer).unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buffer[..read]).into_owned();
+                    let mut parts = request
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .split_whitespace();
+                    let is_head = parts.next() == Some("HEAD");
+                    let path = parts.next().unwrap_or("/").to_string();
+                    requests.lock().unwrap().push(path.clone());
+                    match path.as_str() {
+                        "/assets.json" => respond(&mut stream, "200 OK", &manifest, !is_head),
+                        "/bgm.mp3" => respond(&mut stream, "200 OK", &bgm, !is_head),
+                        "/bg-video.mp4" => respond(&mut stream, "200 OK", &video, !is_head),
+                        // A proxy that accepts this one URL and then says
+                        // nothing: exactly what the media sync must outlive.
+                        "/assets.json.sig" => {
+                            signature.hold();
+                            respond(&mut stream, "200 OK", &signature_body, !is_head);
+                        }
+                        _ => respond(&mut stream, "404 Not Found", b"", false),
+                    }
+                });
+            }
+        });
+
+        MediaOrigin {
+            manifest_url: format!("{base_url}/assets.json"),
+            signature,
+            requests,
+        }
+    }
+
+    /// Records every media/theme event in the order the launcher emitted it.
+    struct EventOrder {
+        events: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    }
+
+    impl EventOrder {
+        fn record(app: &tauri::App<tauri::test::MockRuntime>, names: &[&str]) -> Self {
+            let events: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>> =
+                std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            for name in names {
+                let name = name.to_string();
+                let sink = std::sync::Arc::clone(&events);
+                app.listen_any(name.clone(), move |event| {
+                    let payload: serde_json::Value =
+                        serde_json::from_str(event.payload()).unwrap_or(serde_json::Value::Null);
+                    let status = payload
+                        .get("status")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default();
+                    sink.lock()
+                        .unwrap()
+                        .push((name.clone(), status.to_string()));
+                });
+            }
+            Self { events }
+        }
+
+        fn names(&self) -> Vec<String> {
+            self.events
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect()
+        }
+
+        /// Waits for `count` events and reports them, so an assertion failure
+        /// names the events that did arrive instead of just a timeout.
+        fn wait_for(&self, count: usize, what: &str) -> Vec<(String, String)> {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                let events = self.events.lock().unwrap().clone();
+                if events.len() >= count {
+                    return events;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "{what}: only {:?} arrived",
+                    self.names()
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_stalled_signature_does_not_hold_media_and_theme_follows_it() {
+        let appdata = tempfile::tempdir().unwrap();
+        let cache_dir = appdata.path().join("Cache");
+        let origin = spawn_media_origin(true);
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let order = EventOrder::record(&app, &["onMediaReady", "onMediaStatus", "onThemeReady"]);
+        // The signature is only answered when this test says so, so the media
+        // events below can only arrive if the pipeline never waited for it.
+        let client = engine::downloader::official_github_client(Duration::from_secs(20)).unwrap();
+        let manifest_url = origin.manifest_url.clone();
+
+        let pipeline = tauri::async_runtime::spawn({
+            let app = app.handle().clone();
+            let cache_dir = cache_dir.clone();
+            async move {
+                sync_manifest_media_and_theme(&cache_dir, &app, &client, &manifest_url, false)
+                    .await;
+            }
+        });
+
+        // The signature is still being withheld here, so nothing may report a
+        // theme yet — and the media must already be done.
+        let before_release = order.wait_for(2, "media did not sync while the signature stalled");
+        assert_eq!(
+            before_release,
+            vec![
+                ("onMediaReady".to_string(), String::new()),
+                ("onMediaStatus".to_string(), "ready".to_string()),
+            ],
+            "media events were not emitted while the signature stalled"
+        );
+        assert!(
+            !order.names().contains(&"onThemeReady".to_string()),
+            "a theme was reported before its signature was known"
+        );
+
+        origin.signature.release();
+        let after_release = order.wait_for(3, "theme event never followed the media events");
+        assert_eq!(
+            after_release.last().map(|(name, _)| name.as_str()),
+            Some("onThemeReady"),
+            "onThemeReady must be reported after the media events: {after_release:?}"
+        );
+
+        let cached_manifest =
+            std::fs::read_to_string(engine::media::cached_manifest_path(&cache_dir))
+                .expect("the verified media sync wrote its manifest");
+        let cached: serde_json::Value = serde_json::from_str(&cached_manifest).unwrap();
+        assert!(
+            cached.get("theme").is_none_or(|theme| theme.is_null()),
+            "an unverified theme reached the manifest cache: {cached_manifest}"
+        );
+        pipeline.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_rejected_signature_still_reports_media_before_the_theme() {
+        let appdata = tempfile::tempdir().unwrap();
+        let cache_dir = appdata.path().join("Cache");
+        let origin = spawn_media_origin(false);
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let order = EventOrder::record(&app, &["onMediaReady", "onMediaStatus", "onThemeReady"]);
+        let client = engine::downloader::official_github_client(Duration::from_secs(20)).unwrap();
+
+        sync_manifest_media_and_theme(
+            &cache_dir,
+            app.handle(),
+            &client,
+            &origin.manifest_url,
+            false,
+        )
+        .await;
+
+        let events = order.wait_for(3, "a rejected signature swallowed the media report");
+        assert_eq!(
+            events,
+            vec![
+                ("onMediaReady".to_string(), String::new()),
+                ("onMediaStatus".to_string(), "ready".to_string()),
+                // The manifest was not signed by a trusted key, so the only
+                // theme this launcher can serve is the bundled general one.
+                ("onThemeReady".to_string(), "general".to_string()),
+            ],
+            "a rejected signature must still report media first, then the theme"
+        );
+        assert!(cache_dir.join("bgm.mp3").is_file());
+        assert!(cache_dir.join("bg-video.mp4").is_file());
+    }
+
+    #[tokio::test]
+    async fn test_second_media_command_is_refused_while_the_signature_is_still_in_flight() {
+        let _env_lock = lock_test_environment();
+        let appdata = tempfile::tempdir().unwrap();
+        let origin = spawn_media_origin(true);
+        std::env::set_var("WUWAID_E2E_APPDATA", appdata.path());
+        std::env::set_var("WUWAID_ASSETS_URL", &origin.manifest_url);
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+
+        let mut started = false;
+        for _ in 0..80 {
+            match check_and_sync_media(app.handle().clone()) {
+                Ok(()) => {
+                    started = true;
+                    break;
+                }
+                Err(error) if error.starts_with("busy:") => {
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                Err(error) => panic!("unexpected media command error: {error}"),
+            }
+        }
+        assert!(started, "media operation did not become available");
+
+        let refused = check_and_sync_media(app.handle().clone());
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|error| error.starts_with("busy:")),
+            "a second media sync started while the first was still running: {refused:?}"
+        );
+
+        origin.signature.release();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while engine::operations::global().active_operation().is_some() {
+            assert!(Instant::now() < deadline, "media sync never finished");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            origin.requested("/assets.json"),
+            1,
+            "the refused call started a second manifest fetch"
+        );
+        assert_eq!(
+            origin.requested("/assets.json.sig"),
+            1,
+            "the refused call started a second signature fetch"
+        );
+
         std::env::remove_var("WUWAID_ASSETS_URL");
         std::env::remove_var("WUWAID_E2E_APPDATA");
     }
