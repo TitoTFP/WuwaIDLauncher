@@ -16,14 +16,14 @@ import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const KEY_DIR = join(REPO_ROOT, "scripts", "keys");
-const DEFAULT_KEY = join(KEY_DIR, "web-manifest.key.pem");
-const DEFAULT_KEY_ID_FILE = join(KEY_DIR, "web-manifest.key-id");
+const DEFAULT_KEY = join(KEY_DIR, "web-manifest-2026-02.key.pem");
+const DEFAULT_KEY_ID_FILE = join(KEY_DIR, "web-manifest-2026-02.key-id");
 const DEFAULT_MANIFEST = join(REPO_ROOT, "Web", "assets.json");
 const SIGNATURE_HEADER = "wuwaid-manifest-v1";
-const FALLBACK_KEY_ID = "wuwa-web-2026-01";
+const FALLBACK_KEY_ID = "wuwa-web-2026-02";
 
 function parseArgs(argv) {
-  const args = { key: DEFAULT_KEY, in: DEFAULT_MANIFEST, out: null, keyId: null };
+  const args = { key: DEFAULT_KEY, in: DEFAULT_MANIFEST, out: null };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--generate") {
@@ -46,7 +46,7 @@ function usage() {
   process.stdout.write(
     [
       "Usage:",
-      "  node scripts/sign-manifest.mjs --generate",
+      "  node scripts/sign-manifest.mjs --generate [--key <pem>] [--key-id <id>]",
       "  node scripts/sign-manifest.mjs [--in Web/assets.json] [--key <pem>] [--key-id <id>]",
       "",
     ].join("\n"),
@@ -55,29 +55,58 @@ function usage() {
 
 function publicKeyHex(privateKeyPath) {
   const privateKey = createPrivateKey(readFileSync(privateKeyPath));
-  const spki = createPublicKey(privateKey).export({ format: "der", type: "spki" });
+  return rawPublicKeyHex(createPublicKey(privateKey));
+}
+
+function rawPublicKeyHex(publicKey) {
+  const spki = publicKey.export({ format: "der", type: "spki" });
   return Buffer.from(spki).subarray(-32).toString("hex");
 }
 
-function generateKeyPair() {
-  if (existsSync(DEFAULT_KEY)) {
-    process.stderr.write(`Key already exists at ${DEFAULT_KEY}; refusing to overwrite.\n`);
-    process.exitCode = 1;
-    return;
+function keySidecarPath(privateKeyPath, suffix) {
+  if (suffix === "key-id" && resolve(privateKeyPath) === DEFAULT_KEY) {
+    return DEFAULT_KEY_ID_FILE;
   }
+  const filename = basename(privateKeyPath);
+  const stem = filename.endsWith(".key.pem") ? filename.slice(0, -8) : filename;
+  return join(dirname(privateKeyPath), `${stem}.${suffix}`);
+}
+
+function validateKeyId(keyId) {
+  if (keyId.length > 64 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(keyId)) {
+    throw new Error(`Invalid key id: ${keyId}`);
+  }
+}
+
+function generateKeyPair(args) {
+  const keyPath = resolve(args.key);
+  const keyId = args["key-id"] || FALLBACK_KEY_ID;
+  validateKeyId(keyId);
+
+  const keyIdPath = keySidecarPath(keyPath, "key-id");
+  const publicKeyPath = keySidecarPath(keyPath, "pub.hex");
+  for (const artifactPath of [keyPath, keyIdPath, publicKeyPath]) {
+    if (existsSync(artifactPath)) {
+      throw new Error(`Key artifact already exists at ${artifactPath}; refusing to overwrite.`);
+    }
+  }
+
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  mkdirSync(KEY_DIR, { recursive: true });
-  writeFileSync(DEFAULT_KEY, privateKey.export({ format: "pem", type: "pkcs8" }), {
+  mkdirSync(dirname(keyPath), { recursive: true, mode: 0o700 });
+  writeFileSync(keyPath, privateKey.export({ format: "pem", type: "pkcs8" }), {
+    flag: "wx",
     mode: 0o600,
   });
-  const hex = Buffer.from(publicKey.export({ format: "der", type: "spki" }))
-    .subarray(-32)
-    .toString("hex");
-  writeFileSync(DEFAULT_KEY_ID_FILE, `${FALLBACK_KEY_ID}\n`);
+  const hex = rawPublicKeyHex(publicKey);
+  writeFileSync(keyIdPath, `${keyId}\n`, { flag: "wx", mode: 0o600 });
+  writeFileSync(publicKeyPath, `${hex}\n`, { flag: "wx", mode: 0o600 });
+
   process.stdout.write(
     [
-      `Private key: ${DEFAULT_KEY} (git-ignored, keep it offline)`,
+      `Private key: ${keyPath} (git-ignored, keep it offline)`,
+      `Key id file: ${keyIdPath}`,
       `Public key:  ${hex}`,
+      `Public file: ${publicKeyPath}`,
       "",
       "Add the public key to TRUSTED_SIGNING_KEYS in src-tauri/src/engine/theme.rs",
       "before shipping a launcher build that should trust it.",
@@ -93,7 +122,7 @@ function main() {
     return;
   }
   if (args.generate) {
-    generateKeyPair();
+    generateKeyPair(args);
     return;
   }
 
@@ -106,7 +135,8 @@ function main() {
     throw new Error(`Manifest not found: ${manifestPath}`);
   }
 
-  const keyId = args["key-id"] || readKeyId();
+  const keyId = args["key-id"] || readKeyId(keyPath);
+  validateKeyId(keyId);
   // The signature covers the bytes GitHub serves, which are the committed blob.
   // A Windows checkout with core.autocrlf=true rewrites them to CRLF, so sign
   // the normalised form — otherwise verification fails with no visible error.
@@ -134,9 +164,10 @@ function main() {
   );
 }
 
-function readKeyId() {
-  if (!existsSync(DEFAULT_KEY_ID_FILE)) return FALLBACK_KEY_ID;
-  const id = readFileSync(DEFAULT_KEY_ID_FILE, "utf8").trim();
+function readKeyId(privateKeyPath) {
+  const keyIdPath = keySidecarPath(privateKeyPath, "key-id");
+  if (!existsSync(keyIdPath)) return FALLBACK_KEY_ID;
+  const id = readFileSync(keyIdPath, "utf8").trim();
   return id || FALLBACK_KEY_ID;
 }
 

@@ -73,6 +73,9 @@ jobs:
       - name: Test JavaScript contracts
         run: node --test scripts/tests/frontend-controls.test.mjs scripts/tests/game-exit-notice.test.mjs scripts/tests/resource-lifecycle.test.mjs scripts/tests/launcher-update-notification.test.mjs scripts/tests/workflow-contract.test.mjs scripts/tests/performance-contract.test.mjs
 
+      - name: Test manifest signing and key generation
+        run: node --test scripts/tests/sign-manifest.test.mjs
+
       - name: Test patch status bridge
         run: npm run test:patch-status
 
