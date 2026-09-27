@@ -5,7 +5,7 @@ use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const NORMAL_PAK_FILE_NAME: &str = "pakchunk0-ID-WindowsNoEditor_1000_P.pak";
 pub const HIDE_UID_PATCH_VERSION: &str = "hide_uid_v2";
@@ -18,6 +18,21 @@ const UID_TARGET_IDS: [&str; 3] = [
     "PrefabTextItem_1341587207_Text",
 ];
 const MAX_PAK_BYTES: u64 = 128 * 1024 * 1024;
+
+/// How long a repack artifact may sit before cleanup may assume that nothing is
+/// still writing to it. Unpacking, patching, and repacking a single PAK takes
+/// seconds, so anything this old is debris from a process that was killed
+/// mid-repack rather than an operation still in flight.
+const ORPHANED_ARTIFACT_MAX_AGE: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// What a transient cache artifact is, recovered from its own file name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransientKind {
+    /// A repack work directory holding a fully unpacked PAK tree.
+    Work,
+    /// A temporary written before an atomic rename that never happened.
+    Marker,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PatchVariant {
@@ -106,6 +121,75 @@ fn unique_work_directory(cache_dir: &Path) -> Result<PathBuf, String> {
     Ok(work)
 }
 
+/// The kind and owning process id encoded in a transient cache file name, or
+/// `None` when the name is not one of ours.
+///
+/// Everything transient in the cache is named `.<name>.<kind>-<pid>-<nanos>`
+/// (see [`unique_path`]), so the embedded process id is what separates "a crash
+/// left this behind" from "an operation is using this right now".
+fn transient_owner(name: &str) -> Option<(TransientKind, u32)> {
+    let (stem, stamp) = name.rsplit_once('-')?;
+    // The trailing component is always a nanosecond clock reading; requiring it
+    // keeps ordinary cache files such as `bg-video.mp4` out of this parser.
+    stamp.parse::<u128>().ok()?;
+    let (kind, owner) = stem.rsplit_once('-')?;
+    let (_, kind) = kind.rsplit_once('.')?;
+    let kind = match kind {
+        "work" => TransientKind::Work,
+        "tmp" => TransientKind::Marker,
+        _ => return None,
+    };
+    Some((kind, owner.parse::<u32>().ok()?))
+}
+
+/// True only when the process provably no longer exists.
+///
+/// Platforms with no cheap way to answer that keep every artifact, so cleanup
+/// falls back to the age rule there rather than guessing.
+fn owning_process_is_gone(owner: u32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        !Path::new(&format!("/proc/{owner}")).exists()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = owner;
+        false
+    }
+}
+
+/// Total bytes `path` occupies, without following symlinks out of the cache.
+fn path_size(path: &Path) -> u64 {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if metadata.is_file() {
+        return metadata.len();
+    }
+    if metadata.is_dir() {
+        let Ok(entries) = fs::read_dir(path) else {
+            return 0;
+        };
+        return entries
+            .flatten()
+            .map(|entry| path_size(&entry.path()))
+            .sum();
+    }
+    0
+}
+
+/// True when `name` is a PAK this module derived from a downloaded source PAK,
+/// as opposed to the source itself or any unrelated cache entry.
+fn is_derived_pak_artifact(name: &str) -> bool {
+    let Some(rest) = name
+        .strip_prefix(NORMAL_PAK_FILE_NAME)
+        .and_then(|rest| rest.strip_prefix('.'))
+    else {
+        return false;
+    };
+    rest.ends_with(".pak") || rest.ends_with(".sha256")
+}
+
 fn valid_patch_version(value: &str) -> bool {
     !value.is_empty()
         && value
@@ -154,6 +238,107 @@ fn write_derived_hash(pak_path: &Path, hash: &str) -> Result<(), String> {
     }
     fs::rename(&temporary, &marker)
         .map_err(|error| format!("hide_uid_hash_activate_failed: {error}"))
+}
+
+/// Removes every derived PAK in `cache_dir` except `keep` and its checksum
+/// marker, returning the bytes reclaimed.
+///
+/// A derived PAK is named after the patch version and the source hash it was
+/// built from, so each new release and each different custom UID mints another
+/// file of up to [`MAX_PAK_BYTES`] that nothing will read again. The one the
+/// caller is about to install, and the marker that proves it is intact, are
+/// the only ones that have to survive.
+pub fn retain_derived_pak_cache(cache_dir: &Path, keep: &Path) -> u64 {
+    if !keep
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(is_derived_pak_artifact)
+    {
+        return 0;
+    }
+    let keep_hash = derived_hash_path(keep);
+    let Ok(entries) = fs::read_dir(cache_dir) else {
+        return 0;
+    };
+    let mut reclaimed = 0;
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        if !is_derived_pak_artifact(name) {
+            continue;
+        }
+        let path = entry.path();
+        if path == keep || path == keep_hash || !path.is_file() {
+            continue;
+        }
+        let size = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+        if fs::remove_file(&path).is_ok() {
+            reclaimed += size;
+        }
+    }
+    reclaimed
+}
+
+/// Reclaims the debris a killed launcher leaves in the cache: repack work
+/// directories, each holding a fully unpacked PAK tree, and temporaries an
+/// interrupted atomic write never promoted. Returns the bytes reclaimed.
+///
+/// An artifact is only removed when its owning process is provably gone or the
+/// artifact is older than [`ORPHANED_ARTIFACT_MAX_AGE`], and never when this
+/// process owns it: a repack that is running right now has to keep writing
+/// into its own work directory.
+pub fn remove_orphaned_repack_artifacts(cache_dir: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(cache_dir) else {
+        return 0;
+    };
+    let mut reclaimed = 0;
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        let Some((kind, owner)) = transient_owner(name) else {
+            continue;
+        };
+        if owner == std::process::id() {
+            continue;
+        }
+        let path = entry.path();
+        let expected_type = match kind {
+            TransientKind::Work => path.is_dir(),
+            TransientKind::Marker => path.is_file(),
+        };
+        if !expected_type {
+            continue;
+        }
+        let aged_out = fs::metadata(&path)
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+            .is_some_and(|age| age > ORPHANED_ARTIFACT_MAX_AGE);
+        if !aged_out && !owning_process_is_gone(owner) {
+            continue;
+        }
+        let size = path_size(&path);
+        let removed = match kind {
+            TransientKind::Work => fs::remove_dir_all(&path),
+            TransientKind::Marker => fs::remove_file(&path),
+        };
+        if removed.is_ok() {
+            reclaimed += size;
+        }
+    }
+    reclaimed
+}
+
+/// Runs both cache retentions once a repack has settled. Neither is allowed to
+/// fail an install: each one only removes bytes the launcher will not read
+/// again, and the caller still has everything it needs either way.
+fn retain_cache_after_repack(cache_dir: &Path, keep: &Path) {
+    retain_derived_pak_cache(cache_dir, keep);
+    remove_orphaned_repack_artifacts(cache_dir);
 }
 
 fn patch_uid_database(database: &Path, replacement: &str) -> Result<(), String> {
@@ -297,11 +482,12 @@ fn prepare_uid_pak_with_version(
 
     let destination = derived_pak_path_with_version(cache_dir, source_hash, patch_version);
     if cached_derived_pak_is_valid(&destination) {
+        retain_cache_after_repack(cache_dir, &destination);
         return Ok(destination);
     }
 
     let work = unique_work_directory(cache_dir)?;
-    let result = (|| -> Result<PathBuf, String> {
+    let result = (|| -> Result<(), String> {
         let unpacked = work.join("unpacked");
         let temporary = work.join("hide_uid.pak");
         repak::unpack_v12(source_pak, &unpacked)?;
@@ -331,11 +517,12 @@ fn prepare_uid_pak_with_version(
             .map_err(|error| format!("hide_uid_cache_create_failed: {error}"))?;
         fs::rename(&temporary, &destination)
             .map_err(|error| format!("hide_uid_output_activate_failed: {error}"))?;
-        write_derived_hash(&destination, &derived_hash)?;
-        Ok(destination)
+        write_derived_hash(&destination, &derived_hash)
     })();
     let _ = fs::remove_dir_all(&work);
-    result
+    result?;
+    retain_cache_after_repack(cache_dir, &destination);
+    Ok(destination)
 }
 
 #[cfg(test)]
@@ -591,5 +778,208 @@ mod tests {
                 .unwrap();
             assert_eq!(content, HIDE_UID_REPLACEMENT);
         }
+    }
+
+    /// A live process id that is not this test binary's own.
+    #[cfg(unix)]
+    fn other_live_pid() -> u32 {
+        std::os::unix::process::parent_id()
+    }
+
+    fn age_file(path: &Path, age: Duration) {
+        let file = fs::File::options().write(true).open(path).unwrap();
+        file.set_modified(SystemTime::now() - age).unwrap();
+    }
+
+    #[test]
+    fn repacking_keeps_only_the_variant_being_installed() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source").join(NORMAL_PAK_FILE_NAME);
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        create_source_pak(&source);
+        let source_hash = downloader::compute_sha256(&source).unwrap();
+
+        // The launcher caches the downloaded source PAK beside the derived
+        // ones, so a real cache holds all of them at once.
+        let cache = temp.path().join("Cache");
+        fs::create_dir_all(&cache).unwrap();
+        fs::copy(&source, cache.join(NORMAL_PAK_FILE_NAME)).unwrap();
+
+        let first = prepare_hide_uid_pak_with_version(&source, &source_hash, &cache, "hide_uid_v2")
+            .unwrap();
+        let first_hash = derived_hash_path(&first);
+        assert!(first.is_file() && first_hash.is_file());
+
+        let second =
+            prepare_hide_uid_pak_with_version(&source, &source_hash, &cache, "hide_uid_v3")
+                .unwrap();
+        assert!(second.is_file() && derived_hash_path(&second).is_file());
+        assert!(cached_derived_pak_is_valid(&second));
+
+        assert!(
+            !first.exists(),
+            "superseded derived PAK {} survived the next repack",
+            first.display()
+        );
+        assert!(
+            !first_hash.exists(),
+            "superseded derived PAK checksum {} survived the next repack",
+            first_hash.display()
+        );
+        assert!(cache.join(NORMAL_PAK_FILE_NAME).is_file());
+    }
+
+    #[test]
+    fn derived_pak_retention_spares_everything_else_in_the_cache() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = temp.path().join("Cache");
+        fs::create_dir_all(&cache).unwrap();
+        let source_hash = "a".repeat(64);
+        let keep = derived_pak_path_with_version(&cache, &source_hash, "hide_uid_v2");
+        let stale = derived_pak_path_with_version(&cache, &"b".repeat(64), "hide_uid_v2");
+
+        // Every other resident of a real cache: the downloaded source PAK, its
+        // interrupted download, the media, the loader, the theme, the manifest.
+        let untouched = [
+            (cache.join(NORMAL_PAK_FILE_NAME), "source pak"),
+            (
+                cache.join(format!(".{NORMAL_PAK_FILE_NAME}.part")),
+                "interrupted source download",
+            ),
+            (cache.join("bgm.mp3"), "cached audio"),
+            (cache.join("bg-video.mp4"), "cached video"),
+            (cache.join("winhttp.dll"), "cached loader"),
+            (cache.join("theme-cache.json"), "cached theme"),
+            (cache.join("bg.jpg"), "cached theme background"),
+            (cache.join("assets-manifest.json"), "cached manifest"),
+            (
+                cache.join("assets-manifest.tmp"),
+                "interrupted manifest write",
+            ),
+            (
+                cache.join("pakchunk0-ID-WindowsNoEditor_1000_P.pak.tmp-1-2.tmp"),
+                "malformed derived artifact",
+            ),
+        ];
+        for (path, what) in &untouched {
+            fs::write(path, *what).unwrap();
+        }
+        fs::write(&keep, "kept derived pak").unwrap();
+        let keep_hash = derived_hash_path(&keep);
+        fs::write(&keep_hash, "kept marker").unwrap();
+        fs::write(&stale, "superseded derived pak").unwrap();
+        let stale_hash = derived_hash_path(&stale);
+        fs::write(&stale_hash, "superseded marker").unwrap();
+
+        let reclaimed = retain_derived_pak_cache(&cache, &keep);
+        assert_eq!(
+            reclaimed,
+            ("superseded derived pak".len() + "superseded marker".len()) as u64
+        );
+        assert!(!stale.exists() && !stale_hash.exists());
+        assert_eq!(fs::read_to_string(&keep).unwrap(), "kept derived pak");
+        assert_eq!(fs::read_to_string(&keep_hash).unwrap(), "kept marker");
+        for (path, what) in &untouched {
+            assert_eq!(fs::read_to_string(path).unwrap(), *what);
+        }
+
+        // A `keep` that is not a derived PAK would otherwise empty the whole
+        // derived set, so retention refuses to run at all.
+        fs::write(&stale, "superseded derived pak").unwrap();
+        assert_eq!(retain_derived_pak_cache(&cache, &cache.join("bgm.mp3")), 0);
+        assert!(stale.is_file() && keep.is_file() && keep_hash.is_file());
+    }
+
+    #[test]
+    fn repack_retention_never_touches_the_current_operation() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = temp.path().join("Cache");
+        fs::create_dir_all(&cache).unwrap();
+
+        let own_work = unique_path(&cache, "work");
+        fs::create_dir_all(own_work.join("unpacked")).unwrap();
+        fs::write(own_work.join("unpacked").join("payload.pak"), b"in flight").unwrap();
+        let own_marker = unique_path(&cache.join("derived.sha256"), "tmp");
+        fs::write(&own_marker, b"in flight").unwrap();
+
+        let resident = [
+            (cache.join("bgm.mp3"), b"cached audio".as_slice()),
+            (cache.join("bg-video.mp4"), b"cached video".as_slice()),
+            (
+                cache.join("launcher-whats-new-ready.tag"),
+                b"1\n".as_slice(),
+            ),
+            (cache.join("versions.json"), b"{}".as_slice()),
+        ];
+        for (path, body) in &resident {
+            fs::write(path, body).unwrap();
+        }
+
+        let reclaimed = remove_orphaned_repack_artifacts(&cache);
+        assert_eq!(reclaimed, 0, "nothing in the cache is orphaned yet");
+        assert!(own_work.join("unpacked").join("payload.pak").is_file());
+        assert!(own_marker.is_file());
+        for (path, body) in &resident {
+            assert_eq!(fs::read(path).unwrap(), *body);
+        }
+    }
+
+    #[test]
+    fn repack_retention_reclaims_debris_too_old_to_still_be_in_flight() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = temp.path().join("Cache");
+        fs::create_dir_all(&cache).unwrap();
+
+        let aged = cache.join("derived.sha256.tmp-7-1");
+        fs::write(&aged, b"aged debris").unwrap();
+        age_file(&aged, ORPHANED_ARTIFACT_MAX_AGE + Duration::from_secs(60));
+        // Same name shape, written moments ago: still somebody's in-flight
+        // atomic write, whatever the pid says.
+        let fresh = cache.join("derived.sha256.tmp-7-2");
+        fs::write(&fresh, b"fresh").unwrap();
+        let resident = cache.join("bg-video.mp4");
+        fs::write(&resident, b"cached video").unwrap();
+
+        let reclaimed = remove_orphaned_repack_artifacts(&cache);
+
+        assert!(!aged.exists(), "aged marker survived");
+        assert_eq!(reclaimed, b"aged debris".len() as u64);
+        assert!(fresh.is_file());
+        assert_eq!(fs::read(&resident).unwrap(), b"cached video");
+    }
+
+    /// Liveness of the owning process id is the only reclamation rule that can
+    /// act on fresh debris, and only Linux answers it from portable code.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn repack_retention_reclaims_debris_of_a_finished_process() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = temp.path().join("Cache");
+        fs::create_dir_all(&cache).unwrap();
+        // Above Linux `pid_max` (4194304), so it can never name a live process.
+        let exited_pid: u32 = 4_000_000_000;
+
+        let exited_work = cache.join(format!("Cache.work-{exited_pid}-1"));
+        fs::create_dir_all(exited_work.join("unpacked")).unwrap();
+        fs::write(
+            exited_work.join("unpacked").join("payload.pak"),
+            vec![7u8; 4096],
+        )
+        .unwrap();
+        let exited_marker = cache.join(format!("derived.sha256.tmp-{exited_pid}-1"));
+        fs::write(&exited_marker, b"x").unwrap();
+        let live_work = cache.join(format!("Cache.work-{}-1", other_live_pid()));
+        fs::create_dir_all(&live_work).unwrap();
+        fs::write(live_work.join("payload.pak"), vec![9u8; 4096]).unwrap();
+
+        let reclaimed = remove_orphaned_repack_artifacts(&cache);
+
+        assert!(!exited_work.exists(), "a dead process's work dir survived");
+        assert!(!exited_marker.exists(), "a dead process's marker survived");
+        assert_eq!(reclaimed, 4096 + 1);
+        assert!(
+            live_work.join("payload.pak").is_file(),
+            "a live process's work dir must survive"
+        );
     }
 }
