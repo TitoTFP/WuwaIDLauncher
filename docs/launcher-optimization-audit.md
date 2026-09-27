@@ -39,6 +39,7 @@ The post-change gates use these explicit thresholds:
 | Medium | CI/release omitted security/control regressions | Gates are now required in CI, release, and the Windows workflow contract. |
 | Medium | Shell command substitution was unsafe for the deterministic auditor | Added `node scripts/tests/workflow-contract.test.mjs`, a literal-argument check for hosted runners and manual real-game acceptance. |
 | Medium | Media sync waited for the manifest signature before downloading anything | The `.sig` fetch runs in the background and is collected after the media sync, so a stalled or rejected signature can no longer delay the media download or the media status events. |
+| Medium | Startup hashed the cached media twice and copied whole response bodies | The cached-media check now carries its digests forward, so the media sync reuses the verdict instead of re-hashing; theme and metadata reads navigate the document they already parsed; four full-buffer `to_vec` copies became moves. A `#[cfg(test)]` allocation probe with per-scenario budgets guards all of it. |
 
 ## Delivered
 
@@ -59,6 +60,7 @@ The post-change gates use these explicit thresholds:
 - Preserved SHA-256 verification, expected-size checks, resumable-download validators, bounded response bodies, archive validation, and local-only diagnostics behavior.
 - Extended the Windows workflow contract to require dependency auditing and frontend-control regressions.
 - Media sync no longer waits on the manifest signature: the `.sig` fetch runs in the background, the media sync and its status events finish first, and the theme is resolved from the collected signature afterwards — which also means `onThemeReady` can now arrive after `onMediaReady`.
+- Removed duplicate work rather than changing cadence: the 2-second runtime monitor still ticks every 2 seconds, and every media, theme, metadata, and update-response byte is read once instead of two or three times, with an in-crate allocation probe (`perf_probe`/`perf_scenarios`) holding each path to a budget.
 
 ## Verification
 

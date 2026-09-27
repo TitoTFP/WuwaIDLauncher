@@ -52,9 +52,13 @@ fn media_cache_is_ready_only_when_manifest_hashes_match() {
     std::fs::write(cache.path().join("bgm.mp3"), bgm).unwrap();
     std::fs::write(cache.path().join("bg-video.mp4"), video).unwrap();
 
-    assert!(media::validate_cached_media(cache.path(), &manifest).unwrap());
+    assert!(media::validate_cached_media(cache.path(), &manifest)
+        .unwrap()
+        .is_valid());
     std::fs::write(cache.path().join("bgm.mp3"), b"corrupt").unwrap();
-    assert!(!media::validate_cached_media(cache.path(), &manifest).unwrap());
+    assert!(!media::validate_cached_media(cache.path(), &manifest)
+        .unwrap()
+        .is_valid());
 }
 
 #[test]

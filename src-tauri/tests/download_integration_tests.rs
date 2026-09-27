@@ -9,7 +9,7 @@ use tokio::net::{TcpListener, TcpStream};
 use wuwaid_launcher_lib::engine::downloader::{
     download_file_with_expected_size, get_asset_content_length, verify_sha256,
 };
-use wuwaid_launcher_lib::engine::media::{sync_media, AssetEntry, AssetManifest};
+use wuwaid_launcher_lib::engine::media::{sync_media, AssetEntry, AssetManifest, CachedMedia};
 
 /// Spawns an in-process mock HTTP router that serves path-mapped payloads.
 async fn spawn_mock_router(
@@ -298,7 +298,9 @@ async fn test_mock_http_media_sync_with_full_hash_validation() {
         ],
     };
 
-    let sync_res = sync_media(cache_dir, &manifest, |_, _| {}).await.unwrap();
+    let sync_res = sync_media(cache_dir, &manifest, &CachedMedia::invalid(), |_, _| {})
+        .await
+        .unwrap();
     assert!(PathBuf::from(&sync_res.bgm_url).exists());
     assert!(PathBuf::from(&sync_res.video_url).exists());
 }
@@ -345,7 +347,9 @@ async fn test_corrupted_cached_media_is_rejected_and_re_downloaded_before_ready(
     };
 
     // sync_media must reject/remove the corrupted file and re-download the genuine file
-    let sync_res = sync_media(cache_dir, &manifest, |_, _| {}).await.unwrap();
+    let sync_res = sync_media(cache_dir, &manifest, &CachedMedia::invalid(), |_, _| {})
+        .await
+        .unwrap();
     assert!(PathBuf::from(&sync_res.bgm_url).exists());
     assert!(verify_sha256(&PathBuf::from(&sync_res.bgm_url), &audio_hash).unwrap());
     assert!(verify_sha256(&PathBuf::from(&sync_res.video_url), &video_hash).unwrap());

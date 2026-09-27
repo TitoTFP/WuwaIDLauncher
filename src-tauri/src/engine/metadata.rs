@@ -1,4 +1,5 @@
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -31,25 +32,25 @@ pub fn game_key(game_path: &Path) -> Result<String, String> {
     Ok(key)
 }
 
-fn read_object(path: &Path) -> Result<Map<String, Value>, String> {
+/// The parsed document. A launcher that has never installed anything has no
+/// file, and that is an empty document rather than an error.
+fn read_document(path: &Path) -> Result<Value, String> {
     if !path.exists() {
-        return Ok(Map::new());
+        return Ok(Value::Object(Map::new()));
     }
     let content =
         fs::read_to_string(path).map_err(|error| metadata_error("metadata_read_failed", error))?;
     serde_json::from_str::<Value>(&content)
-        .map_err(|error| metadata_error("metadata_parse_failed", error))?
-        .as_object()
-        .cloned()
-        .ok_or_else(|| "metadata_parse_failed: versions.json bukan object".to_string())
+        .map_err(|error| metadata_error("metadata_parse_failed", error))
 }
 
-fn game_entries(object: &Map<String, Value>) -> Map<String, Value> {
-    object
-        .get(GAMES_KEY)
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default()
+/// The same document, taken by value. `serde_json` already built this tree;
+/// copying every node of it again to reach the object is the cost this avoids.
+fn read_object(path: &Path) -> Result<Map<String, Value>, String> {
+    match read_document(path)? {
+        Value::Object(object) => Ok(object),
+        _ => Err("metadata_parse_failed: versions.json bukan object".to_string()),
+    }
 }
 
 fn migrate_legacy_entry(object: &Map<String, Value>, key: &str) -> Option<Map<String, Value>> {
@@ -86,14 +87,35 @@ fn insert_game_entry(object: &mut Map<String, Value>, key: &str, entry: Map<Stri
     );
 }
 
-fn current_game_entry(object: &Map<String, Value>, key: &str) -> Option<Map<String, Value>> {
+/// The entry for `key`, borrowed from the document wherever the document can
+/// hand one out. Only the pre-`games` layout has to assemble one, and that is
+/// written once, by an older launcher, and read until the next write.
+fn game_entry<'a>(
+    object: &'a Map<String, Value>,
+    key: &str,
+) -> Option<Cow<'a, Map<String, Value>>> {
     if object.contains_key(GAMES_KEY) {
-        return game_entries(object)
-            .get(key)
+        return object
+            .get(GAMES_KEY)
             .and_then(Value::as_object)
-            .cloned();
+            .and_then(|games| games.get(key))
+            .and_then(Value::as_object)
+            .map(Cow::Borrowed);
     }
-    migrate_legacy_entry(object, key)
+    migrate_legacy_entry(object, key).map(Cow::Owned)
+}
+
+fn current_game_entry(object: &Map<String, Value>, key: &str) -> Option<Map<String, Value>> {
+    game_entry(object, key).map(Cow::into_owned)
+}
+
+/// The one string a caller came for. Only the leaf is cloned.
+fn game_entry_field(object: &Map<String, Value>, key: &str, field: &str) -> Option<String> {
+    game_entry(object, key)?
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|value| !value.trim().is_empty())
 }
 
 fn valid_patch_variant(value: &str) -> bool {
@@ -106,17 +128,37 @@ fn valid_patch_variant(value: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// `versions.json` read and parsed once, for as many fields as the caller
+/// wants out of it.
+///
+/// Every `read_game_field` re-reads the file, re-parses it and re-canonicalizes
+/// the game path, so a caller that wants three fields paid for three of
+/// everything. The errors are unchanged: each `field` call reports exactly what
+/// a per-field read reported, including the one that stops the read.
+pub struct GameMetadata {
+    loaded: Result<(Map<String, Value>, String), String>,
+}
+
+impl GameMetadata {
+    pub fn load(path: &Path, game_path: &Path) -> Self {
+        let _guard = lock_metadata();
+        let loaded =
+            game_key(game_path).and_then(|key| read_object(path).map(|object| (object, key)));
+        Self { loaded }
+    }
+
+    pub fn field(&self, name: &str) -> Result<Option<String>, String> {
+        let (object, key) = self.loaded.as_ref().map_err(|error| error.clone())?;
+        Ok(game_entry_field(object, key, name))
+    }
+}
+
 pub fn read_game_field(
     path: &Path,
     game_path: &Path,
     field: &str,
 ) -> Result<Option<String>, String> {
-    let _guard = lock_metadata();
-    let key = game_key(game_path)?;
-    let object = read_object(path)?;
-    Ok(current_game_entry(&object, &key)
-        .and_then(|entry| entry.get(field).and_then(Value::as_str).map(str::to_string))
-        .filter(|value| !value.trim().is_empty()))
+    GameMetadata::load(path, game_path).field(field)
 }
 
 fn unique_temp_path(path: &Path, suffix: &str) -> PathBuf {

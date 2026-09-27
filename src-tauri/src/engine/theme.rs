@@ -14,7 +14,7 @@
 
 use crate::engine::downloader::{
     download_file_with_expected_size_limited_policy, read_response_body_limited,
-    replace_file_atomically, verify_sha256, DownloadRedirectPolicy,
+    replace_file_atomically, sha256_hex, verify_sha256, DownloadRedirectPolicy,
 };
 use crate::engine::media::{validate_asset_url, AssetEntry};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
@@ -108,6 +108,17 @@ pub struct CachedTheme {
     pub background_sha256: Option<String>,
 }
 
+/// A cached theme together with the stylesheet the digest check just read.
+///
+/// The check and the payload want the same bytes, so they are read once and
+/// the fragment travels with the record instead of being fetched again.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VerifiedTheme {
+    pub cached: CachedTheme,
+    /// The verified fragment, absent for a theme that ships none.
+    pub css: Option<String>,
+}
+
 /// What a signed manifest asks the launcher to do about theming.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ThemeAction {
@@ -184,8 +195,8 @@ pub async fn fetch_signature(client: &reqwest::Client, url: &str) -> Result<Stri
     let body = read_response_body_limited(resp, MAX_SIGNATURE_BYTES)
         .await
         .map_err(|error| format!("Gagal membaca tanda tangan manifest: {error}"))?;
-    String::from_utf8(body.to_vec())
-        .map_err(|_| "Tanda tangan manifest bukan UTF-8 valid.".to_string())
+    // The body is already owned and is not needed again, so decoding it moves.
+    String::from_utf8(body).map_err(|_| "Tanda tangan manifest bukan UTF-8 valid.".to_string())
 }
 
 /// Verifies the detached signature over the exact manifest bytes that were
@@ -312,14 +323,28 @@ fn validate_theme_asset(entry: &AssetEntry, expected_name: &str) -> Result<(), S
     validate_asset_url(entry, (expected_name, expected_name))
 }
 
+/// Case-insensitive containment, answered in place.
+///
+/// The needles are ASCII and the haystack is UTF-8, so a byte-wise
+/// `eq_ignore_ascii_case` answers exactly what `to_ascii_lowercase().contains()`
+/// answered — without materialising a lowercase copy of the whole fragment.
+/// Fragments are capped at 128 KiB and a payload scanned it two or three times.
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    let (haystack, needle) = (haystack.as_bytes(), needle.as_bytes());
+    !needle.is_empty()
+        && haystack.len() >= needle.len()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
 fn validate_fragment(css: &str) -> Result<(), String> {
     if css.len() > MAX_THEME_CSS_BYTES {
         return Err("Fragmen CSS tema melebihi batas ukuran.".to_string());
     }
-    let lowered = css.to_ascii_lowercase();
     if let Some(forbidden) = FORBIDDEN_IN_CSS
         .iter()
-        .find(|needle| lowered.contains(**needle))
+        .find(|needle| contains_ignore_ascii_case(css, needle))
     {
         return Err(format!("Fragmen CSS tema memuat {forbidden}."));
     }
@@ -337,7 +362,7 @@ pub fn theme_cache_path(cache_dir: &Path) -> PathBuf {
 pub fn read_cached_theme(
     cache_dir: &Path,
     keyring: &[(&str, &str)],
-) -> Result<Option<CachedTheme>, String> {
+) -> Result<Option<VerifiedTheme>, String> {
     let path = theme_cache_path(cache_dir);
     if !path.is_file() {
         return Ok(None);
@@ -347,7 +372,7 @@ pub fn read_cached_theme(
     let cached: CachedTheme =
         serde_json::from_str(&data).map_err(|error| format!("Cache tema tidak valid: {error}"))?;
 
-    let reject = |reason: &str| -> Option<CachedTheme> {
+    let reject = |reason: &str| -> Option<VerifiedTheme> {
         log::warn!("Cache tema ditolak: {reason}");
         let _ = std::fs::remove_file(&path);
         None
@@ -364,14 +389,27 @@ pub fn read_cached_theme(
     // theme's tokens. The recorded digests are what make that state detectable
     // instead of serving a mix that looks coherent.
     let css_path = cache_dir.join(THEME_CSS_FILE);
+    // The stylesheet is read once here and carried into the payload: the digest
+    // check and the caller need the same bytes, and this runs twice per launch.
+    let mut css = None;
     match &cached.css_sha256 {
         Some(expected) => {
-            if !verify_sha256(&css_path, expected).unwrap_or(false) {
+            // A missing file, a directory, and a read error are all the same
+            // verdict to the digest check that used to run first: this cache
+            // cannot be vouched for.
+            let Some(bytes) = read_theme_bytes(&css_path).ok().flatten() else {
+                return Ok(reject("fragmen CSS tidak cocok dengan metadata"));
+            };
+            if sha256_hex(&bytes) != expected.trim().to_lowercase() {
                 return Ok(reject("fragmen CSS tidak cocok dengan metadata"));
             }
-            if cached_theme_css(cache_dir)?.is_none() {
+            let fragment = String::from_utf8(bytes)
+                .map_err(|error| format!("Gagal membaca fragmen CSS tema: {error}"))?;
+            if fragment.trim().is_empty() {
                 return Ok(reject("fragmen CSS kosong"));
             }
+            validate_fragment(&fragment)?;
+            css = Some(fragment);
         }
         // A tokens-only theme must not inherit a fragment left by another one.
         None if css_path.exists() => return Ok(reject("fragmen CSS tak terduga")),
@@ -387,7 +425,7 @@ pub fn read_cached_theme(
         None if background_path.exists() => return Ok(reject("latar tak terduga")),
         None => {}
     }
-    Ok(Some(cached))
+    Ok(Some(VerifiedTheme { cached, css }))
 }
 
 /// Removes every trace of a cached theme. Used when the manifest author turns
@@ -404,18 +442,14 @@ pub fn clear_cached_theme(cache_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn cached_theme_css(cache_dir: &Path) -> Result<Option<String>, String> {
-    let path = cache_dir.join(THEME_CSS_FILE);
+/// The cached stylesheet, as the bytes the digest was recorded over. `None`
+/// covers a missing file, a directory, and a read error alike, because the
+/// digest check that consumes this treats all three as the same rejection.
+fn read_theme_bytes(path: &Path) -> Result<Option<Vec<u8>>, std::io::Error> {
     if !path.is_file() {
         return Ok(None);
     }
-    let css = std::fs::read_to_string(&path)
-        .map_err(|error| format!("Gagal membaca fragmen CSS tema: {error}"))?;
-    if css.trim().is_empty() {
-        return Ok(None);
-    }
-    validate_fragment(&css)?;
-    Ok(Some(css))
+    std::fs::read(path).map(Some)
 }
 
 fn write_cached_theme(cache_dir: &Path, cached: &CachedTheme) -> Result<(), String> {
@@ -527,20 +561,20 @@ fn remove_theme_file(cache_dir: &Path, name: &str) -> Result<(), String> {
 /// Builds the payload the webview paints, from the last theme this launcher
 /// verified. Returns the general theme when nothing verified is cached.
 pub fn build_payload(cache_dir: &Path, keyring: &[(&str, &str)]) -> Result<ThemePayload, String> {
-    let Some(cached) = read_cached_theme(cache_dir, keyring)? else {
+    let Some(verified) = read_cached_theme(cache_dir, keyring)? else {
         return Ok(general_payload("general"));
     };
-    let background_file = if cached.background_sha256.is_some() {
+    let background_file = if verified.cached.background_sha256.is_some() {
         THEME_BACKGROUND_FILE.to_string()
     } else {
         String::new()
     };
     Ok(ThemePayload {
-        id: cached.id,
-        name: cached.name,
-        key_id: cached.key_id,
-        tokens: cached.tokens,
-        css: cached_theme_css(cache_dir)?.unwrap_or_default(),
+        id: verified.cached.id,
+        name: verified.cached.name,
+        key_id: verified.cached.key_id,
+        tokens: verified.cached.tokens,
+        css: verified.css.unwrap_or_default(),
         background_file,
         status: "signed".to_string(),
     })
@@ -824,6 +858,53 @@ mod tests {
         assert!(validate_fragment(&oversized).is_err());
     }
 
+    /// The forbidden-token scan is a security property, and a matching digest
+    /// is not permission. The needle is matched without lowercasing the
+    /// fragment first, so this also pins that the match is case-insensitive.
+    #[test]
+    fn a_matching_digest_does_not_excuse_a_forbidden_fragment() {
+        for forbidden in [
+            "@import url(https://evil.example/x.css);",
+            "@IMPORT url(https://evil.example/x.css);",
+            "body{width:expression(alert(1))}",
+            "body{background:JavaScript:alert(1)}",
+            "body{}</style><script>alert(1)</script>",
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            std::fs::write(temp.path().join(THEME_CSS_FILE), forbidden).unwrap();
+            // The record is written for exactly these bytes, so the digest
+            // check passes and only the scan can reject the cache.
+            write_cached_theme(
+                temp.path(),
+                &cached(TEST_KEY_ID, Some(forbidden.as_bytes()), None),
+            )
+            .unwrap();
+
+            let error = read_cached_theme(temp.path(), TRUSTED_KEYRING)
+                .expect_err("a forbidden fragment must not be served");
+            assert!(error.contains("memuat"), "unexpected: {error}");
+            assert!(build_payload(temp.path(), TRUSTED_KEYRING).is_err());
+        }
+    }
+
+    #[test]
+    fn a_verified_fragment_reaches_the_payload_through_the_digest_check() {
+        let temp = tempfile::tempdir().unwrap();
+        let css = "BODY { COLOR: red; }";
+        std::fs::write(temp.path().join(THEME_CSS_FILE), css).unwrap();
+        write_cached_theme(
+            temp.path(),
+            &cached(TEST_KEY_ID, Some(css.as_bytes()), None),
+        )
+        .unwrap();
+        // Mixed case and all: the fragment is served as it was written, and the
+        // scan over it finds nothing to object to.
+        assert_eq!(
+            build_payload(temp.path(), TRUSTED_KEYRING).unwrap().css,
+            css
+        );
+    }
+
     // --- cache lifecycle ---------------------------------------------------
 
     #[test]
@@ -923,7 +1004,12 @@ mod tests {
     fn empty_fragment_is_treated_as_no_theme() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join(THEME_CSS_FILE), "   \n").unwrap();
-        assert!(cached_theme_css(temp.path()).unwrap().is_none());
+        // The digest matches, so the fragment is read and checked like any
+        // other; a blank one leaves the cache with nothing to paint.
+        write_cached_theme(temp.path(), &cached(TEST_KEY_ID, Some(b"   \n"), None)).unwrap();
+        assert!(read_cached_theme(temp.path(), TRUSTED_KEYRING)
+            .unwrap()
+            .is_none());
     }
 
     // --- payload -----------------------------------------------------------

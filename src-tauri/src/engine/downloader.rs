@@ -129,6 +129,13 @@ pub fn compute_sha256(file_path: &Path) -> Result<String, std::io::Error> {
     Ok(hex::encode(hasher.finalize()).to_lowercase())
 }
 
+/// The digest `compute_sha256` produces, for bytes the caller already holds.
+/// A file that was just read into memory must not be read from disk a second
+/// time to be hashed.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes)).to_lowercase()
+}
+
 pub async fn get_asset_content_length(url: &str) -> Result<u64, String> {
     let parsed_url =
         reqwest::Url::parse(url).map_err(|error| format!("URL download tidak valid: {error}"))?;

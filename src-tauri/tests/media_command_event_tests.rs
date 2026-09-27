@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
-use wuwaid_launcher_lib::engine::media::{sync_media, AssetEntry, AssetManifest};
+use wuwaid_launcher_lib::engine::media::{sync_media, AssetEntry, AssetManifest, CachedMedia};
 
 #[tokio::test]
 async fn failed_media_sync_emits_status_without_media_ready() {
@@ -20,7 +20,7 @@ async fn failed_media_sync_emits_status_without_media_ready() {
         }],
     };
 
-    match sync_media(temp.path(), &manifest, |_, _| {}).await {
+    match sync_media(temp.path(), &manifest, &CachedMedia::invalid(), |_, _| {}).await {
         Ok(_) => *ready_sink.lock().unwrap() = true,
         Err(error) => status_sink.lock().unwrap().push(format!("error:{error}")),
     }
@@ -46,7 +46,7 @@ async fn missing_required_media_emits_error_without_media_ready() {
         assets: Vec::new(),
     };
 
-    match sync_media(temp.path(), &manifest, |_, _| {}).await {
+    match sync_media(temp.path(), &manifest, &CachedMedia::invalid(), |_, _| {}).await {
         Ok(_) => *ready_sink.lock().unwrap() = true,
         Err(error) => status_sink.lock().unwrap().push(format!("error:{error}")),
     }

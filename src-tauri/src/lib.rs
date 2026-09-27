@@ -1,5 +1,13 @@
 pub mod engine;
 
+// The allocation probe and its scenarios are test-only: nothing here is
+// compiled into the shipped library, and the counting allocator exists only
+// in the test binary. See `docs/launcher-performance.md`.
+#[cfg(test)]
+mod perf_probe;
+#[cfg(test)]
+mod perf_scenarios;
+
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -902,11 +910,6 @@ fn get_vh_version() -> String {
         .unwrap_or_default()
 }
 
-fn get_installed_patch_version(game_path: &Path) -> Result<Option<String>, String> {
-    let path = get_appdata_dir().join("versions.json");
-    engine::metadata::read_game_field(&path, game_path, "_vhVersion")
-}
-
 fn known_patch_version(path: &Path, game_path: &Path) -> Option<String> {
     engine::metadata::read_game_field(path, game_path, "_vhVersion")
         .ok()
@@ -916,9 +919,17 @@ fn known_patch_version(path: &Path, game_path: &Path) -> Option<String> {
 
 fn validate_loader_metadata(game_path: &Path) -> Result<(), String> {
     let metadata_path = get_appdata_dir().join("versions.json");
-    let Some(expected_hash) =
-        engine::metadata::read_game_field(&metadata_path, game_path, "_loaderSha256")?
-    else {
+    let metadata = engine::metadata::GameMetadata::load(&metadata_path, game_path);
+    loader_metadata_error(&metadata, game_path)
+}
+
+/// The loader verdict, taken from an already-loaded metadata document so a
+/// caller that needs several fields reads the file once.
+fn loader_metadata_error(
+    metadata: &engine::metadata::GameMetadata,
+    game_path: &Path,
+) -> Result<(), String> {
+    let Some(expected_hash) = metadata.field("_loaderSha256")? else {
         return Err(
             "patch_not_ready: hash loader tidak tersedia pada metadata instalasi".to_string(),
         );
@@ -1394,13 +1405,17 @@ fn check_and_sync_media<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     tauri::async_runtime::spawn(async move {
         let _operation = operation;
         let cache_dir = get_appdata_dir().join("Cache");
-        let cached_valid = engine::media::read_cached_manifest(&cache_dir)
+        // The check carries its own digests forward: the media sync below gets
+        // the answer instead of hashing the same 15.6 MB a second time.
+        let cached_media = engine::media::read_cached_manifest(&cache_dir)
             .ok()
             .flatten()
             .map(|manifest| {
-                engine::media::validate_cached_media(&cache_dir, &manifest).unwrap_or(false)
+                engine::media::validate_cached_media(&cache_dir, &manifest)
+                    .unwrap_or_else(|_| engine::media::CachedMedia::invalid())
             })
-            .unwrap_or(false);
+            .unwrap_or_else(engine::media::CachedMedia::invalid);
+        let cached_valid = cached_media.is_valid();
 
         let _ = app_handle.emit(
             "onMediaStatus",
@@ -1439,7 +1454,7 @@ fn check_and_sync_media<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
             &app_handle,
             &client,
             &media_manifest_url(),
-            cached_valid,
+            &cached_media,
         )
         .await;
     });
@@ -1465,8 +1480,9 @@ async fn sync_manifest_media_and_theme<R: Runtime>(
     app_handle: &AppHandle<R>,
     client: &reqwest::Client,
     manifest_url: &str,
-    cached_valid: bool,
+    cached_media: &engine::media::CachedMedia,
 ) {
+    let cached_valid = cached_media.is_valid();
     let signature_url = engine::theme::signature_url(manifest_url);
     let signature_client = client.clone();
     let signature_task = tauri::async_runtime::spawn(async move {
@@ -1487,17 +1503,22 @@ async fn sync_manifest_media_and_theme<R: Runtime>(
             let theme = manifest.theme.take();
 
             let app_progress = app_handle.clone();
-            let res = engine::media::sync_media(cache_dir, &manifest, move |asset_name, p| {
-                let _ = app_progress.emit(
-                    "onMediaProgress",
-                    serde_json::json!({
-                        "percent": p.percent,
-                        "text": format!("Mengunduh {}", asset_name),
-                        "speed": p.speed_mbps,
-                        "size": p.status
-                    }),
-                );
-            })
+            let res = engine::media::sync_media(
+                cache_dir,
+                &manifest,
+                cached_media,
+                move |asset_name, p| {
+                    let _ = app_progress.emit(
+                        "onMediaProgress",
+                        serde_json::json!({
+                            "percent": p.percent,
+                            "text": format!("Mengunduh {}", asset_name),
+                            "speed": p.speed_mbps,
+                            "size": p.status
+                        }),
+                    );
+                },
+            )
             .await;
 
             match res {
@@ -2043,16 +2064,21 @@ async fn check_patch_status<R: Runtime>(
 
     let mut local = engine::patch_status::classify_installation(&normalized_path, method)
         .map_err(|error| format!("Gagal memeriksa instalasi patch: {error}"))?;
+    // One read of the installation metadata covers the three fields this check
+    // needs. Reading it per field re-parsed the file and re-canonicalized the
+    // game path three times over.
+    let metadata = engine::metadata::GameMetadata::load(
+        &get_appdata_dir().join("versions.json"),
+        &normalized_path,
+    );
     if method == engine::method::InstallMethod::Loader
         && matches!(local, engine::patch_status::LocalPatchState::Ready)
-        && validate_loader_metadata(&normalized_path).is_err()
+        && loader_metadata_error(&metadata, &normalized_path).is_err()
     {
         local = engine::patch_status::LocalPatchState::Invalid;
     }
     if matches!(local, engine::patch_status::LocalPatchState::Ready) {
-        let metadata_path = get_appdata_dir().join("versions.json");
-        let installed_variant =
-            engine::metadata::read_game_field(&metadata_path, &normalized_path, "_patchVariant")?;
+        let installed_variant = metadata.field("_patchVariant")?;
         if !engine::patch_asset::installed_variant_matches(
             installed_variant.as_deref(),
             desired_variant,
@@ -2060,7 +2086,8 @@ async fn check_patch_status<R: Runtime>(
             local = engine::patch_status::LocalPatchState::Invalid;
         }
     }
-    let current_version = get_installed_patch_version(&normalized_path)
+    let current_version = metadata
+        .field("_vhVersion")
         .map_err(|error| format!("Gagal membaca metadata instalasi patch: {error}"))?;
     let latest_version = if matches!(local, engine::patch_status::LocalPatchState::Ready) {
         get_latest_patch_version().await
@@ -4519,8 +4546,14 @@ mod tests {
             let app = app.handle().clone();
             let cache_dir = cache_dir.clone();
             async move {
-                sync_manifest_media_and_theme(&cache_dir, &app, &client, &manifest_url, false)
-                    .await;
+                sync_manifest_media_and_theme(
+                    &cache_dir,
+                    &app,
+                    &client,
+                    &manifest_url,
+                    &engine::media::CachedMedia::invalid(),
+                )
+                .await;
             }
         });
 
@@ -4575,7 +4608,7 @@ mod tests {
             app.handle(),
             &client,
             &origin.manifest_url,
-            false,
+            &engine::media::CachedMedia::invalid(),
         )
         .await;
 

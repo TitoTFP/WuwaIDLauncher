@@ -99,3 +99,80 @@ measurement if that desktop capability is unavailable.
 - Results are runner-specific observations, not a universal hardware
   benchmark. Compare artifacts from equivalent runner images before changing
   thresholds.
+
+## Portable allocation probe
+
+The matrix above is the authoritative gate and is not replaced, weakened, or
+second-guessed by anything here. It samples a release launcher and its WebView2
+process tree on a real Windows runner. What it cannot do is run on a Linux CI
+box or a developer laptop, and it measures whole processes rather than the cost
+of one function.
+
+`src-tauri/src/perf_probe.rs` is a counting `GlobalAlloc` plus a window
+mechanism, and `src-tauri/src/perf_scenarios.rs` is one measured scenario per
+launcher state. Both are `#[cfg(test)]` modules of the library: the allocator
+exists only in the test binary, so there is no feature flag, no dependency, and
+no `cfg` in a shipped code path. They are in-crate rather than in
+`src-tauri/tests/` on purpose — an integration test links the library compiled
+*without* `cfg(test)`, so the allocator would be invisible, and the scenarios
+could not reach the private seams they measure.
+
+What a scenario reports, per iteration:
+
+| Field | Meaning |
+| --- | --- |
+| `allocs/run` | Allocation events inside the armed window |
+| `bytes/run` | Bytes handed out inside the armed window |
+| `peak_live` | Most live payload bytes at any instant of the window |
+| `us/run` | Wall clock, printed for a human to read |
+
+What it does **not** measure, and cannot: WebView2 process accounting, UAC
+elevation, the self-update restart, and the per-request `media://` protocol
+cost. Those stay Windows-only, in the matrix above. A scenario also cannot see
+I/O the operating system serves from cache, nor a hashing pass that streams
+through a fixed buffer — those show up in the matrix's read-I/O and CPU rows and
+in the printed `us/run`, not in an allocation budget.
+
+### Budgets, not timings
+
+Every scenario asserts on `allocs` and `bytes` only. Those are deterministic:
+the same body allocates the same number of times, in the same order, on every
+run. `us/run` is recorded and printed under `--nocapture` and is deliberately
+never asserted on — wall-clock time moves with the CPU, the filesystem, and
+whatever else the machine is doing, and a gate that fails at random stops being
+believed.
+
+Run them single-threaded and with output captured:
+
+```bash
+cargo test --locked --manifest-path src-tauri/Cargo.toml --lib perf_scenarios -- --test-threads=1 --nocapture
+```
+
+`--test-threads=1` is mandatory: the probe's arm flag is process-wide, so two
+scenarios at once would count each other's allocations.
+
+### Measured on a Linux x64 debug worktree
+
+Before and after the first optimisation batch, as `allocs/run` / `bytes/run` /
+`us/run`:
+
+```text
+idle.monitor_tick                 42 / 1590     / 18       ->  42 / 1590     / 18
+idle.settings_read_parse          26 / 966      / 11       ->  26 / 966      / 11
+startup.cached_media_validate     40 / 5047     / 415614   ->  32 / 4543     / 203598
+startup.theme_cache_read          32 / 67368    / 907      ->  25 / 18012    / 1940
+startup.manifest_fetch_body      129 / 6500470  / 5160     -> 128 / 5419148  / 5202
+update_check.read_game_field_only 44 / 6224     / 12       ->  16 / 2176     / 9
+```
+
+The states no change in this batch are bounded too, so a later change to them
+is caught rather than assumed: `download.fs_read_32mib` 1 alloc / 33,554,432
+bytes, `download.compute_sha256_32mib` 2 / 128, `download.validate_archive`
+19 / 108,250, `install.sha256_16mib_once` 2 / 128, and
+`install.repak_round_trip` 133 / 49,522.
+
+Three of these budgets are written for the shape that exists today and will need
+re-cutting when a later batch lands: `idle.monitor_tick` (caching settings
+across ticks moves it a long way), `download.validate_archive` (a second
+validation pass roughly doubles it), and `install.repak_round_trip` (moving the
+extract off the async runtime changes its numbers).
