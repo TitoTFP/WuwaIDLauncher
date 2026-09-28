@@ -67,8 +67,8 @@ const FORBIDDEN_IN_CSS: &[&str] = &["@import", "expression(", "javascript:", "</
 /// rather than deleting them immediately.
 pub const TRUSTED_SIGNING_KEYS: &[(&str, &str)] = &[
     (
-        "wuwa-web-2026-02",
-        "4f70a538fe23d2172c4faee544ccd8656b438c4279768594c492d9a8a13fc2c7",
+        "wuwa-web-2026-03",
+        "c6c5563ae23a514e5c6099262edde2111def0659ddf7973de498226fd31be499",
     ),
     // ("<key-id-next>", "<64 hex chars>"),
 ];
@@ -672,7 +672,7 @@ mod tests {
 
         assert_eq!(
             verify_manifest_signature(manifest, signature).unwrap(),
-            "wuwa-web-2026-02"
+            "wuwa-web-2026-03"
         );
     }
 

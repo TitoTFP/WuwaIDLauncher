@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Signs the asset manifest with the web content Ed25519 key.
 //
-//   node scripts/sign-manifest.mjs --generate
-//   node scripts/sign-manifest.mjs --in Web/assets.json
+//   node scripts/sign-manifest.mjs --generate --key <persistent-pem> --key-id <id>
+//   node scripts/sign-manifest.mjs --in Web/assets.json --key <persistent-pem> [--key-id <id>]
 //
 // The signature covers the manifest file's exact bytes and is written to
 // `<manifest>.sig`. The launcher verifies it against the public keys compiled
@@ -11,19 +11,15 @@
 
 import { createPrivateKey, createPublicKey, generateKeyPairSync, sign as signBytes } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const KEY_DIR = join(REPO_ROOT, "scripts", "keys");
-const DEFAULT_KEY = join(KEY_DIR, "web-manifest-2026-02.key.pem");
-const DEFAULT_KEY_ID_FILE = join(KEY_DIR, "web-manifest-2026-02.key-id");
 const DEFAULT_MANIFEST = join(REPO_ROOT, "Web", "assets.json");
 const SIGNATURE_HEADER = "wuwaid-manifest-v1";
-const FALLBACK_KEY_ID = "wuwa-web-2026-02";
 
 function parseArgs(argv) {
-  const args = { key: DEFAULT_KEY, in: DEFAULT_MANIFEST, out: null };
+  const args = { key: null, in: DEFAULT_MANIFEST, out: null };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--generate") {
@@ -42,12 +38,33 @@ function parseArgs(argv) {
   return args;
 }
 
+function requireKeyPath(args) {
+  if (typeof args.key !== "string" || args.key.length === 0) {
+    throw new Error(
+      "Pass --key <pem> with a persistent private key path outside the worktree.",
+    );
+  }
+  const keyPath = resolve(args.key);
+  const relativePath = relative(REPO_ROOT, keyPath);
+  if (
+    relativePath === "" ||
+    (!isAbsolute(relativePath) &&
+      relativePath !== ".." &&
+      !relativePath.startsWith(`..${sep}`))
+  ) {
+    throw new Error(
+      `Signing key must be outside the repository/worktree: ${keyPath}`,
+    );
+  }
+  return keyPath;
+}
+
 function usage() {
   process.stdout.write(
     [
       "Usage:",
-      "  node scripts/sign-manifest.mjs --generate [--key <pem>] [--key-id <id>]",
-      "  node scripts/sign-manifest.mjs [--in Web/assets.json] [--key <pem>] [--key-id <id>]",
+      "  node scripts/sign-manifest.mjs --generate --key <pem> --key-id <id>",
+      "  node scripts/sign-manifest.mjs [--in Web/assets.json] --key <pem> [--key-id <id>]",
       "",
     ].join("\n"),
   );
@@ -64,9 +81,6 @@ function rawPublicKeyHex(publicKey) {
 }
 
 function keySidecarPath(privateKeyPath, suffix) {
-  if (suffix === "key-id" && resolve(privateKeyPath) === DEFAULT_KEY) {
-    return DEFAULT_KEY_ID_FILE;
-  }
   const filename = basename(privateKeyPath);
   const stem = filename.endsWith(".key.pem") ? filename.slice(0, -8) : filename;
   return join(dirname(privateKeyPath), `${stem}.${suffix}`);
@@ -79,8 +93,9 @@ function validateKeyId(keyId) {
 }
 
 function generateKeyPair(args) {
-  const keyPath = resolve(args.key);
-  const keyId = args["key-id"] || FALLBACK_KEY_ID;
+  const keyPath = requireKeyPath(args);
+  const keyId = args["key-id"];
+  if (!keyId) throw new Error("Pass --key-id when generating a key.");
   validateKeyId(keyId);
 
   const keyIdPath = keySidecarPath(keyPath, "key-id");
@@ -103,7 +118,7 @@ function generateKeyPair(args) {
 
   process.stdout.write(
     [
-      `Private key: ${keyPath} (git-ignored, keep it offline)`,
+      `Private key: ${keyPath} (keep it outside the worktree and offline)`,
       `Key id file: ${keyIdPath}`,
       `Public key:  ${hex}`,
       `Public file: ${publicKeyPath}`,
@@ -126,7 +141,7 @@ function main() {
     return;
   }
 
-  const keyPath = resolve(args.key);
+  const keyPath = requireKeyPath(args);
   const manifestPath = resolve(args.in);
   if (!existsSync(keyPath)) {
     throw new Error(`Signing key not found: ${keyPath}. Run with --generate first.`);
@@ -136,6 +151,11 @@ function main() {
   }
 
   const keyId = args["key-id"] || readKeyId(keyPath);
+  if (!keyId) {
+    throw new Error(
+      `Key id missing; pass --key-id or create ${keySidecarPath(keyPath, "key-id")}.`,
+    );
+  }
   validateKeyId(keyId);
   // The signature covers the bytes GitHub serves, which are the committed blob.
   // A Windows checkout with core.autocrlf=true rewrites them to CRLF, so sign
@@ -166,9 +186,9 @@ function main() {
 
 function readKeyId(privateKeyPath) {
   const keyIdPath = keySidecarPath(privateKeyPath, "key-id");
-  if (!existsSync(keyIdPath)) return FALLBACK_KEY_ID;
+  if (!existsSync(keyIdPath)) return null;
   const id = readFileSync(keyIdPath, "utf8").trim();
-  return id || FALLBACK_KEY_ID;
+  return id || null;
 }
 
 try {

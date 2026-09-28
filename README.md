@@ -103,8 +103,9 @@ dengan kunci yang tertanam di binary. Cara menulis dan menandatangani tema:
 [`docs/theming.md`](docs/theming.md).
 
 ```bash
-node scripts/sign-manifest.mjs --generate   # sekali, kunci privat di scripts/keys/ (git-ignored)
-node scripts/sign-manifest.mjs --in Web/assets.json
+KEY="$HOME/.config/wuwaid-launcher/keys/web-manifest-2026-03.key.pem"
+node scripts/sign-manifest.mjs --in Web/assets.json --key "$KEY" \
+  --key-id wuwa-web-2026-03
 ```
 
 ### Tech Stack

@@ -23,6 +23,63 @@ const repoRoot = path.resolve(
 );
 const signerPath = path.join(repoRoot, "scripts/sign-manifest.mjs");
 
+test("signer requires an explicit private-key path", () => {
+  const result = runSigner([]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Pass --key/);
+});
+
+test("key generation rejects a repository-local private key path", (t) => {
+  const directory = mkdtempSync(path.join(repoRoot, ".wuwaid-key-path-test-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+
+  const result = runSigner([
+    "--generate",
+    "--key",
+    path.join(directory, "web-manifest-test.key.pem"),
+    "--key-id",
+    "wuwa-web-test",
+  ]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /outside the repository\/worktree/);
+});
+
+test("key generation requires an explicit key id", (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "wuwaid-sign-manifest-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+
+  const result = runSigner([
+    "--generate",
+    "--key",
+    path.join(directory, "web-manifest.key.pem"),
+  ]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Pass --key-id/);
+});
+
+test("signing requires a key id when the key sidecar is missing", (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "wuwaid-sign-manifest-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+
+  const keyPath = path.join(directory, "web-manifest.key.pem");
+  const keyIdPath = path.join(directory, "web-manifest.key-id");
+  const manifestPath = path.join(directory, "assets.json");
+  writeFileSync(manifestPath, '{"assets":[]}\n');
+  const generated = runSigner([
+    "--generate",
+    "--key",
+    keyPath,
+    "--key-id",
+    "wuwa-web-test",
+  ]);
+  assert.equal(generated.status, 0, generated.stderr);
+  rmSync(keyIdPath);
+
+  const signed = runSigner(["--in", manifestPath, "--key", keyPath]);
+  assert.notEqual(signed.status, 0);
+  assert.match(signed.stderr, /Key id missing/);
+});
+
 test("generated key id is reused to sign the manifest without overwriting keys", (t) => {
   const directory = mkdtempSync(path.join(tmpdir(), "wuwaid-sign-manifest-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
