@@ -13,6 +13,67 @@
   import ToastHost from './components/ToastHost.svelte';
   import AdminModal from './components/AdminModal.svelte';
 
+  import { themeRuntime } from './lib/themeRuntime.svelte';
+
+  type VitePreviewManifest = {
+    assets?: Array<{ name: string }>;
+    theme?: {
+      active?: boolean;
+      id: string;
+      name: string;
+      tokens: Record<string, string>;
+      background?: { name: string };
+    };
+  };
+
+  function localPreviewAssetUrl(...segments: string[]): string {
+    const safeSegment = /^[a-z0-9][a-z0-9._-]*$/i;
+    if (segments.some((segment) => !safeSegment.test(segment))) {
+      return '';
+    }
+    return `/${segments.join('/')}`;
+  }
+
+  async function applyViteThemePreview(
+    isCurrent: () => boolean,
+  ): Promise<boolean> {
+    const response = await fetch('/Web/assets.json');
+    if (!response.ok) {
+      throw new Error(`Manifest request failed with HTTP ${response.status}.`);
+    }
+
+    const manifest = (await response.json()) as VitePreviewManifest;
+    const theme = manifest.theme;
+    if (!theme?.active || !theme.background || !isCurrent()) {
+      return false;
+    }
+
+    const backgroundUrl = localPreviewAssetUrl(
+      'Web',
+      'Theme',
+      theme.id,
+      theme.background.name,
+    );
+    if (!backgroundUrl) return false;
+
+    const videoAsset = manifest.assets?.find(
+      ({ name }) => name === 'bg-video.mp4',
+    );
+    const videoUrl = videoAsset
+      ? localPreviewAssetUrl('Web', 'Video', videoAsset.name)
+      : '';
+
+    themeRuntime.apply({
+      id: theme.id,
+      name: theme.name,
+      tokens: theme.tokens,
+      css: '',
+      backgroundUrl,
+    });
+    if (videoUrl) appState.videoUrl = videoUrl;
+    return true;
+  }
+
   const hasTauriRuntime = isTauriRuntime();
 
   let settingsOpen = $state(false);
@@ -22,7 +83,22 @@
     // The packaged launcher always exposes __TAURI_INTERNALS__.
     if (!hasTauriRuntime) {
       appState.releaseNotesLoading = false;
-      return () => appState.dispose();
+      let previewMounted = true;
+      if (import.meta.env.DEV) {
+        void applyViteThemePreview(() => previewMounted).catch((error) => {
+          if (previewMounted) {
+            console.warn('Vite theme preview failed to load.', error);
+          }
+        });
+      }
+      return () => {
+        previewMounted = false;
+        if (import.meta.env.DEV) {
+          appState.videoUrl = '';
+          themeRuntime.apply(null);
+        }
+        appState.dispose();
+      };
     }
 
     let mounted = true;

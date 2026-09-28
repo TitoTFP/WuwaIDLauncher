@@ -13,8 +13,8 @@ There are always two:
   Waves version's art direction, so it stays correct across 3.6, 3.7, and
   anything after. Users can pin it from Settings.
 - **The published theme** — the current game version's look, fetched and
-  verified from the asset manifest. `Web/Theme/wuwa-3-6/` ships Wuthering
-  Waves 3.6 in mist-aqua, jade, and lantern. Publishing a new version means
+  verified from the asset manifest. `Web/Theme/wuwa-3-7/` ships Wuthering
+  Waves 3.7 in ember, amber, and warm ivory. Publishing a new version means
   adding a directory and flipping `"active"`, nothing more.
 
 Both carry their own background, so withdrawing the published theme returns a
@@ -130,21 +130,16 @@ worth knowing before reaching for it while troubleshooting something else.
 {
   "assets": [ /* unchanged: bgm.mp3, bg-video.mp4 */ ],
   "theme": {
-    "id": "wuwa-3-6",
-    "name": "Wuthering Waves 3.6",
+    "id": "wuwa-3-7",
+    "name": "Wuthering Waves 3.7",
     "active": true,
     "tokens": {
-      "--gold-rgb": "231 211 148",
-      "--ink-rgb": "7 26 30"
-    },
-    "themeCss": {
-      "name": "theme.css",
-      "url": "https://raw.githubusercontent.com/TitoTFP/WuwaIDLauncher/refs/heads/main/Web/Theme/wuwa-3-6/theme.css",
-      "sha256": "<sha256 of theme.css>"
+      "--gold-rgb": "245 194 91",
+      "--ink-rgb": "31 17 18"
     },
     "background": {
       "name": "bg.jpg",
-      "url": "https://raw.githubusercontent.com/TitoTFP/WuwaIDLauncher/refs/heads/main/Web/Theme/wuwa-3-6/bg.jpg",
+      "url": "https://raw.githubusercontent.com/TitoTFP/WuwaIDLauncher/refs/heads/main/Web/Theme/wuwa-3-7/bg.jpg",
       "sha256": "<sha256 of bg.jpg>"
     }
   }
@@ -232,7 +227,7 @@ mid-transfer, so an oversized fragment costs a download before it is refused.
 Write it scoped to the theme so it composes predictably:
 
 ```css
-body.theme-wuwa-3-6 .start-btn {
+body.theme-wuwa-3-7 .start-btn {
     border-width: 2px !important;
 }
 ```
@@ -259,6 +254,12 @@ Users can pin the general theme in **Settings → Tema Tampilan**; that choice
 always wins over the remote theme.
 
 ## Local testing
+
+`npm run dev` serves a browser-only visual preview. In development, the
+frontend reads `Web/assets.json`, applies its active theme and local
+background/video files. This preview bypasses manifest signature verification
+and does not initialize BGM; use the Tauri command below to test the verified
+theme and media-sync path.
 
 ```bash
 KEY="$HOME/.config/wuwaid-launcher/keys/web-manifest-2026-03.key.pem"
