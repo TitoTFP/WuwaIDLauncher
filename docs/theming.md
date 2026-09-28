@@ -72,27 +72,35 @@ discarded on read. Removing a key therefore revokes every theme it signed, on
 launchers that never sync again. That does require a launcher release, since
 the keyring is compiled in.
 
-Before the first public release, replace the old key directly: no released
-launcher trusts it, so keep only the new public key in `TRUSTED_SIGNING_KEYS`.
-After a key has shipped, rotate in stages: add the incoming public key to the
-second slot, release a launcher that trusts both, then sign with the new key.
-Remove the old key in a later launcher release; removing a trusted key revokes
-the themes it signed for launchers that do not sync again.
+Before the first public launcher release that contains this theme keyring,
+replace an unshipped key directly: no released binary trusts it, so keep only
+the new public key in `TRUSTED_SIGNING_KEYS`. Once a key ships, rotate in
+stages: add the incoming public key to the second slot, release a launcher
+that trusts both, then sign with the new key. Remove the old key in a later
+launcher release; removing a trusted key revokes the themes it signed for
+launchers that do not sync again.
 
 Generate each key at a fresh path and give it a unique id. The command refuses
-to overwrite existing key files and records the id beside the key:
+to overwrite existing key files and records the id beside the key.
+
+The signer has no default private-key path: `--key` is required, and paths
+inside the current checkout are rejected. Choose a persistent location outside
+all disposable worktrees; the signer cannot verify external backups or paths
+in other worktrees. Key generation also requires `--key-id`.
+
+Keep the signing key outside disposable worktrees and back it up to approved
+offline secret storage. For example:
 
 ```bash
-node scripts/sign-manifest.mjs --generate \
-  --key scripts/keys/web-manifest-2026-03.key.pem \
-  --key-id wuwa-web-2026-03
-node scripts/sign-manifest.mjs --in Web/assets.json \
-  --key scripts/keys/web-manifest-2026-03.key.pem \
-  --key-id wuwa-web-2026-03
+KEY="$HOME/.config/wuwaid-launcher/keys/web-manifest-2026-03.key.pem"
+install -d -m 700 "$(dirname "$KEY")"
+node scripts/sign-manifest.mjs --generate --key "$KEY" --key-id wuwa-web-2026-03
+node scripts/sign-manifest.mjs --in Web/assets.json --key "$KEY" --key-id wuwa-web-2026-03
 ```
 
 Add the printed public key to `TRUSTED_SIGNING_KEYS` before shipping a launcher
-that should accept the new signature. Never commit the private key.
+that should accept the new signature. Keep the private key file mode `0600`;
+never commit it. Git cannot restore a deleted ignored key.
 
 ### A manifest with no theme block
 
@@ -146,7 +154,9 @@ worth knowing before reaching for it while troubleshooting something else.
 3. Sign the manifest:
 
 ```bash
-node scripts/sign-manifest.mjs --in Web/assets.json
+KEY="$HOME/.config/wuwaid-launcher/keys/web-manifest-2026-03.key.pem"
+node scripts/sign-manifest.mjs --in Web/assets.json --key "$KEY" \
+  --key-id wuwa-web-2026-03
 ```
 
 `assets.json.sig` is written next to it. Commit both.
@@ -251,7 +261,10 @@ always wins over the remote theme.
 ## Local testing
 
 ```bash
-node scripts/sign-manifest.mjs --generate      # once, writes scripts/keys/ (git-ignored)
+KEY="$HOME/.config/wuwaid-launcher/keys/web-manifest-2026-03.key.pem"
+install -d -m 700 "$(dirname "$KEY")"
+node scripts/sign-manifest.mjs --generate --key "$KEY" --key-id wuwa-web-2026-03 # first run only
+node scripts/sign-manifest.mjs --in Web/assets.json --key "$KEY" --key-id wuwa-web-2026-03
 WUWAID_ASSETS_URL=http://127.0.0.1:8080/assets.json npm run tauri dev
 ```
 
@@ -261,6 +274,7 @@ media URL validator already permits `http://localhost` for fixtures. The
 manifest itself is still signature-checked regardless of host — loopback only
 exempts the asset URLs it points at.
 
-The private key in `scripts/keys/` is local-only and never committed. Its
-public half must be present in `TRUSTED_SIGNING_KEYS` for the launcher to
-accept what it signs.
+Keep the private key outside the worktree, under a `0700` directory with
+`0600` file permissions, and back it up to approved offline secret storage.
+Its public half must be present in `TRUSTED_SIGNING_KEYS` for the launcher to
+accept what it signs. Git cannot restore a deleted ignored key.
