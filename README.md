@@ -116,6 +116,30 @@ node scripts/sign-manifest.mjs --in Web/assets.json --key "$KEY" \
 
 Acceptance yang benar-benar menjalankan Wuthering Waves dilakukan secara manual pada mesin Windows kompatibel melalui `scripts/acceptance/run-windows-real-acceptance.ps1` dan **tidak dijalankan oleh GitHub Actions**.
 
+```powershell
+pwsh -NoProfile -File scripts/acceptance/run-windows-real-acceptance.ps1 `
+  -LauncherPath "release-artifacts/v2.11.0/WuwaIDLauncher.exe" `
+  -GamePath "D:\Wuthering Waves" `
+  -OutputRoot "real-acceptance-evidence/v2.11.0"
+```
+
+Ganti `GamePath` dengan instalasi game asli yang kompatibel dan sudah ter-patch. Periksa evidence hasil runner serta UAC, tray, WebView2, dan restart self-update secara manual; build silang Linux dan fixture CI tidak membuktikan acceptance game nyata.
+
+### Persiapan dan publikasi v2.11.0
+
+Catatan rilis terkurasi: [`.github/release-notes/v2.11.0.md`](.github/release-notes/v2.11.0.md).
+
+Sebelum membuat tag:
+
+1. Pastikan versi `package.json`, kedua lockfile, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, dan fallback frontend sama; jalankan `npm run test:version`.
+2. Jalankan gate CI, build Windows, dan acceptance manual di atas. Jangan menganggap persiapan Linux sebagai kelulusan Windows release gate.
+3. Simpan perubahan persiapan di commit release pada `main` dan pastikan CI commit tersebut lulus. Jangan sertakan private signing key atau artefak build dalam commit.
+4. Setelah seluruh gate lulus, buat dan push tag `v2.11.0` pada commit tersebut. **Push tag memulai workflow Release dan dapat memublikasikan rilis** setelah job build dan approval environment `release-production` bila dikonfigurasi.
+
+Workflow `.github/workflows/release.yml` memverifikasi tag terhadap versi checkout, membangun ulang binary Windows dari tag, memeriksa artefak dengan Windows release gate, dan memublikasikan hanya `WuwaIDLauncher-v2.11.0.zip` serta `SHA256sums.txt` menggunakan catatan rilis terkurasi. `workflow_dispatch` ditujukan untuk tag yang sudah ada, bukan dry run.
+
+ZIP hasil cross-build lokal adalah kandidat untuk acceptance, bukan pengganti artefak yang dibangun workflow release. Direktori `release-artifacts/` dan evidence acceptance tidak dilacak Git.
+
 ## 🔒 Privasi
 
 WuwaID Launcher tidak lagi mengirim heartbeat statistik ke `logs.titotfp.my.id`.
