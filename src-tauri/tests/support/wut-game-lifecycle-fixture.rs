@@ -42,7 +42,20 @@ fn main() {
 
     let update_mode = signal_launcher_update_ready();
     let executable = std::env::current_exe().expect("fixture executable path");
-    Command::new(executable)
+    // Model the real root bootstrap: when a Shipping executable sits beside it
+    // under `Client/Binaries/Win64`, hand off to that instead of re-running.
+    let child = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.to_path_buf()))
+        .map(|dir| {
+            dir.join("Client")
+                .join("Binaries")
+                .join("Win64")
+                .join("Client-Win64-Shipping.exe")
+        })
+        .filter(|path| path.is_file())
+        .unwrap_or(executable);
+    Command::new(child)
         .arg("--child")
         .stdin(Stdio::null())
         .stdout(Stdio::null())

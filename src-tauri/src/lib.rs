@@ -579,6 +579,7 @@ fn emit_launch_failure<R: Runtime>(
     game_path: &str,
     dx11: bool,
     csharp_environment: bool,
+    quality_level: &str,
     error: impl Into<String>,
 ) {
     let mut evidence = engine::runtime::LaunchEvidence::for_failure(
@@ -586,6 +587,7 @@ fn emit_launch_failure<R: Runtime>(
             Path::new(game_path),
             dx11,
             csharp_environment,
+            quality_level,
         ),
         engine::runtime::SpawnFailureKind::SpawnFailed,
     );
@@ -2597,6 +2599,7 @@ fn wait_for_launcher_process_tree<R: Runtime>(
     let mut root_result = None;
     let mut handoff_started_at = None;
     let mut handed_off_game = None;
+    let mut handoff_observed = false;
     let mut process_snapshot_cache = engine::runtime::ProcessSnapshotCache::default();
 
     loop {
@@ -2637,6 +2640,12 @@ fn wait_for_launcher_process_tree<R: Runtime>(
             &mut process_snapshot_cache,
         );
         if let Some(pid) = inspection.owned_pid {
+            // `process_tree_contains` treats the root as its own descendant, so a
+            // launch where the root *is* the expected executable must not be
+            // recorded as a handoff: its exit code is still the game's.
+            if pid != root_pid {
+                handoff_observed = true;
+            }
             set_launcher_game_process(app, pid);
             if let Some(identity) = coordinator_launcher_game_identity(app) {
                 handed_off_game = Some((pid, identity));
@@ -2652,7 +2661,9 @@ fn wait_for_launcher_process_tree<R: Runtime>(
             && handoff_started_at
                 .is_some_and(|started_at| started_at.elapsed() >= PROCESS_HANDOFF_GRACE)
         {
-            return process.finalize();
+            let mut result = process.finalize()?;
+            result.handoff_observed = handoff_observed;
+            return Ok(result);
         }
 
         // Full reconciliation is needed only during the short post-root
@@ -2662,18 +2673,40 @@ fn wait_for_launcher_process_tree<R: Runtime>(
     }
 }
 
+/// Quality tiers that are actually installed under `Client/Content/<TIER>/`, in
+/// Kuro's preference order. The settings UI offers only these, because `-krqlv`
+/// selects that directory and a tier without installed paks has nothing to
+/// mount.
+#[tauri::command]
+fn detect_quality_levels(game_path: String) -> Result<Vec<String>, String> {
+    let normalized = engine::path::normalize_game_path(&game_path)
+        .ok_or_else(|| "invalid_game_path: executable game tidak ditemukan".to_string())?;
+    Ok(engine::path::installed_quality_levels(&normalized)
+        .into_iter()
+        .map(str::to_string)
+        .collect())
+}
+
 #[tauri::command]
 fn launch_game<R: Runtime>(
     app: AppHandle<R>,
     game_path: String,
     dx11: bool,
     csharp_environment: bool,
+    quality_level: String,
     install_method: String,
 ) -> Result<(), String> {
     let method = match engine::method::InstallMethod::parse(&install_method) {
         Ok(method) => method,
         Err(error) => {
-            emit_launch_failure(&app, &game_path, dx11, csharp_environment, error);
+            emit_launch_failure(
+                &app,
+                &game_path,
+                dx11,
+                csharp_environment,
+                &quality_level,
+                error,
+            );
             return Ok(());
         }
     };
@@ -2681,13 +2714,27 @@ fn launch_game<R: Runtime>(
         match engine::runtime::validate_launch_preconditions(&game_path, method) {
             Ok(path) => path,
             Err(error) => {
-                emit_launch_failure(&app, &game_path, dx11, csharp_environment, error);
+                emit_launch_failure(
+                    &app,
+                    &game_path,
+                    dx11,
+                    csharp_environment,
+                    &quality_level,
+                    error,
+                );
                 return Ok(());
             }
         };
     if method == engine::method::InstallMethod::Loader {
         if let Err(error) = validate_loader_metadata(&normalized_game_path) {
-            emit_launch_failure(&app, &game_path, dx11, csharp_environment, error);
+            emit_launch_failure(
+                &app,
+                &game_path,
+                dx11,
+                csharp_environment,
+                &quality_level,
+                error,
+            );
             return Ok(());
         }
     }
@@ -2696,7 +2743,14 @@ fn launch_game<R: Runtime>(
     {
         Ok(operation) => operation,
         Err(error) => {
-            emit_launch_failure(&app, &game_path, dx11, csharp_environment, error);
+            emit_launch_failure(
+                &app,
+                &game_path,
+                dx11,
+                csharp_environment,
+                &quality_level,
+                error,
+            );
             return Ok(());
         }
     };
@@ -2708,28 +2762,39 @@ fn launch_game<R: Runtime>(
             &game_path,
             dx11,
             csharp_environment,
+            &quality_level,
             format!("busy: game sedang berjalan (pid {pid})"),
         );
         return Ok(());
     }
     let canonical_method = method.as_str().to_string();
-    log::info!(
-        "Launch game: path={}, dx11={}, csharp_environment={}, method={}",
-        normalized_game_path.display(),
-        dx11,
-        csharp_environment,
-        canonical_method
-    );
     let app_handle = app.clone();
     let p = normalized_game_path;
 
     tauri::async_runtime::spawn(async move {
         let operation = operation;
         let _ = app_handle.emit("onGameLaunchStarted", ());
-        let command =
-            engine::runtime::build_launch_command_with_options(&p, dx11, csharp_environment);
+        // The tier is resolved once, here, and read back off the built command,
+        // so the logged value is exactly the `-krqlv` argument that is spawned.
+        let command = engine::runtime::build_launch_command_with_options(
+            &p,
+            dx11,
+            csharp_environment,
+            &quality_level,
+        );
+        log::info!(
+            "Launch game: path={}, dx11={}, csharp_environment={}, quality={}, method={}",
+            p.display(),
+            dx11,
+            csharp_environment,
+            command.quality_level().unwrap_or("none"),
+            canonical_method
+        );
 
-        match engine::runtime::launch_game_with_options(&p, dx11, csharp_environment) {
+        // Spawn the exact command the evidence records, so the reported
+        // executable, working directory and arguments cannot drift from what
+        // actually ran.
+        match engine::runtime::launch_prebuilt(&command) {
             Ok(mut process) => {
                 let root_pid = process.id();
                 let mut evidence =
@@ -2777,6 +2842,10 @@ fn launch_game<R: Runtime>(
                     match process_result {
                         Ok(result) => {
                             evidence.exit_code = result.exit_code;
+                            // Persisted so a support ticket can tell a clean game
+                            // exit from a bootstrap handoff whose code was never
+                            // the game's.
+                            evidence.handoff_observed = result.handoff_observed;
                             evidence.stdout = result.stdout;
                             evidence.stderr = result.stderr;
                             evidence.game_log_tail =
@@ -2790,28 +2859,48 @@ fn launch_game<R: Runtime>(
                                     "force_quit",
                                     "Proses dihentikan oleh launcher.",
                                 );
-                            } else if evidence.exit_code.unwrap_or(0) != 0 {
-                                evidence.failure_kind =
-                                    Some(engine::runtime::SpawnFailureKind::ProcessCrashed);
-                                evidence.error = Some(
-                                    "game process exited with a non-zero exit code".to_string(),
-                                );
-                                complete_launcher_exit(
-                                    &app_for_monitor,
-                                    &evidence,
-                                    "crashed",
-                                    exit_reason(
-                                        "Proses game berhenti tidak terduga",
-                                        evidence.exit_code,
-                                    ),
-                                );
                             } else {
-                                complete_launcher_exit(
-                                    &app_for_monitor,
-                                    &evidence,
-                                    "normal",
-                                    "Proses game selesai secara normal.",
-                                );
+                                match engine::runtime::classify_game_exit(result.handoff_observed) {
+                                    engine::runtime::GameExitOutcome::NotStarted => {
+                                        // The bootstrap exited and Shipping never
+                                        // appeared, so the game never ran. Reporting
+                                        // this as a normal finish would hide the one
+                                        // failure the launcher can prove.
+                                        evidence.failure_kind = Some(
+                                            engine::runtime::SpawnFailureKind::ProcessNotDetected,
+                                        );
+                                        evidence.error = Some(
+                                            "launch bootstrap exited without starting the game"
+                                                .to_string(),
+                                        );
+                                        complete_launcher_exit(
+                                            &app_for_monitor,
+                                            &evidence,
+                                            "not_started",
+                                            exit_reason(
+                                                "Proses game tidak pernah dimulai",
+                                                evidence.exit_code,
+                                            ),
+                                        );
+                                    }
+                                    engine::runtime::GameExitOutcome::Finished => {
+                                        if evidence.exit_code.unwrap_or(0) != 0 {
+                                            // The code belongs to the root bootstrap,
+                                            // not to the game, so it is logged rather
+                                            // than reported as a crash.
+                                            log::info!(
+                                                "Launch bootstrap exited with code {:?} after handing off to the game process.",
+                                                evidence.exit_code
+                                            );
+                                        }
+                                        complete_launcher_exit(
+                                            &app_for_monitor,
+                                            &evidence,
+                                            "normal",
+                                            "Proses game selesai secara normal.",
+                                        );
+                                    }
+                                }
                             }
                         }
                         Err(error) => {
@@ -3052,6 +3141,7 @@ pub fn run<R: tauri::Runtime>(context: tauri::Context<R>) {
             start_installation,
             check_game_folder_write_access,
             launch_game,
+            detect_quality_levels,
             force_quit_game,
             uninstall,
             restart_as_admin,
@@ -5517,6 +5607,13 @@ mod tests {
         std::fs::create_dir_all(&exe_dir).unwrap();
         std::fs::create_dir_all(&pak_dir).unwrap();
         std::fs::create_dir_all(&resources).unwrap();
+        let quality_dir = game.path().join("Client").join("Content").join("HD");
+        std::fs::create_dir_all(&quality_dir).unwrap();
+        std::fs::write(
+            quality_dir.join("pakchunk1-HD-WindowsNoEditor.pak"),
+            b"mock tier pak",
+        )
+        .unwrap();
         std::fs::write(exe_dir.join("Client-Win64-Shipping.exe"), b"mock exe").unwrap();
         std::fs::write(resources.join("ResManifest"), b"manifest").unwrap();
         let versions = appdata.path().join("versions.json");
@@ -5526,6 +5623,7 @@ mod tests {
             .invoke_handler(tauri::generate_handler![
                 start_installation,
                 launch_game,
+                detect_quality_levels,
                 check_patch_status,
                 switch_method,
                 uninstall,
@@ -5548,6 +5646,7 @@ mod tests {
                     "gamePath": game.path().parent().unwrap().join("missing-game").to_string_lossy(),
                     "dx11": false,
                     "csharpEnvironment": false,
+                    "qualityLevel": "auto",
                     "installMethod": "loader",
                 }),
             ),
@@ -5557,6 +5656,14 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .unwrap()
             .contains("invalid_game_path: executable game tidak ditemukan"));
+        assert_ipc_response(
+            &window,
+            ipc_request(
+                "detect_quality_levels",
+                serde_json::json!({ "gamePath": game.path().to_string_lossy() }),
+            ),
+            Ok(serde_json::json!(["HD"])),
+        );
         assert!(!appdata.path().join("Diagnostics").exists());
         app.unlisten(launch_error_listener);
 

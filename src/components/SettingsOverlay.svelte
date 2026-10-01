@@ -7,7 +7,7 @@
     isValidUidText,
     MAX_UID_TEXT_LENGTH,
   } from '../lib/types.ts';
-  import type { InstallMethod, ThemePreference, UidMode } from '../lib/types.ts';
+  import type { InstallMethod, QualityLevel, ThemePreference, UidMode } from '../lib/types.ts';
 
   interface Props {
     open?: boolean;
@@ -111,6 +111,25 @@
       appState.clearStatus();
     } catch (error) {
       appState.showToast(`Gagal mengubah tema.\n${errorMessage(error)}`, 'err');
+    }
+  }
+
+  $effect(() => {
+    if (open && appState.gamePath) {
+      appState.refreshQualityLevels().catch((error) => {
+        appState.showToast(`Gagal membaca kualitas grafis.\n${errorMessage(error)}`, 'err');
+      });
+    }
+  });
+
+  async function selectQualityLevel(level: QualityLevel) {
+    if (themeDisabled) return;
+    if (appState.config.qualityLevel === level) return;
+    try {
+      await appState.setQualityLevel(level);
+      appState.setStatus('Level kualitas diperbarui.');
+    } catch (error) {
+      appState.setStatus('Level kualitas tidak dapat disimpan.', errorMessage(error));
     }
   }
 
@@ -331,6 +350,50 @@
           <p class="uid-note"><span aria-hidden="true">i</span> Tema daring gagal diperbarui; memakai tema tersimpan terakhir.</p>
         {/if}
       </section>
+
+      {#if appState.qualityLevels.length > 0}
+        <section class="settings-section" aria-labelledby="qualityHeading">
+          <h2 class="section-title" id="qualityHeading">KUALITAS GRAFIK</h2>
+          <div class="uid-mode-grid" role="group" aria-label="Kualitas grafis">
+            <button
+              class="uid-mode-card"
+              class:active={appState.config.qualityLevel === 'auto'}
+              aria-pressed={appState.config.qualityLevel === 'auto'}
+              disabled={themeDisabled}
+              onclick={() => selectQualityLevel('auto')}
+              type="button"
+            >
+              <span class="uid-mode-card__top">
+                <span class="uid-mode-card__title">OTOMATIS</span>
+                <span class="uid-mode-card__mark" aria-hidden="true">✓</span>
+              </span>
+              <span class="uid-mode-card__desc">Ikuti tier yang paling lengkap terpasang</span>
+            </button>
+            {#each appState.qualityLevels as level (level)}
+              <button
+                class="uid-mode-card"
+                class:active={appState.config.qualityLevel === level}
+                aria-pressed={appState.config.qualityLevel === level}
+                disabled={themeDisabled}
+                onclick={() => selectQualityLevel(level)}
+                type="button"
+              >
+                <span class="uid-mode-card__top">
+                  <span class="uid-mode-card__title">{level}</span>
+                  <span class="uid-mode-card__mark" aria-hidden="true">✓</span>
+                </span>
+                <span class="uid-mode-card__desc">Paket Client/Content/{level}</span>
+              </button>
+            {/each}
+          </div>
+          <p class="uid-note">
+            <span aria-hidden="true">i</span>
+            Hanya tier yang paketnya terpasang yang bisa dipilih. Tier menentukan folder
+            Client/Content yang dimuat game saat dijalankan. Otomatis mengikuti tier yang
+            paling lengkap terpasang.
+          </p>
+        </section>
+      {/if}
 
       <footer class="settings-footer">
         <span class="save-note"><span class="save-dot" aria-hidden="true"></span>Perubahan tersimpan otomatis</span>

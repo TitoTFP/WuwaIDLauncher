@@ -149,6 +149,7 @@ fn settings_persistence_keeps_valid_game_path_and_canonical_schema() {
     assert!(!encoded.contains("launcherVisualMode"));
     assert!(!encoded.contains("autoCheckUpdate"));
     assert!(!encoded.contains("perf"));
+    assert!(encoded.contains("\"qualityLevel\":\"auto\""));
     let round_trip = normalize_settings_json(&encoded);
     assert_eq!(round_trip.settings, normalized.settings);
 }

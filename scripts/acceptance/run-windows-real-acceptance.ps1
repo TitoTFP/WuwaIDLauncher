@@ -163,6 +163,12 @@ $gameExecutable = Join-Path $resolvedGame "Client\Binaries\Win64\Client-Win64-Sh
 if (-not (Test-Path -LiteralPath $gameExecutable -PathType Leaf)) {
     throw "GamePath is not a Wuthering Waves installation: $gameExecutable"
 }
+# The launcher now starts the root bootstrap, so an installation without it can
+# no longer be launched even though Shipping is present.
+$launchExecutable = Join-Path $resolvedGame "Wuthering Waves.exe"
+if (-not (Test-Path -LiteralPath $launchExecutable -PathType Leaf)) {
+    throw "GamePath is missing the launch bootstrap: $launchExecutable"
+}
 
 New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 $summaryPath = Join-Path $OutputRoot "summary.json"

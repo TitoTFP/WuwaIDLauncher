@@ -243,10 +243,17 @@ function New-FixtureGame {
 
     $binaryDirectory = Join-Path $Root "Client\Binaries\Win64"
     $loaderDirectory = Join-Path $binaryDirectory "wuwaIndonesia"
-    New-Item -ItemType Directory -Force -Path $binaryDirectory, $loaderDirectory | Out-Null
+    $qualityDirectory = Join-Path $Root "Client\Content\HD"
+    $launchExecutable = Join-Path $Root "Wuthering Waves.exe"
+    New-Item -ItemType Directory -Force -Path $binaryDirectory, $loaderDirectory, $qualityDirectory | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $Root "Client\Content\Paks") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $Root "Client\Saved\Resources\3.0.0") | Out-Null
     Copy-Item -LiteralPath $FixtureBinary -Destination (Join-Path $binaryDirectory "Client-Win64-Shipping.exe") -Force
+    # The launcher starts the root bootstrap and passes -krqlv=<tier>, so the
+    # fixture needs the bootstrap itself plus an installed tier pack. Shipping
+    # stays because the process monitor and force-quit still key on it.
+    Copy-Item -LiteralPath $FixtureBinary -Destination $launchExecutable -Force
+    Set-Content -LiteralPath (Join-Path $qualityDirectory "pakchunk1-HD-WindowsNoEditor.pak") -Value "fixture tier pak" -NoNewline
     Set-Content -LiteralPath (Join-Path $Root "Client\Saved\Resources\3.0.0\ResManifest") -Value "fixture manifest" -NoNewline
     Set-Content -LiteralPath (Join-Path $Root "Client\Content\Paks\unrelated-fixture.pak") -Value "fixture data" -NoNewline
     Write-MinimalValidPak -Path (Join-Path $loaderDirectory "pakchunk0-ID-WindowsNoEditor_1000_P.pak")
@@ -254,7 +261,7 @@ function New-FixtureGame {
         (Join-Path $binaryDirectory "winhttp.dll"),
         [Text.Encoding]::ASCII.GetBytes("fixture loader")
     )
-    return (Join-Path $binaryDirectory "Client-Win64-Shipping.exe")
+    return $launchExecutable
 }
 
 function Write-JsonFile {

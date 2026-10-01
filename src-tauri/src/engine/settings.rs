@@ -1,11 +1,13 @@
 use super::method::InstallMethod;
-use crate::engine::path::normalize_game_path;
+use crate::engine::path::{canonical_quality_level, normalize_game_path};
 use crate::engine::validate_uid_text;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub const THEME_PREFERENCE_AUTO: &str = "auto";
 pub const THEME_PREFERENCE_GENERAL: &str = "general";
+
+pub const QUALITY_PREFERENCE_AUTO: &str = "auto";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -14,6 +16,7 @@ pub struct LauncherSettings {
     pub install_method: InstallMethod,
     pub dx11: bool,
     pub csharp_environment: bool,
+    pub quality_level: String,
     pub uid_mode: String,
     pub uid_text: String,
     pub bgm_volume: f64,
@@ -28,6 +31,7 @@ impl Default for LauncherSettings {
             install_method: InstallMethod::ResourceMount,
             dx11: false,
             csharp_environment: false,
+            quality_level: QUALITY_PREFERENCE_AUTO.to_string(),
             uid_mode: "default".to_string(),
             uid_text: String::new(),
             bgm_volume: 0.35,
@@ -68,6 +72,16 @@ fn read_bool(
             format!("Field settings {key} tidak valid; memakai default."),
         );
     }
+}
+
+/// Normalizes a stored quality preference to `auto` or a canonical tier name.
+pub fn normalize_quality_preference(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.eq_ignore_ascii_case(QUALITY_PREFERENCE_AUTO) {
+        return Some(QUALITY_PREFERENCE_AUTO.to_string());
+    }
+
+    canonical_quality_level(trimmed).map(str::to_string)
 }
 
 pub fn normalize_settings_json(raw: &str) -> SettingsLoadResult {
@@ -187,6 +201,18 @@ pub fn normalize_settings_json(raw: &str) -> SettingsLoadResult {
         &mut diagnostics,
         &mut repaired,
     );
+    if let Some(value) = object.get("qualityLevel") {
+        match value.as_str().and_then(normalize_quality_preference) {
+            Some(level) => settings.quality_level = level,
+            None => {
+                repaired = true;
+                diagnostic(
+                    &mut diagnostics,
+                    "Level kualitas tidak valid; memakai Otomatis.",
+                );
+            }
+        }
+    }
     let mut uid_mode_valid = false;
     if let Some(value) = object.get("uidMode") {
         match value.as_str() {
@@ -391,5 +417,32 @@ mod tests {
             .diagnostics
             .iter()
             .any(|message| message.contains("Path game")));
+    }
+    #[test]
+    fn quality_level_defaults_to_auto_and_accepts_known_tiers() {
+        assert_eq!(
+            normalize_settings_json(r#"{}"#).settings.quality_level,
+            QUALITY_PREFERENCE_AUTO
+        );
+
+        let raw = serde_json::json!({ "qualityLevel": "UHD" }).to_string();
+        let result = normalize_settings_json(&raw);
+        assert_eq!(result.settings.quality_level, "UHD");
+        assert!(!result.repaired);
+
+        let raw = serde_json::json!({ "qualityLevel": " hd " }).to_string();
+        assert_eq!(normalize_settings_json(&raw).settings.quality_level, "HD");
+    }
+
+    #[test]
+    fn unknown_quality_level_is_repaired_to_auto() {
+        let raw = serde_json::json!({ "qualityLevel": "4k" }).to_string();
+        let result = normalize_settings_json(&raw);
+        assert_eq!(result.settings.quality_level, QUALITY_PREFERENCE_AUTO);
+        assert!(result.repaired);
+        assert!(result
+            .diagnostics
+            .iter()
+            .any(|message| message.contains("kualitas")));
     }
 }

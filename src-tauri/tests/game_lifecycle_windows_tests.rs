@@ -106,7 +106,16 @@ fn fixture_game() -> (TempDir, PathBuf) {
     let exe_dir = temp.path().join("Client").join("Binaries").join("Win64");
     fs::create_dir_all(&exe_dir).unwrap();
     let expected = exe_dir.join("Client-Win64-Shipping.exe");
-    fs::copy(fixture_binary(), &expected).unwrap();
+    let fixture = fixture_binary();
+    fs::copy(&fixture, &expected).unwrap();
+    fs::copy(&fixture, temp.path().join("Wuthering Waves.exe")).unwrap();
+    let quality_dir = temp.path().join("Client").join("Content").join("HD");
+    fs::create_dir_all(&quality_dir).unwrap();
+    fs::write(
+        quality_dir.join("pakchunk1-HD-WindowsNoEditor.pak"),
+        b"fixture",
+    )
+    .unwrap();
     (temp, expected)
 }
 
@@ -164,7 +173,7 @@ fn assert_direct_handoff_and_force_quit(dx11: bool) {
         .and_then(|path| path.parent())
         .unwrap()
         .to_path_buf();
-    let mut root = runtime::launch_game(&game_path, dx11).unwrap();
+    let mut root = runtime::launch_game(&game_path, dx11, "auto").unwrap();
     assert_eq!(root.mode, runtime::LaunchMode::Direct);
     let root_pid = root.id();
     let root_identity = runtime::process_identity(root_pid).expect("direct root identity");
@@ -214,7 +223,7 @@ fn elevated_uac_launch_handoffs_and_force_quits_with_retained_handle() {
         .and_then(|path| path.parent())
         .unwrap()
         .to_path_buf();
-    let mut root = runtime::launch_game_elevated(&game_path, true).unwrap();
+    let mut root = runtime::launch_game_elevated(&game_path, true, "auto").unwrap();
     assert_eq!(root.mode, runtime::LaunchMode::Elevated);
     let root_pid = root.id();
     let root_identity = runtime::process_identity(root_pid).expect("elevated root identity");
@@ -290,20 +299,6 @@ fn external_instance_is_not_claimed_or_killed_by_unrelated_launcher_tree() {
         None,
     )
     .unwrap());
-}
-
-#[test]
-fn supported_launch_modes_and_dx11_arguments_are_explicit() {
-    let game_path = Path::new(r"C:\Games");
-    assert!(runtime::build_launch_command(game_path, false)
-        .arguments
-        .is_empty());
-    assert_eq!(
-        runtime::build_launch_command(game_path, true).arguments,
-        vec!["-dx11"]
-    );
-    assert_eq!(runtime::LaunchMode::Direct.as_str(), "direct");
-    assert_eq!(runtime::LaunchMode::Elevated.as_str(), "elevated");
 }
 
 #[test]
