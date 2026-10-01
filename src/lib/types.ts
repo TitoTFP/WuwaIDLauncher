@@ -84,7 +84,7 @@ export interface LauncherConfig {
   gamePath: string;
   installMethod: InstallMethod;
   dx11: boolean;
-  csharpEnvironment: boolean;
+  qualityLevel: QualityLevel;
   uidMode: UidMode;
   uidText: string;
   bgmVolume: number;
@@ -95,6 +95,25 @@ export interface LauncherConfig {
 export type ThemePreference = "auto" | "general" | (string & {});
 
 export const THEME_PREFERENCES: readonly ThemePreference[] = ["auto", "general"];
+
+/**
+ * Quality tier passed to the game as `-krqlv`. `auto` resolves against the
+ * tiers actually installed under `Client/Content/<TIER>/`.
+ */
+export type QualityLevel = "auto" | "SD" | "HD" | "UHD";
+
+export const QUALITY_TIERS: readonly Exclude<QualityLevel, "auto">[] = [
+  "SD",
+  "HD",
+  "UHD",
+];
+
+export function normalizeQualityLevel(value: unknown): QualityLevel {
+  if (typeof value !== "string") return DEFAULT_LAUNCHER_CONFIG.qualityLevel;
+  const trimmed = value.trim();
+  const tier = QUALITY_TIERS.find((known) => known.toLowerCase() === trimmed.toLowerCase());
+  return tier ?? DEFAULT_LAUNCHER_CONFIG.qualityLevel;
+}
 
 /** A verified theme as delivered by the backend. */
 export interface ThemePayload {
@@ -111,7 +130,7 @@ export const DEFAULT_LAUNCHER_CONFIG: LauncherConfig = {
   gamePath: "",
   installMethod: "resource_mount",
   dx11: false,
-  csharpEnvironment: false,
+  qualityLevel: "auto",
   uidMode: "default",
   uidText: "",
   bgmVolume: 0.35,
@@ -185,7 +204,6 @@ export function normalizeLauncherConfig(raw: unknown): NormalizedConfigResult {
 
   for (const [key, fallback] of [
     ["dx11", config.dx11],
-    ["csharpEnvironment", config.csharpEnvironment],
     ["bgmEnabled", config.bgmEnabled],
   ] as const) {
     if (typeof value[key] === "boolean") config[key] = value[key] as boolean;
@@ -249,6 +267,18 @@ export function normalizeLauncherConfig(raw: unknown): NormalizedConfigResult {
     diagnostics.push("Field settings themePreference tidak valid; memakai default.");
   }
 
+  if ("qualityLevel" in value) {
+    const raw = typeof value.qualityLevel === "string" ? value.qualityLevel.trim() : "";
+    const normalized = normalizeQualityLevel(raw);
+    // Mirrors the backend validator: only a genuinely unknown tier is a repair,
+    // so `" hd "` and `"AUTO"` normalize silently on both sides.
+    if (raw.toLowerCase() !== normalized.toLowerCase()) {
+      repaired = true;
+      diagnostics.push("Level kualitas tidak valid; memakai Otomatis.");
+    }
+    config.qualityLevel = normalized;
+  }
+
   return { config, repaired, diagnostics };
 }
 
@@ -278,7 +308,7 @@ export interface LauncherUpdateStatusPayload {
 
 export interface GameExitPayload {
   id: string;
-  status: "normal" | "crashed" | "force_quit";
+  status: "normal" | "crashed" | "force_quit" | "not_started";
   reason: string;
 }
 
@@ -356,6 +386,7 @@ export interface ILauncherState {
   adminPromptOpen: boolean;
   adminPromptPath: string;
   config: LauncherConfig;
+  qualityLevels: QualityLevel[];
   themeStatus: string;
   remoteTheme: { id: string; name: string } | null;
   setThemePreference(preference: ThemePreference): Promise<void>;
@@ -369,6 +400,8 @@ export interface ILauncherState {
   init(): Promise<void>;
   dispose(): void;
   saveConfig(): Promise<void>;
+  refreshQualityLevels(): Promise<void>;
+  setQualityLevel(level: QualityLevel): Promise<void>;
   beginOperation(kind: LauncherOperation): OperationToken | null;
   endOperation(token: OperationToken): void;
   isOperationBlocked(kind: LauncherOperation): boolean;

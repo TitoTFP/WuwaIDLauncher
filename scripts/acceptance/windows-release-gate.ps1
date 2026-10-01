@@ -186,6 +186,7 @@ function New-FixtureLayout {
     $directories = @(
         "AppData",
         "Wuthering Waves\Client\Binaries\Win64",
+        "Wuthering Waves\Client\Content\HD",
         "Wuthering Waves\Client\Content\Paks",
         "Wuthering Waves\Client\Saved\Resources\3.0.0"
     )
@@ -193,7 +194,11 @@ function New-FixtureLayout {
         New-Item -ItemType Directory -Force -Path (Join-Path $script:RunFixtureRoot $directory) | Out-Null
     }
 
+    # The launcher starts the root bootstrap and passes -krqlv=<tier>; Shipping
+    # stays because the process monitor and force-quit still key on it.
+    Set-Content -LiteralPath (Join-Path $script:RunFixtureRoot "Wuthering Waves\Wuthering Waves.exe") -Value "frontend IPC fixture launch executable" -NoNewline
     Set-Content -LiteralPath (Join-Path $script:RunFixtureRoot "Wuthering Waves\Client\Binaries\Win64\Client-Win64-Shipping.exe") -Value "frontend IPC fixture game executable" -NoNewline
+    Set-Content -LiteralPath (Join-Path $script:RunFixtureRoot "Wuthering Waves\Client\Content\HD\pakchunk1-HD-WindowsNoEditor.pak") -Value "fixture tier pak" -NoNewline
     Set-Content -LiteralPath (Join-Path $script:RunFixtureRoot "Wuthering Waves\Client\Saved\Resources\3.0.0\ResManifest") -Value "fixture manifest" -NoNewline
     Set-Content -LiteralPath (Join-Path $script:RunFixtureRoot "AppData\unrelated-appdata.json") -Value '{"keep":true}' -NoNewline
     Set-Content -LiteralPath (Join-Path $script:RunFixtureRoot "Wuthering Waves\Client\Content\Paks\unrelated-game.pak") -Value "unrelated game data" -NoNewline
@@ -610,12 +615,15 @@ try {
         root = $script:RunFixtureRoot
         files = @(
             "AppData/unrelated-appdata.json",
+            "Wuthering Waves/Wuthering Waves.exe",
             "Wuthering Waves/Client/Binaries/Win64/Client-Win64-Shipping.exe",
+            "Wuthering Waves/Client/Content/HD/pakchunk1-HD-WindowsNoEditor.pak",
             "Wuthering Waves/Client/Saved/Resources/3.0.0/ResManifest",
             "Wuthering Waves/Client/Content/Paks/unrelated-game.pak"
         )
         directories = @(
             "AppData",
+            "Wuthering Waves/Client/Content/HD",
             "Wuthering Waves/Client/Content/Paks"
         )
     }

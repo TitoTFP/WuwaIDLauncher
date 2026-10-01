@@ -14,6 +14,7 @@ import {
   isValidUidText,
   launcherReleaseNotesSeenStorageKey,
   normalizeLauncherConfig,
+  normalizeQualityLevel,
   type ThemePreference,
 } from "./types";
 import type {
@@ -27,6 +28,7 @@ import type {
   OperationToken,
   PatchStatusPayload,
   PatchState,
+  QualityLevel,
   ReleaseNotePayload,
   ToastKind,
   ToastMessage,
@@ -170,6 +172,8 @@ export class LauncherState implements ILauncherState {
   config: LauncherConfig = $state<LauncherConfig>({
     ...DEFAULT_LAUNCHER_CONFIG,
   });
+
+  qualityLevels: QualityLevel[] = $state<QualityLevel[]>([]);
 
   setStatus(message: string, diagnostic = message) {
     this.statusMessage = message;
@@ -1032,6 +1036,45 @@ export class LauncherState implements ILauncherState {
       this.pendingConfigSaveCount -= 1;
       this.configSavePending = this.pendingConfigSaveCount > 0;
     }
+  }
+
+  async refreshQualityLevels() {
+    if (!isTauriRuntime() || !this.gamePath) {
+      this.qualityLevels = [];
+      return;
+    }
+    try {
+      const levels = await bridge.detectQualityLevels(this.gamePath);
+      this.qualityLevels = Array.isArray(levels)
+        ? levels.map((level) => normalizeQualityLevel(level))
+        : [];
+    } catch (error) {
+      // Report rather than swallow: an empty list and a failed lookup look
+      // identical otherwise, and the section would render with no explanation.
+      this.qualityLevels = [];
+      this.showToast(
+        `Gagal membaca kualitas grafis.\n${error instanceof Error ? error.message : String(error)}`,
+        'err',
+      );
+    }
+
+    // A tier stored earlier can disappear when the user switches quality in the
+    // official launcher. Falling back to `auto` keeps the selector honest and
+    // stops the launch from asking for a directory that holds no paks. An empty
+    // detection result means "unknown", so it must not reset the preference.
+    if (
+      this.qualityLevels.length > 0 &&
+      this.config.qualityLevel !== "auto" &&
+      !this.qualityLevels.includes(this.config.qualityLevel)
+    ) {
+      this.config.qualityLevel = "auto";
+      await this.saveConfig();
+    }
+  }
+
+  async setQualityLevel(level: QualityLevel) {
+    this.config.qualityLevel = normalizeQualityLevel(level);
+    await this.saveConfig();
   }
 }
 

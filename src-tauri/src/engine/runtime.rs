@@ -1,7 +1,7 @@
 use crate::engine::{
     method::InstallMethod,
     patch_status::{self, LocalPatchState},
-    path::{self, get_binary_dir, GAME_EXE_RELATIVE},
+    path::{self, GAME_EXE_RELATIVE},
 };
 use serde::{Deserialize, Serialize};
 #[cfg(windows)]
@@ -42,27 +42,21 @@ pub struct LaunchCommand {
 
 impl LaunchCommand {
     pub fn new(executable: &Path, working_directory: &Path, dx11: bool) -> Self {
-        Self::new_with_options(executable, working_directory, dx11, false)
-    }
-
-    pub fn new_with_options(
-        executable: &Path,
-        working_directory: &Path,
-        dx11: bool,
-        csharp_environment: bool,
-    ) -> Self {
         let mut arguments = Vec::with_capacity(2);
         if dx11 {
             arguments.push("-dx11".to_string());
-        }
-        if csharp_environment {
-            arguments.push("-ForceEnableCSharpEnvironment".to_string());
         }
         Self {
             executable: executable.to_path_buf(),
             working_directory: working_directory.to_path_buf(),
             arguments,
         }
+    }
+    /// The resolved `-krqlv` tier this command carries, if any.
+    pub fn quality_level(&self) -> Option<&str> {
+        self.arguments
+            .iter()
+            .find_map(|argument| argument.strip_prefix("-krqlv="))
     }
 }
 
@@ -115,6 +109,10 @@ pub struct LaunchEvidence {
     pub pid: Option<u32>,
     pub process_detected: bool,
     pub exit_code: Option<i32>,
+    /// Whether the launched root handed off to a separate game process, so the
+    /// recorded `exit_code` is the bootstrap's rather than the game's.
+    #[serde(default)]
+    pub handoff_observed: bool,
     pub stdout: String,
     pub stderr: String,
     pub game_log_tail: String,
@@ -133,6 +131,7 @@ impl LaunchEvidence {
             pid: Some(pid),
             process_detected: false,
             exit_code: None,
+            handoff_observed: false,
             stdout: String::new(),
             stderr: String::new(),
             game_log_tail: String::new(),
@@ -152,6 +151,7 @@ impl LaunchEvidence {
             pid: None,
             process_detected: false,
             exit_code: None,
+            handoff_observed: false,
             stdout: String::new(),
             stderr: String::new(),
             game_log_tail: String::new(),
@@ -223,6 +223,10 @@ pub struct ProcessResult {
     pub exit_code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
+    /// Whether the launched root handed off to a separate game process. When it
+    /// did, `exit_code` describes the root bootstrap rather than the game, so it
+    /// must not be used to classify a game crash.
+    pub handoff_observed: bool,
 }
 
 struct DirectProcess {
@@ -363,18 +367,50 @@ pub fn classify_spawn_error(raw_code: Option<i32>) -> SpawnFailureKind {
     }
 }
 
-pub fn build_launch_command(game_path: &Path, dx11: bool) -> LaunchCommand {
-    build_launch_command_with_options(game_path, dx11, false)
+/// How a launch ended, as far as the launcher can actually observe it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameExitOutcome {
+    /// The launched root exited without the game process ever being observed.
+    /// The root is Kuro's bootstrap, so this means the game never started and
+    /// must not be reported as a normal completion.
+    NotStarted,
+    /// The game process ran and later exited. Its own exit status is not
+    /// observable, because the bootstrap spawned it and then exited, so a crash
+    /// cannot be told apart from a clean exit here.
+    Finished,
 }
 
-pub fn build_launch_command_with_options(
-    game_path: &Path,
-    dx11: bool,
-    csharp_environment: bool,
-) -> LaunchCommand {
-    let executable = game_path.join(GAME_EXE_RELATIVE);
-    let work_dir = get_binary_dir(game_path);
-    LaunchCommand::new_with_options(&executable, &work_dir, dx11, csharp_environment)
+/// Classifies a finished launch from whether the game process was ever seen.
+///
+/// The root is Kuro's bootstrap, so the game only ever appears as a separate
+/// process that shows up and then goes away. That single signal carries the
+/// whole decision: without it the game never started; with it, the bootstrap's
+/// exit code says nothing about how the game ended.
+pub fn classify_game_exit(game_observed: bool) -> GameExitOutcome {
+    if game_observed {
+        GameExitOutcome::Finished
+    } else {
+        GameExitOutcome::NotStarted
+    }
+}
+
+pub fn build_launch_command(game_path: &Path, dx11: bool, quality_level: &str) -> LaunchCommand {
+    // Start the root bootstrap, not the Shipping binary: Shipping aborts with
+    // `kuro: Use launcher to start game!` unless a `-krqlv` tier argument
+    // selects the `Client/Content/<TIER>` directory to mount. The bootstrap
+    // resolves Shipping relative to its own module path, so the working
+    // directory is the game root, and it forwards the argument verbatim.
+    // Shipping itself stays the process the monitor watches for after handoff.
+    let executable = path::get_launch_exe(game_path);
+    let work_dir = game_path.to_path_buf();
+    let mut command = LaunchCommand::new(&executable, &work_dir, dx11);
+    command
+        .arguments
+        .push(path::quality_level_argument(&path::resolve_quality_level(
+            game_path,
+            quality_level,
+        )));
+    command
 }
 
 pub fn collect_game_log_tail(game_path: &Path) -> String {
@@ -487,6 +523,7 @@ impl DirectProcess {
             // keep the reader alive after this root process exits.
             stdout: join_finished_capture(&mut self.stdout),
             stderr: join_finished_capture(&mut self.stderr),
+            handoff_observed: false,
         };
         self.completed = Some(result.clone());
         result
@@ -554,6 +591,7 @@ impl ElevatedProcess {
                 exit_code: Some(exit_code),
                 stdout: String::new(),
                 stderr: String::new(),
+                handoff_observed: false,
             };
             self.completed = Some(result.clone());
             return Ok(Some(result));
@@ -594,27 +632,29 @@ fn spawn_direct(command: &LaunchCommand) -> Result<ManagedProcess, std::io::Erro
     }))
 }
 
-pub fn launch_game(game_path: &Path, dx11: bool) -> Result<LaunchedGame, Box<LaunchFailure>> {
-    launch_game_with_options(game_path, dx11, false)
-}
-
-pub fn launch_game_with_options(
+pub fn launch_game(
     game_path: &Path,
     dx11: bool,
-    csharp_environment: bool,
+    quality_level: &str,
 ) -> Result<LaunchedGame, Box<LaunchFailure>> {
-    let command = build_launch_command_with_options(game_path, dx11, csharp_environment);
+    launch_prebuilt(&build_launch_command(game_path, dx11, quality_level))
+}
+
+/// Launches an already-built command. Building once keeps the launch evidence
+/// and the spawned process on exactly the same executable, working directory
+/// and arguments, instead of resolving the quality tier twice per launch.
+pub fn launch_prebuilt(command: &LaunchCommand) -> Result<LaunchedGame, Box<LaunchFailure>> {
     let executable = command.executable.clone();
     if !executable.is_file() {
         return Err(Box::new(LaunchFailure::new_with_mode(
-            command,
+            command.clone(),
             SpawnFailureKind::SpawnFailed,
             format!("executable_missing: {:?}", executable),
             Some(LaunchMode::Direct),
         )));
     }
 
-    match spawn_direct(&command) {
+    match spawn_direct(command) {
         Ok(process) => {
             let pid = match &process {
                 ManagedProcess::Direct(process) => process.child.id(),
@@ -631,10 +671,10 @@ pub fn launch_game_with_options(
             let kind = classify_spawn_error(error.raw_os_error());
             #[cfg(windows)]
             if kind == SpawnFailureKind::ElevationRequired {
-                return spawn_elevated(&command);
+                return spawn_elevated(command);
             }
             Err(Box::new(LaunchFailure::new_with_mode(
-                command,
+                command.clone(),
                 kind,
                 error.to_string(),
                 Some(LaunchMode::Direct),
@@ -650,25 +690,15 @@ pub fn launch_game_with_options(
 pub fn launch_game_elevated(
     game_path: &Path,
     dx11: bool,
+    quality_level: &str,
 ) -> Result<LaunchedGame, Box<LaunchFailure>> {
-    launch_game_elevated_with_options(game_path, dx11, false)
-}
-
-#[cfg(windows)]
-pub fn launch_game_elevated_with_options(
-    game_path: &Path,
-    dx11: bool,
-    csharp_environment: bool,
-) -> Result<LaunchedGame, Box<LaunchFailure>> {
-    let command = build_launch_command_with_options(game_path, dx11, csharp_environment);
+    let command = build_launch_command(game_path, dx11, quality_level);
     if !command.executable.is_file() {
+        let missing = command.executable.clone();
         return Err(Box::new(LaunchFailure::new_with_mode(
             command,
             SpawnFailureKind::SpawnFailed,
-            format!(
-                "executable_missing: {:?}",
-                game_path.join(GAME_EXE_RELATIVE)
-            ),
+            format!("executable_missing: {:?}", missing),
             Some(LaunchMode::Elevated),
         )));
     }
@@ -1790,17 +1820,94 @@ mod tests {
         );
         assert_eq!(command.working_directory, PathBuf::from(r"C:\Games"));
         assert_eq!(command.arguments, vec!["-dx11"]);
+    }
 
-        let combined = LaunchCommand::new_with_options(
-            Path::new(r"C:\Games\Client-Win64-Shipping.exe"),
-            Path::new(r"C:\Games"),
-            true,
-            true,
+    #[test]
+    fn build_launch_command_starts_the_root_bootstrap_with_a_tier_argument() {
+        let game_path = Path::new(r"C:\Games");
+
+        let command = build_launch_command(game_path, false, "auto");
+        assert_eq!(command.executable, game_path.join("Wuthering Waves.exe"));
+        assert_eq!(command.working_directory, game_path.to_path_buf());
+        // No tier directory exists here, so Kuro's own `defaultBundleName` wins.
+        assert_eq!(command.arguments, vec!["-krqlv=hd"]);
+
+        assert_eq!(
+            build_launch_command(game_path, true, "auto").arguments,
+            vec!["-dx11", "-krqlv=hd"]
+        );
+        assert_eq!(LaunchMode::Direct.as_str(), "direct");
+        assert_eq!(LaunchMode::Elevated.as_str(), "elevated");
+    }
+
+    #[test]
+    fn build_launch_command_follows_the_installed_tier_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let game = temp.path();
+        let tier = game.join("Client").join("Content").join("UHD");
+        std::fs::create_dir_all(&tier).unwrap();
+        std::fs::write(tier.join("pakchunk1-UHD-WindowsNoEditor.pak"), b"tier pak").unwrap();
+
+        assert_eq!(
+            build_launch_command(game, false, "auto").arguments,
+            vec!["-krqlv=uhd"]
+        );
+        // HD has no paks installed, so the explicit preference cannot be honoured.
+        assert_eq!(
+            build_launch_command(game, false, "HD").arguments,
+            vec!["-krqlv=uhd"]
+        );
+    }
+
+    #[test]
+    fn quality_level_is_read_back_from_the_built_command() {
+        let game = Path::new(r"C:\Games");
+        assert_eq!(
+            build_launch_command(game, false, "auto").quality_level(),
+            Some("hd")
         );
         assert_eq!(
-            combined.arguments,
-            vec!["-dx11", "-ForceEnableCSharpEnvironment"]
+            build_launch_command(game, true, "auto").quality_level(),
+            Some("hd")
         );
+        // A hand-built command without the tier argument reports nothing rather
+        // than guessing, so a log line can never claim a tier it did not pass.
+        let plain = LaunchCommand::new(
+            Path::new(r"C:\Games\Wuthering Waves.exe"),
+            Path::new(r"C:\Games"),
+            false,
+        );
+        assert_eq!(plain.quality_level(), None);
+    }
+
+    #[test]
+    fn launch_evidence_records_the_handoff_for_persisted_diagnostics() {
+        let command = build_launch_command(Path::new(r"C:\Games"), false, "auto");
+        let mut evidence = LaunchEvidence::for_process(command.clone(), LaunchMode::Direct, 42);
+        evidence.handoff_observed = true;
+        let encoded = serde_json::to_string(&evidence).unwrap();
+        let decoded: LaunchEvidence = serde_json::from_str(&encoded).unwrap();
+        assert!(decoded.handoff_observed);
+
+        // Evidence written before this field existed must still load, so drop
+        // the key structurally rather than by string surgery.
+        let mut legacy: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        legacy.as_object_mut().unwrap().remove("handoff_observed");
+        let legacy: LaunchEvidence = serde_json::from_value(legacy).unwrap();
+        assert!(!legacy.handoff_observed);
+    }
+
+    #[test]
+    fn a_launch_without_an_observed_game_process_is_not_a_normal_finish() {
+        // The root is Kuro's bootstrap and the game is only ever seen as a
+        // separate process. If it never appeared, the game never started, and
+        // reporting that as a normal completion would hide the one failure the
+        // launcher can actually prove.
+        assert_eq!(classify_game_exit(false), GameExitOutcome::NotStarted);
+
+        // Once the game was seen running, the bootstrap's exit code carries no
+        // information about how it ended, so `Finished` is the honest ceiling.
+        assert_eq!(classify_game_exit(true), GameExitOutcome::Finished);
     }
 
     #[cfg(windows)]

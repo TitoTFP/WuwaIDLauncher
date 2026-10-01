@@ -16,6 +16,7 @@ commands.allow = [
   "start_installation",
   "check_game_folder_write_access",
   "launch_game",
+  "detect_quality_levels",
   "force_quit_game",
   "uninstall",
   "restart_as_admin",

@@ -323,7 +323,6 @@ jobs:
                 'direct_launch_with_dx11_handoffs_and_force_quits_verified_tree',
                 'elevated_uac_launch_handoffs_and_force_quits_with_retained_handle',
                 'external_instance_is_not_claimed_or_killed_by_unrelated_launcher_tree',
-                'supported_launch_modes_and_dx11_arguments_are_explicit',
                 'launcher_child_handoff_stays_owned_and_force_quit_cleans_the_tree',
                 'windows_handoff_commits_whats_new_after_successful_restart',
                 'windows_offline_startup_reads_matching_committed_whats_new',

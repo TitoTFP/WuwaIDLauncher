@@ -11,6 +11,7 @@ import type {
   MediaStatusPayload,
   PatchStatusPayload,
   ProgressPayload,
+  QualityLevel,
   ReleaseNotePayload,
   SettingsLoadResult,
   UidMode,
@@ -92,10 +93,17 @@ export const bridge = {
   launchGame: (
     gamePath: string,
     dx11: boolean,
-    csharpEnvironment: boolean,
+    qualityLevel: QualityLevel,
     installMethod: InstallMethod,
   ): Promise<void> =>
-    invoke("launch_game", { gamePath, dx11, csharpEnvironment, installMethod }),
+    invoke("launch_game", {
+      gamePath,
+      dx11,
+      qualityLevel,
+      installMethod,
+    }),
+  detectQualityLevels: (gamePath: string): Promise<QualityLevel[]> =>
+    invoke("detect_quality_levels", { gamePath }),
   forceQuitGame: (): Promise<boolean> => invoke("force_quit_game"),
   restartAsAdmin: (): Promise<void> => invoke("restart_as_admin"),
   openSupport: (): Promise<void> => invoke("open_support"),

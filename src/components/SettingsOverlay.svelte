@@ -7,7 +7,7 @@
     isValidUidText,
     MAX_UID_TEXT_LENGTH,
   } from '../lib/types.ts';
-  import type { InstallMethod, ThemePreference, UidMode } from '../lib/types.ts';
+  import type { InstallMethod, QualityLevel, ThemePreference, UidMode } from '../lib/types.ts';
 
   interface Props {
     open?: boolean;
@@ -45,8 +45,6 @@
       appState.isOperationBlocked('install'),
   );
 
-  let csharpEnvironmentDisabled = $derived(appState.launching || appState.gameRunning);
-
   let themeDisabled = $derived(appState.launching || appState.gameRunning);
 
   function errorMessage(error: unknown): string {
@@ -79,16 +77,6 @@
     }
   }
 
-  async function handleCSharpEnvironmentChange(event: Event) {
-    appState.config.csharpEnvironment = (event.currentTarget as HTMLInputElement).checked;
-    try {
-      await appState.saveConfig();
-      appState.setStatus('Optimisasi C# diperbarui.');
-    } catch (error) {
-      appState.setStatus('Optimisasi C# tidak dapat disimpan.', errorMessage(error));
-    }
-  }
-
   function applyUidSelection(mode: UidMode, text: string) {
     if (uidDisabled) {
       appState.setStatus('Identitas UID tidak dapat diubah saat operasi berjalan.');
@@ -111,6 +99,25 @@
       appState.clearStatus();
     } catch (error) {
       appState.showToast(`Gagal mengubah tema.\n${errorMessage(error)}`, 'err');
+    }
+  }
+
+  $effect(() => {
+    if (open && appState.gamePath) {
+      appState.refreshQualityLevels().catch((error) => {
+        appState.showToast(`Gagal membaca kualitas grafis.\n${errorMessage(error)}`, 'err');
+      });
+    }
+  });
+
+  async function selectQualityLevel(level: QualityLevel) {
+    if (themeDisabled) return;
+    if (appState.config.qualityLevel === level) return;
+    try {
+      await appState.setQualityLevel(level);
+      appState.setStatus('Level kualitas diperbarui.');
+    } catch (error) {
+      appState.setStatus('Level kualitas tidak dapat disimpan.', errorMessage(error));
     }
   }
 
@@ -187,6 +194,44 @@
         </div>
       </section>
 
+      {#if appState.qualityLevels.length > 0}
+        <section class="settings-section" aria-labelledby="qualityHeading">
+          <h2 class="section-title" id="qualityHeading">KUALITAS GRAFIK</h2>
+          <div class="uid-mode-grid mode-grid--wrap" role="group" aria-label="Kualitas grafis">
+            <button
+              class="uid-mode-card"
+              class:active={appState.config.qualityLevel === 'auto'}
+              aria-pressed={appState.config.qualityLevel === 'auto'}
+              disabled={themeDisabled}
+              onclick={() => selectQualityLevel('auto')}
+              type="button"
+            >
+              <span class="uid-mode-card__top">
+                <span class="uid-mode-card__title">OTOMATIS</span>
+                <span class="uid-mode-card__mark" aria-hidden="true">✓</span>
+              </span>
+              <span class="uid-mode-card__desc">Ikuti tier yang paling lengkap terpasang</span>
+            </button>
+            {#each appState.qualityLevels as level (level)}
+              <button
+                class="uid-mode-card"
+                class:active={appState.config.qualityLevel === level}
+                aria-pressed={appState.config.qualityLevel === level}
+                disabled={themeDisabled}
+                onclick={() => selectQualityLevel(level)}
+                type="button"
+              >
+                <span class="uid-mode-card__top">
+                  <span class="uid-mode-card__title">{level}</span>
+                  <span class="uid-mode-card__mark" aria-hidden="true">✓</span>
+                </span>
+                <span class="uid-mode-card__desc">Paket Client/Content/{level}</span>
+              </button>
+            {/each}
+          </div>
+        </section>
+      {/if}
+
       <section class="settings-section" aria-labelledby="uidHeading">
         <h2 class="section-title" id="uidHeading">IDENTITAS UID</h2>
         <div class="uid-editor">
@@ -245,39 +290,6 @@
           </div>
 
         </div>
-        <p class="uid-note"><span aria-hidden="true">i</span> Perubahan tersimpan otomatis dan berlaku saat patch dipasang ulang.</p>
-      </section>
-
-      <section class="settings-section" aria-labelledby="optimizationHeading">
-        <h2 class="section-title" id="optimizationHeading">OPTIMASI</h2>
-        <div class="option-list">
-          <label class="option-row" for="settingsCSharp">
-            <span class="option-name">Optimasi C#</span>
-            <span class="settings-switch">
-              <input
-                id="settingsCSharp"
-                type="checkbox"
-                checked={!!appState.config.csharpEnvironment}
-                disabled={csharpEnvironmentDisabled}
-                onchange={handleCSharpEnvironmentChange}
-              />
-              <span class="switch-track" aria-hidden="true"></span>
-            </span>
-          </label>
-          <label class="option-row" for="settingsDx11">
-            <span class="option-name">DirectX 11</span>
-            <span class="settings-switch">
-              <input
-                id="settingsDx11"
-                type="checkbox"
-                checked={!!appState.config.dx11}
-                disabled={dx11Disabled}
-                onchange={handleDx11Change}
-              />
-              <span class="switch-track" aria-hidden="true"></span>
-            </span>
-          </label>
-        </div>
       </section>
 
       <section class="settings-section" aria-labelledby="themeHeading">
@@ -330,6 +342,25 @@
         {:else if appState.themeStatus === 'stale'}
           <p class="uid-note"><span aria-hidden="true">i</span> Tema daring gagal diperbarui; memakai tema tersimpan terakhir.</p>
         {/if}
+      </section>
+
+      <section class="settings-section" aria-labelledby="optimizationHeading">
+        <h2 class="section-title" id="optimizationHeading">OPTIMASI</h2>
+        <div class="option-list">
+          <label class="option-row" for="settingsDx11">
+            <span class="option-name">DirectX 11</span>
+            <span class="settings-switch">
+              <input
+                id="settingsDx11"
+                type="checkbox"
+                checked={!!appState.config.dx11}
+                disabled={dx11Disabled}
+                onchange={handleDx11Change}
+              />
+              <span class="switch-track" aria-hidden="true"></span>
+            </span>
+          </label>
+        </div>
       </section>
 
       <footer class="settings-footer">
@@ -457,6 +488,15 @@
     display: flex;
     gap: 8px;
     margin-top: 12px;
+  }
+
+  /* The quality grid can hold four cards. The shared grid is a non-wrapping flex
+     row, so the last tier is clipped off the modal's horizontal scroll. Grid
+     with auto-fit tracks keeps the columns even and leaves a lone trailing card
+     at card width instead of stretching it across the whole row. */
+  .mode-grid--wrap {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   }
 
   .uid-mode-card {
@@ -839,6 +879,10 @@
 
     .uid-mode-grid {
       flex-direction: column;
+    }
+
+    .mode-grid--wrap {
+      grid-template-columns: 1fr;
     }
 
     .uid-mode-card {

@@ -211,7 +211,7 @@
         await bridge.launchGame(
           appState.gamePath,
           appState.config.dx11,
-          appState.config.csharpEnvironment,
+          appState.config.qualityLevel,
           appState.config.installMethod,
         );
       } catch {

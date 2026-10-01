@@ -12,6 +12,17 @@ performance-evidence/
 *.zip
 SHA256sums.txt
 
+# Reverse-engineering workspace, local-only. `extracted/` and `krlauncher/` are
+# the official Kuro installer payload (vendor binaries, launcher.exe/uninst.exe),
+# `decompiled/` and `feapp/` are decompiled sources and fetched server manifests,
+# and `tools/` is a vendored ILSpy NuGet package. None of it is project source;
+# the findings derived from it are committed under docs/ instead.
+reverse-engineer/extracted/
+reverse-engineer/krlauncher/
+reverse-engineer/decompiled/
+reverse-engineer/feapp/
+reverse-engineer/tools/
+
 # IDE / Editor
 .vs/
 .vscode/
