@@ -102,7 +102,7 @@ export function installDevIpcMock(): boolean {
 
       case "get_app_version":
       case "get_vh_version":
-        return "2.11.0-dev";
+        return "2.11.1-dev";
 
       case "browse_game_folder":
         return gamePath;
