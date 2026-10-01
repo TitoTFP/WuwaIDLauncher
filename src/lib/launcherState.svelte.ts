@@ -110,7 +110,7 @@ export class LauncherState implements ILauncherState {
   progressDownloadedBytes: number = $state<number>(0);
   progressTotalBytes: number = $state<number>(0);
   progressSpeedMbps: number = $state<number>(0);
-  appVersion: string = $state<string>("2.11.0");
+  appVersion: string = $state<string>("2.11.1");
   vhVersion: string = $state<string>("");
   statusMessage: string = $state<string>("");
   diagnosticMessage: string = $state<string>("");
