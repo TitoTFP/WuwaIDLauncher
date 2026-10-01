@@ -23,7 +23,7 @@ This establishes that Steam selected the root `Wuthering Waves.exe` and passed `
 ## Current WuwaID launch path
 
 - `src-tauri/src/engine/path.rs` defines `GAME_EXE_RELATIVE` as `Client/Binaries/Win64/Client-Win64-Shipping.exe` (with platform-specific separators). Path validation uses this executable to recognize a game installation.
-- `src-tauri/src/engine/runtime.rs` builds the launch command from `GAME_EXE_RELATIVE`; its current optional arguments are `-dx11` and `-ForceEnableCSharpEnvironment`. `spawn_direct()` invokes that executable directly with `Command::new`.
+- `src-tauri/src/engine/runtime.rs` builds the launch command from `LAUNCH_EXE_RELATIVE`, the root bootstrap, and appends `-krqlv=<tier>`; `-dx11` is the only remaining optional toggle. `spawn_direct()` invokes that executable directly with `Command::new`.
 - `src-tauri/src/lib.rs` passes the Shipping path as the expected game executable to the launch monitor.
 
 The reported `kuro: Use launcher to start game!` error is consistent with WuwaID starting Shipping directly instead of using the entry point observed in the Steam log. The local Steam evidence supports that mismatch, but does not prove the internal reason the game rejects the direct launch.

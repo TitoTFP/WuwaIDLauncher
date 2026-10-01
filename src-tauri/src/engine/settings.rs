@@ -15,7 +15,6 @@ pub struct LauncherSettings {
     pub game_path: String,
     pub install_method: InstallMethod,
     pub dx11: bool,
-    pub csharp_environment: bool,
     pub quality_level: String,
     pub uid_mode: String,
     pub uid_text: String,
@@ -30,7 +29,6 @@ impl Default for LauncherSettings {
             game_path: String::new(),
             install_method: InstallMethod::ResourceMount,
             dx11: false,
-            csharp_environment: false,
             quality_level: QUALITY_PREFERENCE_AUTO.to_string(),
             uid_mode: "default".to_string(),
             uid_text: String::new(),
@@ -194,13 +192,6 @@ pub fn normalize_settings_json(raw: &str) -> SettingsLoadResult {
         &mut diagnostics,
         &mut repaired,
     );
-    read_bool(
-        object,
-        "csharpEnvironment",
-        &mut settings.csharp_environment,
-        &mut diagnostics,
-        &mut repaired,
-    );
     if let Some(value) = object.get("qualityLevel") {
         match value.as_str().and_then(normalize_quality_preference) {
             Some(level) => settings.quality_level = level,
@@ -325,15 +316,13 @@ mod tests {
     #[test]
     fn uid_customization_settings_migrate_legacy_values_and_validate_text() {
         let defaults = normalize_settings_json(r#"{}"#);
-        assert!(!defaults.settings.csharp_environment);
         assert_eq!(defaults.settings.uid_mode, "default");
         assert!(defaults.settings.uid_text.is_empty());
 
-        let enabled = normalize_settings_json(r#"{"csharpEnvironment":true,"hideUid":true}"#);
-        assert!(enabled.settings.csharp_environment);
-        assert_eq!(enabled.settings.uid_mode, "custom");
-        assert!(enabled.settings.uid_text.is_empty());
-        assert!(enabled.repaired);
+        let migrated = normalize_settings_json(r#"{"hideUid":true}"#);
+        assert_eq!(migrated.settings.uid_mode, "custom");
+        assert!(migrated.settings.uid_text.is_empty());
+        assert!(migrated.repaired);
 
         let custom =
             normalize_settings_json(r#"{"uidMode":"custom","uidText":"Halo Nozomi ✦ 2026!"}"#);
@@ -341,11 +330,8 @@ mod tests {
         assert_eq!(custom.settings.uid_text, "Halo Nozomi ✦ 2026!");
         assert!(!custom.repaired);
 
-        let invalid = normalize_settings_json(
-            r#"{"csharpEnvironment":"yes","uidMode":"custom","uidText":"bad\ntext"}"#,
-        );
+        let invalid = normalize_settings_json(r#"{"uidMode":"custom","uidText":"bad\ntext"}"#);
         assert!(invalid.repaired);
-        assert!(!invalid.settings.csharp_environment);
         assert_eq!(invalid.settings.uid_mode, "custom");
         assert!(invalid.settings.uid_text.is_empty());
     }

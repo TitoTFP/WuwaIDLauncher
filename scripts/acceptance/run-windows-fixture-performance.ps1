@@ -508,7 +508,6 @@ try {
         gamePath = $fixtureRoot
         installMethod = "loader"
         dx11 = $false
-        csharpEnvironment = $false
         uidMode = "default"
         uidText = ""
         bgmVolume = 0

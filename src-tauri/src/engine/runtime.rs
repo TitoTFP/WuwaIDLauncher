@@ -42,21 +42,9 @@ pub struct LaunchCommand {
 
 impl LaunchCommand {
     pub fn new(executable: &Path, working_directory: &Path, dx11: bool) -> Self {
-        Self::new_with_options(executable, working_directory, dx11, false)
-    }
-
-    pub fn new_with_options(
-        executable: &Path,
-        working_directory: &Path,
-        dx11: bool,
-        csharp_environment: bool,
-    ) -> Self {
         let mut arguments = Vec::with_capacity(2);
         if dx11 {
             arguments.push("-dx11".to_string());
-        }
-        if csharp_environment {
-            arguments.push("-ForceEnableCSharpEnvironment".to_string());
         }
         Self {
             executable: executable.to_path_buf(),
@@ -407,15 +395,6 @@ pub fn classify_game_exit(game_observed: bool) -> GameExitOutcome {
 }
 
 pub fn build_launch_command(game_path: &Path, dx11: bool, quality_level: &str) -> LaunchCommand {
-    build_launch_command_with_options(game_path, dx11, false, quality_level)
-}
-
-pub fn build_launch_command_with_options(
-    game_path: &Path,
-    dx11: bool,
-    csharp_environment: bool,
-    quality_level: &str,
-) -> LaunchCommand {
     // Start the root bootstrap, not the Shipping binary: Shipping aborts with
     // `kuro: Use launcher to start game!` unless a `-krqlv` tier argument
     // selects the `Client/Content/<TIER>` directory to mount. The bootstrap
@@ -424,8 +403,7 @@ pub fn build_launch_command_with_options(
     // Shipping itself stays the process the monitor watches for after handoff.
     let executable = path::get_launch_exe(game_path);
     let work_dir = game_path.to_path_buf();
-    let mut command =
-        LaunchCommand::new_with_options(&executable, &work_dir, dx11, csharp_environment);
+    let mut command = LaunchCommand::new(&executable, &work_dir, dx11);
     command
         .arguments
         .push(path::quality_level_argument(&path::resolve_quality_level(
@@ -659,21 +637,7 @@ pub fn launch_game(
     dx11: bool,
     quality_level: &str,
 ) -> Result<LaunchedGame, Box<LaunchFailure>> {
-    launch_game_with_options(game_path, dx11, false, quality_level)
-}
-
-pub fn launch_game_with_options(
-    game_path: &Path,
-    dx11: bool,
-    csharp_environment: bool,
-    quality_level: &str,
-) -> Result<LaunchedGame, Box<LaunchFailure>> {
-    launch_prebuilt(&build_launch_command_with_options(
-        game_path,
-        dx11,
-        csharp_environment,
-        quality_level,
-    ))
+    launch_prebuilt(&build_launch_command(game_path, dx11, quality_level))
 }
 
 /// Launches an already-built command. Building once keeps the launch evidence
@@ -728,18 +692,7 @@ pub fn launch_game_elevated(
     dx11: bool,
     quality_level: &str,
 ) -> Result<LaunchedGame, Box<LaunchFailure>> {
-    launch_game_elevated_with_options(game_path, dx11, false, quality_level)
-}
-
-#[cfg(windows)]
-pub fn launch_game_elevated_with_options(
-    game_path: &Path,
-    dx11: bool,
-    csharp_environment: bool,
-    quality_level: &str,
-) -> Result<LaunchedGame, Box<LaunchFailure>> {
-    let command =
-        build_launch_command_with_options(game_path, dx11, csharp_environment, quality_level);
+    let command = build_launch_command(game_path, dx11, quality_level);
     if !command.executable.is_file() {
         let missing = command.executable.clone();
         return Err(Box::new(LaunchFailure::new_with_mode(
@@ -1867,17 +1820,6 @@ mod tests {
         );
         assert_eq!(command.working_directory, PathBuf::from(r"C:\Games"));
         assert_eq!(command.arguments, vec!["-dx11"]);
-
-        let combined = LaunchCommand::new_with_options(
-            Path::new(r"C:\Games\Client-Win64-Shipping.exe"),
-            Path::new(r"C:\Games"),
-            true,
-            true,
-        );
-        assert_eq!(
-            combined.arguments,
-            vec!["-dx11", "-ForceEnableCSharpEnvironment"]
-        );
     }
 
     #[test]
@@ -1893,10 +1835,6 @@ mod tests {
         assert_eq!(
             build_launch_command(game_path, true, "auto").arguments,
             vec!["-dx11", "-krqlv=hd"]
-        );
-        assert_eq!(
-            build_launch_command_with_options(game_path, false, true, "auto").arguments,
-            vec!["-ForceEnableCSharpEnvironment", "-krqlv=hd"]
         );
         assert_eq!(LaunchMode::Direct.as_str(), "direct");
         assert_eq!(LaunchMode::Elevated.as_str(), "elevated");

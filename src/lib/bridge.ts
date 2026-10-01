@@ -93,14 +93,12 @@ export const bridge = {
   launchGame: (
     gamePath: string,
     dx11: boolean,
-    csharpEnvironment: boolean,
     qualityLevel: QualityLevel,
     installMethod: InstallMethod,
   ): Promise<void> =>
     invoke("launch_game", {
       gamePath,
       dx11,
-      csharpEnvironment,
       qualityLevel,
       installMethod,
     }),

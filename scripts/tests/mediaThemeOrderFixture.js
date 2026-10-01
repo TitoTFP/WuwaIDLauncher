@@ -9,7 +9,6 @@ const settings = {
   gamePath: "",
   installMethod: "resource_mount",
   dx11: false,
-  csharpEnvironment: false,
   uidMode: "default",
   uidText: "",
   bgmVolume: 0.35,

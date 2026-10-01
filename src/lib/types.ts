@@ -84,7 +84,6 @@ export interface LauncherConfig {
   gamePath: string;
   installMethod: InstallMethod;
   dx11: boolean;
-  csharpEnvironment: boolean;
   qualityLevel: QualityLevel;
   uidMode: UidMode;
   uidText: string;
@@ -131,7 +130,6 @@ export const DEFAULT_LAUNCHER_CONFIG: LauncherConfig = {
   gamePath: "",
   installMethod: "resource_mount",
   dx11: false,
-  csharpEnvironment: false,
   qualityLevel: "auto",
   uidMode: "default",
   uidText: "",
@@ -206,7 +204,6 @@ export function normalizeLauncherConfig(raw: unknown): NormalizedConfigResult {
 
   for (const [key, fallback] of [
     ["dx11", config.dx11],
-    ["csharpEnvironment", config.csharpEnvironment],
     ["bgmEnabled", config.bgmEnabled],
   ] as const) {
     if (typeof value[key] === "boolean") config[key] = value[key] as boolean;

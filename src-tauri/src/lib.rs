@@ -578,17 +578,11 @@ fn emit_launch_failure<R: Runtime>(
     app: &AppHandle<R>,
     game_path: &str,
     dx11: bool,
-    csharp_environment: bool,
     quality_level: &str,
     error: impl Into<String>,
 ) {
     let mut evidence = engine::runtime::LaunchEvidence::for_failure(
-        engine::runtime::build_launch_command_with_options(
-            Path::new(game_path),
-            dx11,
-            csharp_environment,
-            quality_level,
-        ),
+        engine::runtime::build_launch_command(Path::new(game_path), dx11, quality_level),
         engine::runtime::SpawnFailureKind::SpawnFailed,
     );
     evidence.error = Some(error.into());
@@ -2692,21 +2686,13 @@ fn launch_game<R: Runtime>(
     app: AppHandle<R>,
     game_path: String,
     dx11: bool,
-    csharp_environment: bool,
     quality_level: String,
     install_method: String,
 ) -> Result<(), String> {
     let method = match engine::method::InstallMethod::parse(&install_method) {
         Ok(method) => method,
         Err(error) => {
-            emit_launch_failure(
-                &app,
-                &game_path,
-                dx11,
-                csharp_environment,
-                &quality_level,
-                error,
-            );
+            emit_launch_failure(&app, &game_path, dx11, &quality_level, error);
             return Ok(());
         }
     };
@@ -2714,27 +2700,13 @@ fn launch_game<R: Runtime>(
         match engine::runtime::validate_launch_preconditions(&game_path, method) {
             Ok(path) => path,
             Err(error) => {
-                emit_launch_failure(
-                    &app,
-                    &game_path,
-                    dx11,
-                    csharp_environment,
-                    &quality_level,
-                    error,
-                );
+                emit_launch_failure(&app, &game_path, dx11, &quality_level, error);
                 return Ok(());
             }
         };
     if method == engine::method::InstallMethod::Loader {
         if let Err(error) = validate_loader_metadata(&normalized_game_path) {
-            emit_launch_failure(
-                &app,
-                &game_path,
-                dx11,
-                csharp_environment,
-                &quality_level,
-                error,
-            );
+            emit_launch_failure(&app, &game_path, dx11, &quality_level, error);
             return Ok(());
         }
     }
@@ -2743,14 +2715,7 @@ fn launch_game<R: Runtime>(
     {
         Ok(operation) => operation,
         Err(error) => {
-            emit_launch_failure(
-                &app,
-                &game_path,
-                dx11,
-                csharp_environment,
-                &quality_level,
-                error,
-            );
+            emit_launch_failure(&app, &game_path, dx11, &quality_level, error);
             return Ok(());
         }
     };
@@ -2761,7 +2726,6 @@ fn launch_game<R: Runtime>(
             &app,
             &game_path,
             dx11,
-            csharp_environment,
             &quality_level,
             format!("busy: game sedang berjalan (pid {pid})"),
         );
@@ -2776,17 +2740,11 @@ fn launch_game<R: Runtime>(
         let _ = app_handle.emit("onGameLaunchStarted", ());
         // The tier is resolved once, here, and read back off the built command,
         // so the logged value is exactly the `-krqlv` argument that is spawned.
-        let command = engine::runtime::build_launch_command_with_options(
-            &p,
-            dx11,
-            csharp_environment,
-            &quality_level,
-        );
+        let command = engine::runtime::build_launch_command(&p, dx11, &quality_level);
         log::info!(
-            "Launch game: path={}, dx11={}, csharp_environment={}, quality={}, method={}",
+            "Launch game: path={}, dx11={}, quality={}, method={}",
             p.display(),
             dx11,
-            csharp_environment,
             command.quality_level().unwrap_or("none"),
             canonical_method
         );
@@ -3269,7 +3227,6 @@ pub mod frontend_fixture {
                 "gamePath": legacy_game_path.to_string_lossy(),
                 "installMethod": "resource_mount",
                 "dx11": false,
-                "csharpEnvironment": false,
                 "hideUid": false,
                 "bgmVolume": 0.35,
                 "bgmEnabled": true
@@ -5113,7 +5070,6 @@ mod tests {
                 "gamePath": legacy_game_path.to_string_lossy(),
                 "installMethod": "resource_mount",
                 "dx11": false,
-                "csharpEnvironment": false,
                 "hideUid": false,
                 "bgmVolume": 0.35,
                 "bgmEnabled": true
@@ -5186,7 +5142,6 @@ mod tests {
                 "gamePath": loaded.settings.game_path,
                 "installMethod": "loader",
                 "dx11": false,
-                "csharpEnvironment": false,
                 "hideUid": false,
                 "bgmVolume": 0.35,
                 "bgmEnabled": true
@@ -5645,7 +5600,6 @@ mod tests {
                 serde_json::json!({
                     "gamePath": game.path().parent().unwrap().join("missing-game").to_string_lossy(),
                     "dx11": false,
-                    "csharpEnvironment": false,
                     "qualityLevel": "auto",
                     "installMethod": "loader",
                 }),
