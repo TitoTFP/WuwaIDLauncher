@@ -413,6 +413,41 @@ mod tests {
         }
     }
 
+    /// The right-panel countdown renders whatever instant `update_date` names,
+    /// so the manifest has to name one. A bare date (`"2026-11-12"`) is legal
+    /// ISO-8601 and parses, but the webview reads it as UTC midnight, which is
+    /// seven hours early in WIB and silently points at the wrong moment. This
+    /// checks the published manifest, where the mistake would actually ship.
+    #[test]
+    fn published_update_date_names_an_explicit_instant() {
+        let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .join("Web/assets.json");
+        let Ok(raw) = std::fs::read_to_string(&manifest_path) else {
+            return;
+        };
+        let manifest: AssetManifest =
+            serde_json::from_str(&raw).expect("published manifest must parse");
+        let Some(update_date) = manifest.update_date.as_deref() else {
+            // Omitting the field hides the countdown; that is not a mistake.
+            return;
+        };
+
+        let (date, time) = update_date
+            .split_once('T')
+            .unwrap_or_else(|| panic!("update_date {update_date:?} must carry a time"));
+        assert!(
+            date.len() == 10 && date.as_bytes()[4] == b'-' && date.as_bytes()[7] == b'-',
+            "update_date {update_date:?} must start with YYYY-MM-DD"
+        );
+        assert!(
+            time.ends_with('Z') || time.rfind(['+', '-']).is_some_and(|at| at >= 8),
+            "update_date {update_date:?} must carry a UTC offset, or the webview \
+             reads it as UTC and the countdown lands hours off"
+        );
+    }
+
     #[test]
     fn asset_hosts_are_restricted_to_the_launcher_repository() {
         let entry = |url: &str| AssetEntry {
