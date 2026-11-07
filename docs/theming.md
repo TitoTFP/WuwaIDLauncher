@@ -159,6 +159,36 @@ node scripts/sign-manifest.mjs --in Web/assets.json --key "$KEY" \
 To publish, flip `"active": false` to `true`. That single line is what makes
 every launcher pick the new look on its next launch.
 
+### Release countdown
+
+`update_date` drives the "VERSI GAME BERIKUTNYA" timer in the right panel:
+
+```jsonc
+{
+  "update_date": "2026-11-12T11:00:00+08:00",
+  "assets": [ /* unchanged */ ],
+  "theme": { /* unchanged */ }
+}
+```
+
+- It is the moment the servers come back, not the moment maintenance starts.
+  For version 3.8 that is `2026-11-12 11:00 (UTC+8)`, which the countdown shows
+  as 10:00 WIB.
+- Write the offset explicitly (`+08:00` or `Z`). A date without a time
+  (`"2026-11-12"`) is parsed as 00:00 UTC by the webview, which would land seven
+  hours early for WIB.
+- The field is optional. Omit it and the panel is not rendered at all, so a
+  manifest written before the next version is announced stays valid.
+- The progress bar under the digits assumes a 42-day window. A date further out
+  than six weeks clamps the bar to zero instead of erroring, so the digits stay
+  correct but the bar looks idle until the date is inside that window.
+- It is not signature-gated. The countdown is emitted as soon as the manifest
+  parses, before the `.sig` fetch resolves, unlike the theme block. Nothing
+  privileged depends on it: the value only renders text.
+- Sign the manifest again after editing; the signature covers the exact bytes,
+  and `checked_in_manifest_signature_verifies_with_production_keyring` fails in
+  CI when the checked-in pair disagrees.
+
 ## The token contract
 
 Every colour in the launcher resolves through a `--*-rgb` triplet defined in

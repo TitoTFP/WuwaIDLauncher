@@ -4534,7 +4534,10 @@ mod tests {
         let bgm = b"bgm-audio-bytes".to_vec();
         let video = b"bg-video-bytes".to_vec();
         let manifest = serde_json::to_vec(&serde_json::json!({
-            "update_date": "2026-09-07",
+            // A full instant with an explicit offset, the shape the published
+            // manifest must use: a bare date is parsed as UTC midnight by the
+            // webview and would land seven hours early in WIB.
+            "update_date": "2026-09-07T11:00:00+08:00",
             "assets": [
                 {
                     "name": "bgm.mp3",
@@ -4762,6 +4765,49 @@ mod tests {
         );
         assert!(cache_dir.join("bgm.mp3").is_file());
         assert!(cache_dir.join("bg-video.mp4").is_file());
+    }
+
+    /// The right-panel countdown is driven by this one event. It is emitted
+    /// before the signature is known, so it must survive a manifest whose
+    /// signature is rejected — and it must reach the frontend byte for byte,
+    /// because the webview parses it with `new Date(...)`.
+    #[tokio::test]
+    async fn test_update_date_reaches_the_frontend_without_the_signature() {
+        let appdata = tempfile::tempdir().unwrap();
+        let cache_dir = appdata.path().join("Cache");
+        let origin = spawn_media_origin(false);
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&seen);
+        let _listener = app.listen_any("onUpdateDate", move |event| {
+            sink.lock().unwrap().push(event.payload().to_string());
+        });
+
+        let client = engine::downloader::official_github_client(Duration::from_secs(20)).unwrap();
+        sync_manifest_media_and_theme(
+            &cache_dir,
+            app.handle(),
+            &client,
+            &origin.manifest_url,
+            &engine::media::CachedMedia::invalid(),
+        )
+        .await;
+
+        let payloads = seen.lock().unwrap().clone();
+        assert_eq!(
+            payloads.len(),
+            1,
+            "the countdown date was not reported exactly once: {payloads:?}"
+        );
+        let decoded: String =
+            serde_json::from_str(&payloads[0]).expect("the payload is a JSON string");
+        assert_eq!(
+            decoded, "2026-09-07T11:00:00+08:00",
+            "the offset must reach the frontend unchanged"
+        );
     }
 
     #[tokio::test]
