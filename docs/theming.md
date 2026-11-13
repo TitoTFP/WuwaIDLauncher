@@ -13,9 +13,10 @@ There are always two:
   Waves version's art direction, so it stays correct across 3.6, 3.7, and
   anything after. Users can pin it from Settings.
 - **The published theme** — the current game version's look, fetched and
-  verified from the asset manifest. `Web/Theme/wuwa-3-7/` ships Wuthering
-  Waves 3.7 in ember, amber, and warm ivory. Publishing a new version means
-  adding a directory and flipping `"active"`, nothing more.
+  verified from the asset manifest. `Web/Theme/wuwa-3-8/` ships Wuthering
+  Waves 3.8 in midnight indigo, lavender, and butterfly cyan, matching its
+  `bg.jpg`. Publishing a new version means adding a directory and updating the
+  active theme block, media hashes, and manifest signature.
 
 Both carry their own background, so withdrawing the published theme returns a
 neutral backdrop rather than the withdrawn look's artwork.
@@ -130,16 +131,16 @@ worth knowing before reaching for it while troubleshooting something else.
 {
   "assets": [ /* unchanged: bgm.mp3, bg-video.mp4 */ ],
   "theme": {
-    "id": "wuwa-3-7",
-    "name": "Wuthering Waves 3.7",
+    "id": "wuwa-3-8",
+    "name": "Wuthering Waves 3.8",
     "active": true,
     "tokens": {
-      "--gold-rgb": "245 194 91",
-      "--ink-rgb": "31 17 18"
+      "--gold-rgb": "193 184 245",
+      "--ink-rgb": "18 21 43"
     },
     "background": {
       "name": "bg.jpg",
-      "url": "https://raw.githubusercontent.com/TitoTFP/WuwaIDLauncher/refs/heads/main/Web/Theme/wuwa-3-7/bg.jpg",
+      "url": "https://raw.githubusercontent.com/TitoTFP/WuwaIDLauncher/refs/heads/main/Web/Theme/wuwa-3-8/bg.jpg",
       "sha256": "<sha256 of bg.jpg>"
     }
   }
@@ -242,6 +243,10 @@ loads, when the video is blocked, and when media is unavailable entirely. A
 theme that ships both should expect its image to be hidden behind the video
 during normal play.
 
+Publish `bg-video.mp4` as H.264 with `yuv420p` pixel format and MP4 fast-start
+metadata. HEVC playback depends on platform codec support and is not a portable
+baseline for Windows/WebView2.
+
 The launcher only activates a theme whose `bg.jpg` downloaded and passed its
 sha256 check, and it drops a cached theme whose image has gone missing, so a
 failed image cannot leave a blank backdrop.
@@ -257,7 +262,7 @@ mid-transfer, so an oversized fragment costs a download before it is refused.
 Write it scoped to the theme so it composes predictably:
 
 ```css
-body.theme-wuwa-3-7 .start-btn {
+body.theme-wuwa-3-8 .start-btn {
     border-width: 2px !important;
 }
 ```
